@@ -14,6 +14,7 @@ pub mod homopolymer;
 pub mod io;
 pub mod orient;
 pub mod pipeline;
+pub mod sample_sheet;
 
 use std::path::Path;
 
@@ -23,10 +24,21 @@ use tracing::info;
 
 use crate::config::Cli;
 use crate::io::{discover_fastqs, FastqGzWriter};
+use crate::sample_sheet::SampleSheet;
 
 /// Entry point invoked by the binary. M0: passthrough — read every input record
 /// and re-emit it to a single FASTQ in the output dir, counting records.
 pub fn run(cli: &Cli) -> Result<()> {
+    if let Some(path) = &cli.sample_sheet {
+        let sheet = SampleSheet::load(path)?;
+        info!(
+            samples = sheet.samples.len(),
+            i5_revcomp = sheet.i5_reverse_complemented,
+            chemistry = ?sheet.chemistry,
+            "loaded sample sheet"
+        );
+    }
+
     let inputs = discover_fastqs(&cli.fastqs)?;
     info!(n_files = inputs.len(), "discovered FASTQ inputs");
     if inputs.is_empty() {
