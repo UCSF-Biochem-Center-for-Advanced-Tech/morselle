@@ -1,0 +1,5 @@
+# Barcode whitelists are external reference data — do not commit them.
+# Track only this folder's documentation.
+*
+!.gitignore
+!README.md
