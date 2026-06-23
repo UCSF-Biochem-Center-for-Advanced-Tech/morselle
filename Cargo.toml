@@ -1,0 +1,29 @@
+[package]
+name = "sbx10x"
+version = "0.1.0"
+edition = "2021"
+description = "Convert raw Roche SBX reads into per-sample 10x R1/R2 FASTQs for Cell Ranger"
+
+[lib]
+name = "sbx10x"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sbx10x"
+path = "src/main.rs"
+
+[dependencies]
+needletail = "0.5"
+flate2 = "1.0"
+gzp = "0.11"
+triple_accel = "0.4"
+rayon = "1.10"
+crossbeam-channel = "0.5"
+clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+csv = "1.3"
+anyhow = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
