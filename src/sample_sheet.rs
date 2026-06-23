@@ -14,6 +14,7 @@
 //! one the SBX-extracted i5 matches.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
@@ -66,10 +67,19 @@ impl SampleEntry {
     }
 }
 
+/// Which front-end format a sheet was parsed from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceFormat {
+    BclConvert,
+    Flat,
+}
+
 /// Normalized sample sheet shared by both parsers.
 #[derive(Debug, Clone)]
 pub struct SampleSheet {
     pub samples: Vec<SampleEntry>,
+    /// The format this sheet was parsed from.
+    pub source: SourceFormat,
     /// Present for BCL Convert sheets; `None` for the flat format.
     pub chemistry: Option<Chemistry>,
     /// `Index2ColumnReverseComplement` (true for NovaSeq X forward workflow).
@@ -100,6 +110,34 @@ impl SampleSheet {
         .with_context(|| format!("parsing sample sheet {}", path.display()))?;
         sheet.validate()?;
         Ok(sheet)
+    }
+
+    /// Render the normalized sheet as flat `sample,i7,i5` CSV text.
+    ///
+    /// i7/i5 are emitted verbatim (as in the source sheet), so the output
+    /// round-trips back through [`parse_flat`].
+    pub fn to_flat_csv(&self) -> String {
+        let mut out = String::from("sample,i7,i5\n");
+        for s in &self.samples {
+            let _ = writeln!(
+                out,
+                "{},{},{}",
+                s.id,
+                String::from_utf8_lossy(&s.i7),
+                String::from_utf8_lossy(&s.i5),
+            );
+        }
+        out
+    }
+
+    /// Write the flat `sample,i7,i5` CSV to `path` (creating parent dirs).
+    pub fn write_flat_csv(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("cannot create dir {}", parent.display()))?;
+        }
+        fs::write(path, self.to_flat_csv())
+            .with_context(|| format!("cannot write flat sample sheet {}", path.display()))
     }
 
     /// Structural checks shared by both formats.
@@ -263,6 +301,7 @@ fn parse_bclconvert(text: &str) -> Result<SampleSheet> {
 
     Ok(SampleSheet {
         samples,
+        source: SourceFormat::BclConvert,
         chemistry,
         i5_reverse_complemented: i5_rc,
         index_orientation_forward: index_fwd,
@@ -306,6 +345,7 @@ fn parse_flat(text: &str) -> Result<SampleSheet> {
 
     Ok(SampleSheet {
         samples,
+        source: SourceFormat::Flat,
         chemistry: None,
         i5_reverse_complemented: false,
         index_orientation_forward: true,
@@ -365,6 +405,22 @@ mod tests {
         assert_eq!(m2.i5_revcomp(), b"CTTGATCGTA");
 
         assert_eq!(sheet.samples.last().unwrap().id, "M7_GEX");
+    }
+
+    #[test]
+    fn bclconvert_to_flat_csv_roundtrips() {
+        let sheet = SampleSheet::load(&fixture("CE15204_bclconvert_input.csv")).unwrap();
+        assert_eq!(sheet.source, SourceFormat::BclConvert);
+
+        let csv = sheet.to_flat_csv();
+        assert!(csv.starts_with("sample,i7,i5\n"));
+        assert!(csv.contains("M2_GEX,TGTAGTCATT,TACGATCAAG\n"));
+
+        // Re-parsing the emitted flat CSV yields the same samples.
+        let reparsed = parse_flat(&csv).unwrap();
+        reparsed.validate().unwrap();
+        assert_eq!(reparsed.source, SourceFormat::Flat);
+        assert_eq!(reparsed.samples, sheet.samples);
     }
 
     #[test]

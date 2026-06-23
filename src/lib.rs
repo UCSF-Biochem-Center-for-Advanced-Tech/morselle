@@ -37,6 +37,13 @@ pub fn run(cli: &Cli) -> Result<()> {
             chemistry = ?sheet.chemistry,
             "loaded sample sheet"
         );
+        // When given the rich BCL Convert sheet, also emit the normalized flat
+        // sample,i7,i5 CSV alongside the outputs for auditing / reuse.
+        if sheet.source == crate::sample_sheet::SourceFormat::BclConvert {
+            let flat_path = cli.out_dir.join("sample_sheet.csv");
+            sheet.write_flat_csv(&flat_path)?;
+            info!(out = %flat_path.display(), "wrote normalized flat sample sheet");
+        }
     }
 
     let inputs = discover_fastqs(&cli.fastqs)?;
