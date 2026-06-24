@@ -3,6 +3,8 @@
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 use flate2::write::GzEncoder;
@@ -115,5 +117,84 @@ impl PairWriter {
         self.r1.finish()?;
         self.r2.finish()?;
         Ok(())
+    }
+}
+
+/// A thread-safe, append-only gzip writer used by the parallel pipeline (M6).
+///
+/// Callers pre-format a batch of FASTQ records into a raw byte buffer; this type
+/// gzip-compresses that batch into one independent member (off-lock) and appends
+/// the compressed bytes under a brief I/O lock. Concatenated gzip members form a
+/// valid gzip stream, so many threads can write one sample's file without
+/// serializing on compression.
+pub struct ShardedGzWriter {
+    inner: Mutex<BufWriter<File>>,
+    records: AtomicU64,
+}
+
+impl ShardedGzWriter {
+    pub fn create(path: &Path) -> Result<Self> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("cannot create dir {}", parent.display()))?;
+        }
+        let file = File::create(path)
+            .with_context(|| format!("cannot create output {}", path.display()))?;
+        Ok(ShardedGzWriter {
+            inner: Mutex::new(BufWriter::new(file)),
+            records: AtomicU64::new(0),
+        })
+    }
+
+    /// Compress `raw` as one gzip member and append it; `n` = records within.
+    pub fn append_block(&self, raw: &[u8], n: u64) -> Result<()> {
+        if raw.is_empty() {
+            return Ok(());
+        }
+        let mut enc = GzEncoder::new(Vec::with_capacity(raw.len() / 3 + 64), Compression::default());
+        enc.write_all(raw)?;
+        let bytes = enc.finish()?;
+        {
+            let mut g = self.inner.lock().expect("writer lock poisoned");
+            g.write_all(&bytes)?;
+        }
+        self.records.fetch_add(n, Ordering::Relaxed);
+        Ok(())
+    }
+
+    pub fn records(&self) -> u64 {
+        self.records.load(Ordering::Relaxed)
+    }
+
+    pub fn finish(&self) -> Result<()> {
+        self.inner.lock().expect("writer lock poisoned").flush()?;
+        Ok(())
+    }
+}
+
+/// A paired R1/R2 sharded writer for one output target (sample/Undetermined).
+pub struct PairShardWriter {
+    pub r1: ShardedGzWriter,
+    pub r2: ShardedGzWriter,
+}
+
+impl PairShardWriter {
+    pub fn create(dir: &Path, prefix: &str, s_num: usize) -> Result<Self> {
+        let name = |read: u8| dir.join(format!("{prefix}_S{s_num}_L001_R{read}_001.fastq.gz"));
+        Ok(PairShardWriter {
+            r1: ShardedGzWriter::create(&name(1))?,
+            r2: ShardedGzWriter::create(&name(2))?,
+        })
+    }
+
+    /// Append a pre-formatted batch (`n` records) of R1 and R2 FASTQ bytes.
+    pub fn append(&self, r1_raw: &[u8], r2_raw: &[u8], n: u64) -> Result<()> {
+        self.r1.append_block(r1_raw, n)?;
+        self.r2.append_block(r2_raw, n)
+    }
+
+    pub fn finish(&self) -> Result<()> {
+        self.r1.finish()?;
+        self.r2.finish()
     }
 }

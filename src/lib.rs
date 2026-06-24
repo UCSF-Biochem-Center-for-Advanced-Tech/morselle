@@ -16,19 +16,26 @@ pub mod orient;
 pub mod pipeline;
 pub mod sample_sheet;
 
+use std::path::Path;
+
 use anyhow::Result;
 use needletail::parse_fastx_file;
+use rayon::prelude::*;
 use tracing::info;
 
 use crate::accounting::{pct, DemuxMetrics, Metrics, SampleCount, WhitelistMetrics};
 use crate::barcode::Whitelist;
 use crate::config::Cli;
 use crate::demux::{index_regions, DemuxVia, Demuxer};
-use crate::extract::extract;
-use crate::io::{discover_fastqs, PairWriter};
-use crate::orient::orient;
+use crate::extract::{extract, ExtractCfg};
+use crate::io::{discover_fastqs, PairShardWriter};
+use crate::orient::{orient, OrientCfg};
 use crate::pipeline::{CbStatus, Orientation, ReadClass};
 use crate::sample_sheet::SampleSheet;
+
+/// Flush a target's batch buffer once its raw R1 bytes reach this size. Bounds
+/// memory (≈ threads × targets × this) while keeping gzip members reasonably sized.
+const FLUSH_BYTES: usize = 256 * 1024;
 
 /// Running counts for the pipeline summary.
 #[derive(Default)]
@@ -58,6 +65,56 @@ struct Stats {
     via_i7: u64,
     via_conflict: u64,
     per_sample: Vec<u64>,
+}
+
+impl Stats {
+    /// Accumulate a per-file `Stats` into this total.
+    fn merge(&mut self, o: Stats) {
+        self.reads += o.reads;
+        self.oriented += o.oriented;
+        self.pairs_emitted += o.pairs_emitted;
+        self.r1_eq_28 += o.r1_eq_28;
+        self.r1_not_28 += o.r1_not_28;
+        self.adapter_trimmed += o.adapter_trimmed;
+        self.r2_len_sum += o.r2_len_sum;
+        self.r2_len_max = self.r2_len_max.max(o.r2_len_max);
+        self.class_full += o.class_full;
+        self.class_partial += o.class_partial;
+        self.class_unparseable += o.class_unparseable;
+        self.cb_on_whitelist += o.cb_on_whitelist;
+        self.cb_within1 += o.cb_within1;
+        self.cb_fail += o.cb_fail;
+        self.gated_out += o.gated_out;
+        self.realigned += o.realigned;
+        self.undetermined += o.undetermined;
+        self.via_dual += o.via_dual;
+        self.via_i5 += o.via_i5;
+        self.via_i7 += o.via_i7;
+        self.via_conflict += o.via_conflict;
+        if self.per_sample.len() < o.per_sample.len() {
+            self.per_sample.resize(o.per_sample.len(), 0);
+        }
+        for (a, b) in self.per_sample.iter_mut().zip(o.per_sample.iter()) {
+            *a += b;
+        }
+    }
+}
+
+/// Read-only context shared across the parallel per-file workers.
+struct Shared<'a> {
+    orient_cfg: OrientCfg,
+    extract_cfg: ExtractCfg,
+    demuxer: Option<&'a Demuxer>,
+    whitelist: Option<&'a Whitelist>,
+    cb_len: usize,
+    umi_len: usize,
+    cb_gate: bool,
+    realign: bool,
+    index_len: usize,
+    /// Number of sample targets; the Undetermined target (when demuxing) is at
+    /// index `n_samples`.
+    n_samples: usize,
+    targets: &'a [PairShardWriter],
 }
 
 /// Entry point invoked by the binary. Orients each read to canonical P5→P7,
@@ -105,146 +162,58 @@ pub fn run(cli: &Cli) -> Result<()> {
         None => None,
     };
 
-    // Set up writers: per-sample + Undetermined when demuxing, else one combined.
+    // Output targets: per-sample then Undetermined (last) when demuxing, else one
+    // combined target. Writers are concatenated-gzip and thread-safe.
     let demuxer = sheet
         .as_ref()
         .map(|s| Demuxer::new(s, cli.params.demux_cfg()));
-    let (mut sample_writers, mut undetermined) = match &demuxer {
+    let n_samples = demuxer.as_ref().map_or(1, |d| d.sample_ids().len());
+    let targets: Vec<PairShardWriter> = match &demuxer {
         Some(d) => {
-            let mut w = Vec::with_capacity(d.sample_ids().len());
+            let mut v = Vec::with_capacity(n_samples + 1);
             for (i, id) in d.sample_ids().iter().enumerate() {
-                w.push(PairWriter::create(&cli.out_dir, id, i + 1)?);
+                v.push(PairShardWriter::create(&cli.out_dir, id, i + 1)?);
             }
-            (w, Some(PairWriter::create(&cli.out_dir, "Undetermined", 0)?))
+            v.push(PairShardWriter::create(&cli.out_dir, "Undetermined", 0)?);
+            v
         }
-        None => (vec![PairWriter::create(&cli.out_dir, "sbx10x", 1)?], None),
+        None => vec![PairShardWriter::create(&cli.out_dir, "sbx10x", 1)?],
     };
     let index_len = demuxer.as_ref().map_or(10, |d| d.index_len());
-    let mut stats = Stats { per_sample: vec![0; sample_writers.len()], ..Default::default() };
 
-    for input in &inputs {
-        let mut reader = parse_fastx_file(input)?;
-        while let Some(rec) = reader.next() {
-            let rec = rec?;
-            let id = rec.id().to_vec();
-            let seq = rec.seq();
-            let qual = rec.qual().unwrap_or(&[]);
-            stats.reads += 1;
+    let shared = Shared {
+        orient_cfg,
+        extract_cfg,
+        demuxer: demuxer.as_ref(),
+        whitelist: whitelist.as_ref(),
+        cb_len,
+        umi_len,
+        cb_gate: cli.params.cb_gate,
+        realign: cli.params.realign,
+        index_len,
+        n_samples,
+        targets: &targets,
+    };
 
-            let o = orient(&seq, qual, &orient_cfg);
-            if o.orientation != Orientation::Unknown {
-                stats.oriented += 1;
-            }
-            let e = extract(&o.seq, o.cb_umi, o.polyt_start, &extract_cfg);
+    // Process files in parallel — each plain-gzip file inflates serially on one
+    // worker, so parallelism comes from running many SBX files at once. Sort
+    // largest-first (LPT) for better load balance across the rayon pool.
+    let mut inputs = inputs;
+    inputs.sort_by_key(|p| std::cmp::Reverse(std::fs::metadata(p).map(|m| m.len()).unwrap_or(0)));
 
-            // Classify the cell barcode (CB = first cb_len bp of R1) if gating.
-            let cb_status = match (&whitelist, e.r1) {
-                (Some(w), Some((r1s, _))) => Some(w.classify(&o.seq[r1s..r1s + cb_len])),
-                _ => None,
-            };
-            match cb_status {
-                Some(CbStatus::OnWhitelist) => stats.cb_on_whitelist += 1,
-                Some(CbStatus::Within1) => stats.cb_within1 += 1,
-                Some(CbStatus::Fail) => stats.cb_fail += 1,
-                _ => {}
-            }
+    info!(rayon_threads = rayon::current_num_threads(), n_files = inputs.len(), "starting parallel processing");
+    let locals = inputs
+        .par_iter()
+        .map(|input| process_file(input, &shared))
+        .collect::<Result<Vec<_>>>()?;
 
-            // M5: when the CB fails and the measured CB+UMI span is one off 28,
-            // try to rescue it via single-indel realignment (off unless --realign).
-            // On success we synthesize R1 = corrected CB + UMI re-registered off the
-            // dT anchor.
-            let mut realigned_r1: Option<(Vec<u8>, Vec<u8>)> = None;
-            if cli.params.realign && cb_status == Some(CbStatus::Fail) {
-                if let (Some(w), Some((r1s, _)), Some(pts)) = (&whitelist, e.r1, o.polyt_start) {
-                    let delta = (pts as i64 - r1s as i64) - (cb_len + umi_len) as i64;
-                    if (delta == 1 || delta == -1) && pts >= umi_len && pts <= o.seq.len() {
-                        if let Some(cb) = w.realign_cb(&o.seq[r1s..], delta as i32) {
-                            let mut s = cb.to_vec();
-                            s.extend_from_slice(&o.seq[pts - umi_len..pts]);
-                            let mut q = o.qual[r1s..(r1s + cb_len).min(o.qual.len())].to_vec();
-                            q.resize(cb_len, b'I');
-                            q.extend_from_slice(&o.qual[pts - umi_len..pts]);
-                            realigned_r1 = Some((s, q));
-                            stats.realigned += 1;
-                        }
-                    }
-                }
-            }
-            let cb_ok = realigned_r1.is_some()
-                || !matches!(cb_status, Some(CbStatus::Fail));
-
-            // Tier the read.
-            let class = classify_read(o.orientation, e.r1.is_some(), e.r2.is_some(), cb_ok);
-            match class {
-                ReadClass::Full => stats.class_full += 1,
-                ReadClass::Partial => stats.class_partial += 1,
-                ReadClass::Unparseable => stats.class_unparseable += 1,
-            }
-
-            let (Some((r1s, r1e)), Some((r2s, r2e))) = (e.r1, e.r2) else {
-                continue; // need both R1 and R2 to emit a pair
-            };
-
-            // Gate: drop pairs whose CB fails the whitelist (and wasn't rescued),
-            // since Cell Ranger can't correct them either — unless gating is off.
-            if cli.params.cb_gate && !cb_ok {
-                stats.gated_out += 1;
-                continue;
-            }
-
-            // R1 is either the synthesized realigned pair or the raw 28 bp slice.
-            let (r1_seq, r1_qual): (&[u8], &[u8]) = match &realigned_r1 {
-                Some((s, q)) => (s, q),
-                None => (&o.seq[r1s..r1e], &o.qual[r1s..r1e]),
-            };
-            if r1_seq.len() == 28 {
-                stats.r1_eq_28 += 1;
-            } else {
-                stats.r1_not_28 += 1;
-            }
-
-            // Route: demux to a sample (or Undetermined), or the combined writer.
-            let target: &mut PairWriter = if let Some(d) = &demuxer {
-                let (i5, i7) = index_regions(&o.seq, r1s, e.adapter_pos, index_len);
-                let outcome = d.assign(i5, i7);
-                match outcome.via {
-                    DemuxVia::Dual => stats.via_dual += 1,
-                    DemuxVia::I5Only => stats.via_i5 += 1,
-                    DemuxVia::I7Only => stats.via_i7 += 1,
-                    DemuxVia::Conflict => stats.via_conflict += 1,
-                    DemuxVia::None => {}
-                }
-                match outcome.sample {
-                    Some(i) => {
-                        stats.per_sample[i] += 1;
-                        &mut sample_writers[i]
-                    }
-                    None => {
-                        stats.undetermined += 1;
-                        undetermined.as_mut().expect("undetermined writer")
-                    }
-                }
-            } else {
-                &mut sample_writers[0]
-            };
-
-            target.write(&id, r1_seq, r1_qual, &o.seq[r2s..r2e], &o.qual[r2s..r2e])?;
-            stats.pairs_emitted += 1;
-            if e.adapter_trimmed {
-                stats.adapter_trimmed += 1;
-            }
-            let len = (r2e - r2s) as u64;
-            stats.r2_len_sum += len;
-            stats.r2_len_max = stats.r2_len_max.max(len);
-        }
-        info!(file = %input.display(), reads = stats.reads, "processed FASTQ");
+    let mut stats = Stats { per_sample: vec![0; n_samples], ..Default::default() };
+    for s in locals {
+        stats.merge(s);
     }
 
-    for w in sample_writers {
-        w.finish()?;
-    }
-    if let Some(w) = undetermined {
-        w.finish()?;
+    for t in &targets {
+        t.finish()?;
     }
 
     report(&stats, demuxer.as_ref());
@@ -253,6 +222,154 @@ pub fn run(cli: &Cli) -> Result<()> {
     metrics.write_json(&metrics_path)?;
     info!(out = %metrics_path.display(), "wrote metrics summary");
     Ok(())
+}
+
+/// Append one FASTQ record (id without '@') to a raw byte buffer.
+fn push_fastq(buf: &mut Vec<u8>, id: &[u8], seq: &[u8], qual: &[u8]) {
+    buf.push(b'@');
+    buf.extend_from_slice(id);
+    buf.push(b'\n');
+    buf.extend_from_slice(seq);
+    buf.extend_from_slice(b"\n+\n");
+    buf.extend_from_slice(qual);
+    buf.push(b'\n');
+}
+
+/// Orient → extract → demux → gate → realign every read in one file, buffering
+/// per-target output and flushing compressed batches to the shared writers.
+/// Returns this file's `Stats` (merged by the caller).
+fn process_file(input: &Path, sh: &Shared) -> Result<Stats> {
+    let mut stats = Stats { per_sample: vec![0; sh.n_samples], ..Default::default() };
+    // Per-target raw FASTQ buffers: (R1 bytes, R2 bytes, record count).
+    let mut bufs: Vec<(Vec<u8>, Vec<u8>, u64)> = (0..sh.targets.len())
+        .map(|_| (Vec::new(), Vec::new(), 0))
+        .collect();
+
+    let mut reader = parse_fastx_file(input)?;
+    while let Some(rec) = reader.next() {
+        let rec = rec?;
+        let id = rec.id();
+        let seq = rec.seq();
+        let qual = rec.qual().unwrap_or(&[]);
+        stats.reads += 1;
+
+        let o = orient(&seq, qual, &sh.orient_cfg);
+        if o.orientation != Orientation::Unknown {
+            stats.oriented += 1;
+        }
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &sh.extract_cfg);
+
+        // Classify the cell barcode (CB = first cb_len bp of R1) if a whitelist.
+        let cb_status = match (sh.whitelist, e.r1) {
+            (Some(w), Some((r1s, _))) => Some(w.classify(&o.seq[r1s..r1s + sh.cb_len])),
+            _ => None,
+        };
+        match cb_status {
+            Some(CbStatus::OnWhitelist) => stats.cb_on_whitelist += 1,
+            Some(CbStatus::Within1) => stats.cb_within1 += 1,
+            Some(CbStatus::Fail) => stats.cb_fail += 1,
+            _ => {}
+        }
+
+        // M5: single-indel CB rescue (off unless --realign).
+        let mut realigned_r1: Option<(Vec<u8>, Vec<u8>)> = None;
+        if sh.realign && cb_status == Some(CbStatus::Fail) {
+            if let (Some(w), Some((r1s, _)), Some(pts)) = (sh.whitelist, e.r1, o.polyt_start) {
+                let delta = (pts as i64 - r1s as i64) - (sh.cb_len + sh.umi_len) as i64;
+                if (delta == 1 || delta == -1) && pts >= sh.umi_len && pts <= o.seq.len() {
+                    if let Some(cb) = w.realign_cb(&o.seq[r1s..], delta as i32) {
+                        let mut s = cb.to_vec();
+                        s.extend_from_slice(&o.seq[pts - sh.umi_len..pts]);
+                        let mut q = o.qual[r1s..(r1s + sh.cb_len).min(o.qual.len())].to_vec();
+                        q.resize(sh.cb_len, b'I');
+                        q.extend_from_slice(&o.qual[pts - sh.umi_len..pts]);
+                        realigned_r1 = Some((s, q));
+                        stats.realigned += 1;
+                    }
+                }
+            }
+        }
+        let cb_ok = realigned_r1.is_some() || !matches!(cb_status, Some(CbStatus::Fail));
+
+        let class = classify_read(o.orientation, e.r1.is_some(), e.r2.is_some(), cb_ok);
+        match class {
+            ReadClass::Full => stats.class_full += 1,
+            ReadClass::Partial => stats.class_partial += 1,
+            ReadClass::Unparseable => stats.class_unparseable += 1,
+        }
+
+        let (Some((r1s, r1e)), Some((r2s, r2e))) = (e.r1, e.r2) else {
+            continue; // need both R1 and R2 to emit a pair
+        };
+
+        // Gate: drop CB-fail pairs that weren't rescued (unless gating is off).
+        if sh.cb_gate && !cb_ok {
+            stats.gated_out += 1;
+            continue;
+        }
+
+        let (r1_seq, r1_qual): (&[u8], &[u8]) = match &realigned_r1 {
+            Some((s, q)) => (s, q),
+            None => (&o.seq[r1s..r1e], &o.qual[r1s..r1e]),
+        };
+        if r1_seq.len() == 28 {
+            stats.r1_eq_28 += 1;
+        } else {
+            stats.r1_not_28 += 1;
+        }
+
+        // Route to a target index: sample, Undetermined (= n_samples), or combined.
+        let target_idx = if let Some(d) = sh.demuxer {
+            let (i5, i7) = index_regions(&o.seq, r1s, e.adapter_pos, sh.index_len);
+            let outcome = d.assign(i5, i7);
+            match outcome.via {
+                DemuxVia::Dual => stats.via_dual += 1,
+                DemuxVia::I5Only => stats.via_i5 += 1,
+                DemuxVia::I7Only => stats.via_i7 += 1,
+                DemuxVia::Conflict => stats.via_conflict += 1,
+                DemuxVia::None => {}
+            }
+            match outcome.sample {
+                Some(i) => {
+                    stats.per_sample[i] += 1;
+                    i
+                }
+                None => {
+                    stats.undetermined += 1;
+                    sh.n_samples
+                }
+            }
+        } else {
+            0
+        };
+
+        let buf = &mut bufs[target_idx];
+        push_fastq(&mut buf.0, id, r1_seq, r1_qual);
+        push_fastq(&mut buf.1, id, &o.seq[r2s..r2e], &o.qual[r2s..r2e]);
+        buf.2 += 1;
+        if buf.0.len() >= FLUSH_BYTES {
+            sh.targets[target_idx].append(&buf.0, &buf.1, buf.2)?;
+            buf.0.clear();
+            buf.1.clear();
+            buf.2 = 0;
+        }
+
+        stats.pairs_emitted += 1;
+        if e.adapter_trimmed {
+            stats.adapter_trimmed += 1;
+        }
+        let len = (r2e - r2s) as u64;
+        stats.r2_len_sum += len;
+        stats.r2_len_max = stats.r2_len_max.max(len);
+    }
+
+    // Flush any remaining buffered records.
+    for (i, buf) in bufs.iter().enumerate() {
+        if buf.2 > 0 {
+            sh.targets[i].append(&buf.0, &buf.1, buf.2)?;
+        }
+    }
+    Ok(stats)
 }
 
 /// Tier a read: `Unparseable` if it couldn't be oriented or no barcode located;
