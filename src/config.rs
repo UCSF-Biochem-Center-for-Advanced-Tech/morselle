@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
+use crate::demux::DemuxCfg;
 use crate::extract::ExtractCfg;
 use crate::orient::{FallbackMode, OrientCfg};
 
@@ -68,6 +69,11 @@ pub struct Params {
     #[arg(long, default_value_t = 1)]
     pub index_max_mm: u32,
 
+    /// Allow demux assignment from one index when the other is truncated (M3).
+    /// Safe here (min pairwise Hamming i7=3/i5=4); disable for strict dual-index.
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    pub single_index: bool,
+
     /// Enable the indel-realign branch (M5). Off by default.
     #[arg(long, default_value_t = false)]
     pub realign: bool,
@@ -111,6 +117,14 @@ impl Params {
         ExtractCfg {
             min_cdna_len: self.min_cdna_len,
             adapter_max_mm: self.adapter_max_mm,
+        }
+    }
+
+    /// Build the M3 demux config from these parameters.
+    pub fn demux_cfg(&self) -> DemuxCfg {
+        DemuxCfg {
+            index_max_mm: self.index_max_mm,
+            allow_single_index: self.single_index,
         }
     }
 }

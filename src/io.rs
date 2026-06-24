@@ -81,3 +81,39 @@ impl FastqGzWriter {
         Ok(())
     }
 }
+
+/// A paired R1/R2 gzip writer for one sample (Cell Ranger naming:
+/// `<prefix>_S<n>_L001_R{1,2}_001.fastq.gz`).
+pub struct PairWriter {
+    pub r1: FastqGzWriter,
+    pub r2: FastqGzWriter,
+}
+
+impl PairWriter {
+    pub fn create(dir: &Path, prefix: &str, s_num: usize) -> Result<Self> {
+        let name = |read: u8| dir.join(format!("{prefix}_S{s_num}_L001_R{read}_001.fastq.gz"));
+        Ok(PairWriter {
+            r1: FastqGzWriter::create(&name(1))?,
+            r2: FastqGzWriter::create(&name(2))?,
+        })
+    }
+
+    pub fn write(
+        &mut self,
+        id: &[u8],
+        r1_seq: &[u8],
+        r1_qual: &[u8],
+        r2_seq: &[u8],
+        r2_qual: &[u8],
+    ) -> Result<()> {
+        self.r1.write_record(id, r1_seq, r1_qual)?;
+        self.r2.write_record(id, r2_seq, r2_qual)?;
+        Ok(())
+    }
+
+    pub fn finish(self) -> Result<()> {
+        self.r1.finish()?;
+        self.r2.finish()?;
+        Ok(())
+    }
+}

@@ -32,6 +32,9 @@ pub struct Extracted {
     pub polyt_end: Option<usize>,
     /// Length of the dT-primer run actually observed (QC).
     pub polyt_run_len: u16,
+    /// Position of the 3' read-through adapter (= start of `rc(R2 primer)`), when
+    /// found. Marks the cDNA end and lets demux locate the downstream i7.
+    pub adapter_pos: Option<usize>,
     /// The 3' read-through adapter was found and trimmed.
     pub adapter_trimmed: bool,
 }
@@ -87,6 +90,7 @@ pub fn extract(
     let mut polyt_end = None;
     let mut polyt_run_len = 0u16;
     let mut r2 = None;
+    let mut adapter_pos = None;
     let mut adapter_trimmed = false;
 
     if let Some(pts) = polyt_start {
@@ -94,8 +98,9 @@ pub fn extract(
         polyt_run_len = cdna_start.saturating_sub(pts).min(u16::MAX as usize) as u16;
         polyt_end = Some(cdna_start);
 
-        let cdna_end = find_adapter(seq, cdna_start, cfg.adapter_max_mm).unwrap_or(seq.len());
-        adapter_trimmed = cdna_end < seq.len();
+        adapter_pos = find_adapter(seq, cdna_start, cfg.adapter_max_mm);
+        let cdna_end = adapter_pos.unwrap_or(seq.len());
+        adapter_trimmed = adapter_pos.is_some();
         if cdna_end > cdna_start && cdna_end - cdna_start >= cfg.min_cdna_len {
             r2 = Some((cdna_start, cdna_end));
         }
@@ -106,6 +111,7 @@ pub fn extract(
         r2,
         polyt_end,
         polyt_run_len,
+        adapter_pos,
         adapter_trimmed,
     }
 }
