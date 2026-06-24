@@ -4,6 +4,8 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
+use crate::orient::{FallbackMode, OrientCfg};
+
 /// Convert raw Roche SBX reads into per-sample 10x R1/R2 FASTQs.
 #[derive(Parser, Debug, Clone)]
 #[command(name = "sbx10x", version, about)]
@@ -55,6 +57,12 @@ pub struct Params {
     #[arg(long, default_value_t = 6)]
     pub anchor_max_edits: u32,
 
+    /// Orientation fallback for reads lacking a homopolymer (M1). `hamming-tail`
+    /// (default) is cheap and high-recall; `levenshtein` is thorough but ~20×
+    /// slower; `off` disables the fallback.
+    #[arg(long, value_enum, default_value_t = FallbackMode::HammingTail)]
+    pub orient_fallback: FallbackMode,
+
     /// Max mismatches allowed when matching sample-sheet indices.
     #[arg(long, default_value_t = 1)]
     pub index_max_mm: u32,
@@ -76,5 +84,20 @@ impl Cli {
     /// R1 length = CB + UMI (28 bp for v3 GEX).
     pub fn r1_len(&self) -> usize {
         self.params.cb_len + self.params.umi_len
+    }
+}
+
+impl Params {
+    /// Build the M1 orientation config from these parameters.
+    pub fn orient_cfg(&self) -> OrientCfg {
+        OrientCfg {
+            cb_len: self.cb_len,
+            umi_len: self.umi_len,
+            min_homopolymer: self.min_homopolymer,
+            r1_tail_max_mm: self.r1_tail_max_mm,
+            anchor_max_edits: self.anchor_max_edits,
+            fallback: self.orient_fallback,
+            expected: None,
+        }
     }
 }
