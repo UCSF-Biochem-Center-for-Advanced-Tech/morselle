@@ -20,23 +20,36 @@ use anyhow::Result;
 use needletail::parse_fastx_file;
 use tracing::info;
 
+use crate::accounting::{pct, DemuxMetrics, Metrics, SampleCount, WhitelistMetrics};
+use crate::barcode::Whitelist;
 use crate::config::Cli;
 use crate::demux::{index_regions, DemuxVia, Demuxer};
 use crate::extract::extract;
 use crate::io::{discover_fastqs, PairWriter};
 use crate::orient::orient;
-use crate::pipeline::Orientation;
+use crate::pipeline::{CbStatus, Orientation, ReadClass};
 use crate::sample_sheet::SampleSheet;
 
 /// Running counts for the pipeline summary.
+#[derive(Default)]
 struct Stats {
     reads: u64,
     oriented: u64,
     pairs_emitted: u64,
+    r1_eq_28: u64,
     r1_not_28: u64,
     adapter_trimmed: u64,
     r2_len_sum: u64,
     r2_len_max: u64,
+    // read classes
+    class_full: u64,
+    class_partial: u64,
+    class_unparseable: u64,
+    // cb gate
+    cb_on_whitelist: u64,
+    cb_within1: u64,
+    cb_fail: u64,
+    gated_out: u64,
     // demux
     undetermined: u64,
     via_dual: u64,
@@ -44,26 +57,6 @@ struct Stats {
     via_i7: u64,
     via_conflict: u64,
     per_sample: Vec<u64>,
-}
-
-impl Stats {
-    fn new(n_samples: usize) -> Self {
-        Stats {
-            reads: 0,
-            oriented: 0,
-            pairs_emitted: 0,
-            r1_not_28: 0,
-            adapter_trimmed: 0,
-            r2_len_sum: 0,
-            r2_len_max: 0,
-            undetermined: 0,
-            via_dual: 0,
-            via_i5: 0,
-            via_i7: 0,
-            via_conflict: 0,
-            per_sample: vec![0; n_samples],
-        }
-    }
 }
 
 /// Entry point invoked by the binary. Orients each read to canonical P5→P7,
@@ -98,6 +91,17 @@ pub fn run(cli: &Cli) -> Result<()> {
 
     let orient_cfg = cli.params.orient_cfg();
     let extract_cfg = cli.params.extract_cfg();
+    let cb_len = cli.params.cb_len;
+
+    // Load the cell-barcode whitelist (M4 gate), if provided.
+    let whitelist = match &cli.whitelist {
+        Some(path) => {
+            let w = Whitelist::load(path)?;
+            info!(barcodes = w.len(), path = %path.display(), "loaded CB whitelist");
+            Some(w)
+        }
+        None => None,
+    };
 
     // Set up writers: per-sample + Undetermined when demuxing, else one combined.
     let demuxer = sheet
@@ -114,7 +118,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         None => (vec![PairWriter::create(&cli.out_dir, "sbx10x", 1)?], None),
     };
     let index_len = demuxer.as_ref().map_or(10, |d| d.index_len());
-    let mut stats = Stats::new(sample_writers.len());
+    let mut stats = Stats { per_sample: vec![0; sample_writers.len()], ..Default::default() };
 
     for input in &inputs {
         let mut reader = parse_fastx_file(input)?;
@@ -131,10 +135,40 @@ pub fn run(cli: &Cli) -> Result<()> {
             }
             let e = extract(&o.seq, o.cb_umi, o.polyt_start, &extract_cfg);
 
+            // Classify the cell barcode (CB = first cb_len bp of R1) if gating.
+            let cb_status = match (&whitelist, e.r1) {
+                (Some(w), Some((r1s, _))) => Some(w.classify(&o.seq[r1s..r1s + cb_len])),
+                _ => None,
+            };
+            match cb_status {
+                Some(CbStatus::OnWhitelist) => stats.cb_on_whitelist += 1,
+                Some(CbStatus::Within1) => stats.cb_within1 += 1,
+                Some(CbStatus::Fail) => stats.cb_fail += 1,
+                _ => {}
+            }
+
+            // Tier the read.
+            let class = classify_read(o.orientation, e.r1.is_some(), e.r2.is_some(), cb_status);
+            match class {
+                ReadClass::Full => stats.class_full += 1,
+                ReadClass::Partial => stats.class_partial += 1,
+                ReadClass::Unparseable => stats.class_unparseable += 1,
+            }
+
             let (Some((r1s, r1e)), Some((r2s, r2e))) = (e.r1, e.r2) else {
                 continue; // need both R1 and R2 to emit a pair
             };
-            if r1e - r1s != 28 {
+
+            // Gate: drop pairs whose CB fails the whitelist (Cell Ranger can't
+            // correct them anyway) unless gating is disabled.
+            if cli.params.cb_gate && cb_status == Some(CbStatus::Fail) {
+                stats.gated_out += 1;
+                continue;
+            }
+
+            if r1e - r1s == 28 {
+                stats.r1_eq_28 += 1;
+            } else {
                 stats.r1_not_28 += 1;
             }
 
@@ -189,28 +223,126 @@ pub fn run(cli: &Cli) -> Result<()> {
     }
 
     report(&stats, demuxer.as_ref());
+    let metrics = build_metrics(&stats, whitelist.as_ref(), demuxer.as_ref());
+    let metrics_path = cli.out_dir.join("metrics_summary.json");
+    metrics.write_json(&metrics_path)?;
+    info!(out = %metrics_path.display(), "wrote metrics summary");
     Ok(())
+}
+
+/// Tier a read: `Unparseable` if it couldn't be oriented or no barcode located;
+/// `Full` if R1+R2 present and (no whitelist, or CB on-whitelist/within-1);
+/// `Partial` otherwise (e.g. R2 missing, or CB fails the gate).
+fn classify_read(
+    orientation: Orientation,
+    has_r1: bool,
+    has_r2: bool,
+    cb_status: Option<CbStatus>,
+) -> ReadClass {
+    if orientation == Orientation::Unknown || !has_r1 {
+        return ReadClass::Unparseable;
+    }
+    let cb_ok = cb_status.map_or(true, |s| {
+        matches!(s, CbStatus::OnWhitelist | CbStatus::Within1)
+    });
+    if has_r2 && cb_ok {
+        ReadClass::Full
+    } else {
+        ReadClass::Partial
+    }
+}
+
+/// Assemble the serializable metrics summary.
+fn build_metrics(stats: &Stats, whitelist: Option<&Whitelist>, demuxer: Option<&Demuxer>) -> Metrics {
+    let r2_len_mean = if stats.pairs_emitted > 0 {
+        stats.r2_len_sum / stats.pairs_emitted
+    } else {
+        0
+    };
+    Metrics {
+        total_reads: stats.reads,
+        oriented: stats.oriented,
+        oriented_pct: pct(stats.oriented, stats.reads),
+        class_full: stats.class_full,
+        class_partial: stats.class_partial,
+        class_unparseable: stats.class_unparseable,
+        pairs_emitted: stats.pairs_emitted,
+        pairs_pct: pct(stats.pairs_emitted, stats.reads),
+        r1_eq_28: stats.r1_eq_28,
+        r1_not_28: stats.r1_not_28,
+        adapter_trimmed: stats.adapter_trimmed,
+        r2_len_mean,
+        r2_len_max: stats.r2_len_max,
+        whitelist: whitelist.map(|w| {
+            let classified = stats.cb_on_whitelist + stats.cb_within1 + stats.cb_fail;
+            WhitelistMetrics {
+                size: w.len(),
+                cb_on_whitelist: stats.cb_on_whitelist,
+                cb_within1: stats.cb_within1,
+                cb_fail: stats.cb_fail,
+                cb_hit_rate: pct(stats.cb_on_whitelist + stats.cb_within1, classified),
+                gated_out: stats.gated_out,
+                realigned: 0,
+            }
+        }),
+        demux: demuxer.map(|d| {
+            let assigned = stats.pairs_emitted - stats.undetermined;
+            DemuxMetrics {
+                assigned,
+                assigned_pct: pct(assigned, stats.pairs_emitted),
+                undetermined: stats.undetermined,
+                via_dual: stats.via_dual,
+                via_i5_only: stats.via_i5,
+                via_i7_only: stats.via_i7,
+                via_conflict: stats.via_conflict,
+                per_sample: d
+                    .sample_ids()
+                    .iter()
+                    .enumerate()
+                    .map(|(i, id)| SampleCount {
+                        sample: id.clone(),
+                        pairs: stats.per_sample[i],
+                    })
+                    .collect(),
+            }
+        }),
+    }
 }
 
 /// Log the run summary.
 fn report(stats: &Stats, demuxer: Option<&Demuxer>) {
-    let pct = |x: u64| 100.0 * x as f64 / stats.reads.max(1) as f64;
+    let p = |x: u64| 100.0 * x as f64 / stats.reads.max(1) as f64;
     info!(
         reads = stats.reads,
-        oriented_pct = format!("{:.1}", pct(stats.oriented)),
+        oriented_pct = format!("{:.1}", p(stats.oriented)),
+        full = stats.class_full,
+        partial = stats.class_partial,
+        unparseable = stats.class_unparseable,
         pairs = stats.pairs_emitted,
-        pairs_pct = format!("{:.1}", pct(stats.pairs_emitted)),
-        r1_not_28 = stats.r1_not_28,
-        adapter_trimmed_pct = format!("{:.1}", pct(stats.adapter_trimmed)),
+        pairs_pct = format!("{:.1}", p(stats.pairs_emitted)),
         r2_len_mean = (stats.pairs_emitted > 0).then(|| stats.r2_len_sum / stats.pairs_emitted),
         r2_len_max = stats.r2_len_max,
         "pipeline complete"
     );
+    if stats.cb_on_whitelist + stats.cb_within1 + stats.cb_fail > 0 {
+        let classified = stats.cb_on_whitelist + stats.cb_within1 + stats.cb_fail;
+        info!(
+            on_whitelist = stats.cb_on_whitelist,
+            within1 = stats.cb_within1,
+            fail = stats.cb_fail,
+            hit_rate = format!(
+                "{:.1}",
+                100.0 * (stats.cb_on_whitelist + stats.cb_within1) as f64 / classified.max(1) as f64
+            ),
+            gated_out = stats.gated_out,
+            "CB gate"
+        );
+    }
     if let Some(d) = demuxer {
         let assigned = stats.pairs_emitted - stats.undetermined;
         info!(
             assigned,
-            assigned_pct = format!("{:.1}", pct(assigned)),
+            assigned_pct = format!("{:.1}", p(assigned)),
             undetermined = stats.undetermined,
             via_dual = stats.via_dual,
             via_i5_only = stats.via_i5,

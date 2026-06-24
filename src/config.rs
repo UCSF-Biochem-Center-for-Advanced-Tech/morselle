@@ -86,6 +86,11 @@ pub struct Params {
     #[arg(long, default_value_t = 20)]
     pub min_cdna_len: usize,
 
+    /// With a whitelist, drop pairs whose CB is neither on-whitelist nor within
+    /// Hamming-1 (M4). Disable to emit all and let Cell Ranger filter.
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    pub cb_gate: bool,
+
     /// Max mismatches for the 13 bp 3' adapter seed used to trim cDNA (M2).
     #[arg(long, default_value_t = 2)]
     pub adapter_max_mm: u32,

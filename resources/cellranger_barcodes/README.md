@@ -32,20 +32,20 @@ below into this directory.
 | `probe-barcodes-fixed-rna-profiling-ab-r1.txt` | …antibody, R1 variant | 3-col | 64 |
 | `probe-barcodes-fixed-rna-profiling-crispr.txt` | …CRISPR probe BCs | 3-col | 16 |
 
-## ⚠️ Needed for M4: the standard GEX whitelist (not present)
+## The gate whitelist: `737K-arc-v1.txt.gz` (Multiome ARC)
 
-The `_NXT` files here are **the wrong list for the GEX validate-gate**. Verified
-2026-06-24: neither column contains the 3' v3 cell barcodes — even Roche's own
-known-good R1 CBs (from `M2_GEX/`) hit these files at <1% (chance level). They are
-NextSeq/translation tables (3,686,400 rows), not the 6,794,880-barcode GEX list.
+**This data is 10x Single Cell Multiome (ATAC + GEX), GEX side**, so the cell
+barcodes come from the **ARC** gel-bead list `737K-arc-v1.txt.gz` (736,320
+barcodes, single column) — NOT any 3' GEX list. M4 loads this via `--whitelist`.
 
-**Action:** add the single-column `3M-february-2018.txt.gz` (6,794,880 barcodes,
-one 16 bp barcode per line) from
-`cellranger-<version>/lib/python/cellranger/barcodes/3M-february-2018.txt.gz`
-(NOT the `translation/` subfolder). M4 loads that.
+Verified 2026-06-24 against Roche's own known-good CBs: `737K-arc-v1` = **73.3%
+as-is** (0% reverse-complemented), vs <2% for every 3' GEX list (`3M-february-2018`
+v3, `3M-3pgex-may-2023`). Get it from the **Cell Ranger ARC** distribution:
+`cellranger-arc-<version>/lib/python/cellranger/barcodes/737K-arc-v1.txt.gz`.
+Match orientation is **as-is** (the ATAC barcode is the reverse complement).
 
-(Extraction was independently validated without a whitelist: our M1+M2 CBs match
-Roche's CB on 87.6% of shared reads by read id.)
+The 3' GEX lists (`3M-february-2018*`, `3M-3pgex-may-2023*`, `9K-LT-*`) do not
+apply to this data and are kept only for reference.
 
 ## Notes
 
