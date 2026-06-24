@@ -29,7 +29,7 @@ use crate::config::Cli;
 use crate::demux::{index_regions, DemuxVia, Demuxer};
 use crate::extract::{extract, ExtractCfg};
 use crate::io::{discover_fastqs, PairShardWriter};
-use crate::orient::{orient, OrientCfg};
+use crate::orient::{orient, OrientCfg, OrientMode};
 use crate::pipeline::{CbStatus, Orientation, ReadClass};
 use crate::sample_sheet::SampleSheet;
 
@@ -116,6 +116,7 @@ impl Stats {
 /// Read-only context shared across the parallel per-file workers.
 struct Shared<'a> {
     orient_cfg: OrientCfg,
+    orient_mode: OrientMode,
     extract_cfg: ExtractCfg,
     demuxer: Option<&'a Demuxer>,
     whitelist: Option<&'a Whitelist>,
@@ -197,6 +198,7 @@ pub fn run(cli: &Cli) -> Result<()> {
 
     let shared = Shared {
         orient_cfg,
+        orient_mode: cli.params.orientation,
         extract_cfg,
         demuxer: demuxer.as_ref(),
         whitelist: whitelist.as_ref(),
@@ -255,6 +257,17 @@ fn push_fastq(buf: &mut Vec<u8>, id: &[u8], seq: &[u8], qual: &[u8]) {
 /// Returns this file's `Stats` (merged by the caller).
 fn process_file(input: &Path, sh: &Shared) -> Result<Stats> {
     let mut stats = Stats { per_sample: vec![0; sh.n_samples], ..Default::default() };
+
+    // Determine the run orientation for this file and enforce it (each run is
+    // orientation-pure). Auto = detect from a pre-scan of confident reads.
+    let expected = match sh.orient_mode {
+        OrientMode::P5Led => Some(Orientation::P5Led),
+        OrientMode::P7Led => Some(Orientation::P7Led),
+        OrientMode::Auto => detect_orientation(input, &sh.orient_cfg, &sh.extract_cfg)?,
+    };
+    info!(file = %input.display(), orientation = ?expected, "orientation");
+    let orient_cfg = OrientCfg { expected, ..sh.orient_cfg };
+
     // Per-target raw FASTQ buffers: (R1 bytes, R2 bytes, record count).
     let mut bufs: Vec<(Vec<u8>, Vec<u8>, u64)> = (0..sh.targets.len())
         .map(|_| (Vec::new(), Vec::new(), 0))
@@ -268,7 +281,7 @@ fn process_file(input: &Path, sh: &Shared) -> Result<Stats> {
         let qual = rec.qual().unwrap_or(&[]);
         stats.reads += 1;
 
-        let o = orient(&seq, qual, &sh.orient_cfg);
+        let o = orient(&seq, qual, &orient_cfg);
         if o.orientation != Orientation::Unknown {
             stats.oriented += 1;
         }
@@ -415,6 +428,51 @@ fn process_file(input: &Path, sh: &Shared) -> Result<Stats> {
         }
     }
     Ok(stats)
+}
+
+/// Detect a file's dominant orientation from a pre-scan of confident reads.
+/// Returns `Some` only when ≥80% of confident reads agree (else `None` → per-read
+/// auto). Each SBX run is orientation-pure, so this is normally unambiguous.
+fn detect_orientation(
+    input: &Path,
+    base_cfg: &OrientCfg,
+    extract_cfg: &ExtractCfg,
+) -> Result<Option<Orientation>> {
+    const SCAN: usize = 2000;
+    let cfg = OrientCfg { expected: None, ..*base_cfg };
+    let mut reader = parse_fastx_file(input)?;
+    let (mut p5, mut p7) = (0u64, 0u64);
+    let mut seen = 0;
+    while let Some(rec) = reader.next() {
+        if seen >= SCAN {
+            break;
+        }
+        seen += 1;
+        let rec = rec?;
+        let seq = rec.seq();
+        let qual = rec.qual().unwrap_or(&[]);
+        let o = orient(&seq, qual, &cfg);
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, extract_cfg);
+        if o.r1_tail_confirmed && e.polyt_run_len >= 10 {
+            match o.orientation {
+                Orientation::P5Led => p5 += 1,
+                Orientation::P7Led => p7 += 1,
+                Orientation::Unknown => {}
+            }
+        }
+    }
+    let total = p5 + p7;
+    if total < 50 {
+        return Ok(None); // too few confident reads to decide
+    }
+    let frac5 = p5 as f64 / total as f64;
+    Ok(if frac5 >= 0.8 {
+        Some(Orientation::P5Led)
+    } else if frac5 <= 0.2 {
+        Some(Orientation::P7Led)
+    } else {
+        None
+    })
 }
 
 /// Tier a read: `Unparseable` if it couldn't be oriented or no barcode located;

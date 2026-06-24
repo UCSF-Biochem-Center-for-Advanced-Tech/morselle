@@ -6,7 +6,7 @@ use clap::Parser;
 
 use crate::demux::DemuxCfg;
 use crate::extract::ExtractCfg;
-use crate::orient::{FallbackMode, OrientCfg};
+use crate::orient::{FallbackMode, OrientCfg, OrientMode};
 
 /// Convert raw Roche SBX reads into per-sample 10x R1/R2 FASTQs.
 #[derive(Parser, Debug, Clone)]
@@ -64,6 +64,11 @@ pub struct Params {
     /// slower; `off` disables the fallback.
     #[arg(long, value_enum, default_value_t = FallbackMode::HammingTail)]
     pub orient_fallback: FallbackMode,
+
+    /// Run orientation. `auto` (default) detects + enforces the dominant
+    /// orientation per file; `p5-led`/`p7-led` force it (run_5p / run1).
+    #[arg(long, value_enum, default_value_t = OrientMode::Auto)]
+    pub orientation: OrientMode,
 
     /// Max mismatches allowed when matching sample-sheet indices.
     #[arg(long, default_value_t = 1)]

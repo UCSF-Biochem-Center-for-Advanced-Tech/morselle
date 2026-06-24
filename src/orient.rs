@@ -53,6 +53,23 @@ pub enum FallbackMode {
     Levenshtein,
 }
 
+/// Per-run orientation handling (CLI `--orientation`).
+///
+/// Each SBX run is orientation-pure (verified: confident reads are 98% P7-led in
+/// run1, 95% P5-led in run_5p). `Auto` detects the dominant orientation per file
+/// and enforces it; the explicit modes skip detection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+pub enum OrientMode {
+    /// Detect the dominant orientation per file and enforce it (fall back to
+    /// per-read if a file isn't clearly one orientation).
+    #[default]
+    Auto,
+    /// Force P5-led (no flip) — e.g. run_5p.
+    P5Led,
+    /// Force P7-led (flip) — e.g. run1.
+    P7Led,
+}
+
 /// Tuning for [`orient`].
 #[derive(Debug, Clone, Copy)]
 pub struct OrientCfg {
@@ -66,8 +83,10 @@ pub struct OrientCfg {
     pub anchor_max_edits: u32,
     /// Strategy when no qualifying homopolymer is found.
     pub fallback: FallbackMode,
-    /// Optional orientation hint (e.g. from the input dir), used ONLY to break
-    /// genuine ties. `None` = anchors only.
+    /// Known run orientation. When `Some`, it is *enforced*: only the matching
+    /// dT-primer identity is sought and the flip is fixed, so a cDNA homopolymer
+    /// of the wrong identity/position can't hijack the call. `None` = per-read
+    /// auto-detect.
     pub expected: Option<Orientation>,
 }
 
@@ -135,8 +154,114 @@ fn lock_bracket(canon: &[u8], approx_cb_start: usize, max_mm: u32) -> Option<usi
 }
 
 /// Orient a single read to canonical P5→P7 (3' assay).
+///
+/// When `cfg.expected` is set (the run's known orientation), we *enforce* it via
+/// [`orient_fixed`] — only the matching dT-primer identity is sought, so a cDNA
+/// homopolymer can't flip or mis-anchor the read. Otherwise we auto-detect per
+/// read via [`orient_auto`].
 pub fn orient<'a>(seq: &'a [u8], qual: &'a [u8], cfg: &OrientCfg) -> Oriented<'a> {
     let leader_present = detect_leader(seq);
+    match cfg.expected {
+        Some(Orientation::P5Led) => orient_fixed(seq, qual, cfg, false, leader_present),
+        Some(Orientation::P7Led) => orient_fixed(seq, qual, cfg, true, leader_present),
+        _ => orient_auto(seq, qual, cfg, leader_present),
+    }
+}
+
+/// Finalize an `Oriented` from a located `cb_start` (+ optional raw dT-run start).
+fn make<'a>(
+    seq: Cow<'a, [u8]>,
+    qual: Cow<'a, [u8]>,
+    orientation: Orientation,
+    method: OrientMethod,
+    leader_present: bool,
+    cb_start: usize,
+    polyt_start: Option<usize>,
+    confirmed: bool,
+    bracket: usize,
+) -> Oriented<'a> {
+    let n = seq.len();
+    let cb_umi = (cb_start + bracket <= n).then(|| (cb_start, cb_start + bracket));
+    let pts = polyt_start.or_else(|| cb_umi.map(|(_, e)| e));
+    Oriented {
+        seq,
+        qual,
+        orientation,
+        method,
+        leader_present,
+        polyt_start: pts,
+        cb_umi,
+        r1_tail_confirmed: confirmed,
+    }
+}
+
+/// Orient with the run's orientation *known* (`flip` = P7-led). Looks only for
+/// the canonical dT-primer (poly-T) validated by the R1-tail; if that fails,
+/// re-anchors via a direct R1-tail prefix search (fixes false homopolymer
+/// anchors); else falls back to the unconfirmed homopolymer offset.
+fn orient_fixed<'a>(
+    seq: &'a [u8],
+    qual: &'a [u8],
+    cfg: &OrientCfg,
+    flip: bool,
+    leader_present: bool,
+) -> Oriented<'a> {
+    let bracket = cfg.bracket();
+    let orientation = if flip { Orientation::P7Led } else { Orientation::P5Led };
+    let (canon_seq, canon_qual): (Cow<[u8]>, Cow<[u8]>) = if flip {
+        let mut q = qual.to_vec();
+        q.reverse();
+        (Cow::Owned(revcomp(seq)), Cow::Owned(q))
+    } else {
+        (Cow::Borrowed(seq), Cow::Borrowed(qual))
+    };
+
+    // 1) Canonical dT-primer (poly-T) with room for CB+UMI before it, locked to
+    //    the R1-tail. The lock rejects false anchors whose -28 offset has no tail.
+    let t_run = longest_run(&canon_seq, b'T')
+        .filter(|r| r.len >= cfg.min_homopolymer && r.start >= bracket);
+    if let Some(t) = t_run {
+        if let Some(approx) = t.start.checked_sub(bracket) {
+            if let Some(cb_start) = lock_bracket(&canon_seq, approx, cfg.r1_tail_max_mm) {
+                return make(canon_seq, canon_qual, orientation, OrientMethod::Homopolymer,
+                    leader_present, cb_start, Some(t.start), true, bracket);
+            }
+        }
+    }
+    // 2) Re-anchor: the chosen homopolymer didn't confirm (likely a cDNA poly-T).
+    //    Search the 5' window directly for the R1-tail.
+    if let Some(cb_start) = tail_in_prefix(&canon_seq, TAIL_SEARCH_WINDOW, cfg.r1_tail_max_mm) {
+        return make(canon_seq, canon_qual, orientation, OrientMethod::TailFallback,
+            leader_present, cb_start, None, true, bracket);
+    }
+    // 3) Best-effort unconfirmed homopolymer (dT present but R1-tail degraded).
+    if let Some(t) = t_run {
+        if let Some(cb_start) = t.start.checked_sub(bracket) {
+            return make(canon_seq, canon_qual, orientation, OrientMethod::Homopolymer,
+                leader_present, cb_start, Some(t.start), false, bracket);
+        }
+    }
+    // 4) Nothing locatable — orientation known but no barcode bracket.
+    Oriented {
+        seq: canon_seq,
+        qual: canon_qual,
+        orientation,
+        method: OrientMethod::None,
+        leader_present,
+        polyt_start: None,
+        cb_umi: None,
+        r1_tail_confirmed: false,
+    }
+}
+
+/// Orient by auto-detecting strand from whichever dT-primer homopolymer is
+/// longer (used when the run orientation is unknown/ambiguous).
+fn orient_auto<'a>(
+    seq: &'a [u8],
+    qual: &'a [u8],
+    cfg: &OrientCfg,
+    leader_present: bool,
+) -> Oriented<'a> {
     let bracket = cfg.bracket();
     let n = seq.len();
 
@@ -509,6 +634,48 @@ mod tests {
         assert_eq!(o.orientation, Orientation::P5Led);
         let (s, _e) = o.cb_umi.unwrap();
         assert_eq!(&o.seq[s..s + 16], b"AAACCCAAGAAACCCA");
+    }
+
+    #[test]
+    fn fixed_orientation_reanchors_past_false_homopolymer() {
+        // True structure near 5', plus a LONGER false poly-T deeper in the cDNA.
+        let cb = b"AAACCCAAGAAACACT";
+        let umi = b"ACGTACGTACGT";
+        let mut s = Vec::new();
+        s.extend_from_slice(P5);
+        s.extend_from_slice(b"ACGTACGTAC"); // i5
+        s.extend_from_slice(R1_PRIMER);
+        s.extend_from_slice(cb);
+        s.extend_from_slice(umi);
+        s.extend(std::iter::repeat(b'T').take(20)); // true dT primer
+        s.extend_from_slice(b"GACGACGACGACGACGACGACGACGACGAC"); // cDNA
+        s.extend(std::iter::repeat(b'T').take(40)); // FALSE longer poly-T in cDNA
+        s.extend_from_slice(b"GACGACGACGAC");
+        let qual = vec![b'I'; s.len()];
+
+        let mut c = cfg();
+        c.expected = Some(Orientation::P5Led);
+        let o = orient(&s, &qual, &c);
+        assert_eq!(o.orientation, Orientation::P5Led);
+        // Re-anchored to the TRUE CB despite the longer downstream poly-T.
+        let (cs, _) = o.cb_umi.unwrap();
+        assert_eq!(&o.seq[cs..cs + 16], cb);
+    }
+
+    #[test]
+    fn fixed_orientation_p7led_flips_and_locates() {
+        let cb = b"AAACCCATCAAACCTG";
+        let umi = b"TTTTGGGGCCCC";
+        let canonical = synthetic_canonical(cb, umi);
+        let reversed = revcomp(&canonical);
+        let qual = vec![b'I'; reversed.len()];
+
+        let mut c = cfg();
+        c.expected = Some(Orientation::P7Led);
+        let o = orient(&reversed, &qual, &c);
+        assert_eq!(o.orientation, Orientation::P7Led);
+        let (cs, _) = o.cb_umi.unwrap();
+        assert_eq!(&o.seq[cs..cs + 16], cb);
     }
 
     #[test]
