@@ -12,6 +12,11 @@ pub const P5: &[u8] = b"AATGATACGGCGACCACCGAGAT";
 /// R1 primer — immediately precedes the CB+UMI block.
 pub const R1_PRIMER: &[u8] = b"ACACTCTTTCCCTACACGACGCTCTTCCGATCT";
 
+/// 3' tail of the R1 primer (its last 10 bp). Sits immediately 5' of the CB+UMI
+/// block, so a fixed-offset Hamming check of this short word cheaply confirms the
+/// homopolymer-anchored bracket without a full adapter alignment.
+pub const R1_PRIMER_TAIL: &[u8] = b"CTTCCGATCT";
+
 /// R2 primer — immediately precedes cDNA on the 3' side.
 pub const R2_PRIMER: &[u8] = b"GTGACTGGAGTTCAGACGTGTGCTCTTCCGATCT";
 
@@ -20,6 +25,19 @@ pub const P7: &[u8] = b"CAAGCAGAAGACGGCATACGAGAT";
 
 /// Template-switch oligo (5' assay spacer).
 pub const TSO: &[u8] = b"AAGCAGTGGTATCAACGCAGAGTACATGGG";
+
+/// Hamming distance between two equal-length slices; counts length mismatch as
+/// the extra positions so callers can pass a window of the same length.
+pub fn hamming(a: &[u8], b: &[u8]) -> u32 {
+    let common = a.len().min(b.len());
+    let mut d = (a.len().max(b.len()) - common) as u32;
+    for i in 0..common {
+        if a[i] != b[i] {
+            d += 1;
+        }
+    }
+    d
+}
 
 /// Reverse-complement a DNA sequence (IUPAC ACGTN, case-insensitive -> upper).
 pub fn revcomp(seq: &[u8]) -> Vec<u8> {

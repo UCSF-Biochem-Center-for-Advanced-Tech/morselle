@@ -43,8 +43,16 @@ pub struct Params {
     #[arg(long, default_value_t = 12)]
     pub umi_len: usize,
 
-    /// Max edits allowed when fuzzy-locating adapters/anchors.
-    #[arg(long, default_value_t = 3)]
+    /// Minimum homopolymer run length to accept the dT-primer anchor (M1).
+    #[arg(long, default_value_t = 12)]
+    pub min_homopolymer: usize,
+
+    /// Max mismatches for the cheap 10 bp R1-primer-tail bracket confirm (M1).
+    #[arg(long, default_value_t = 2)]
+    pub r1_tail_max_mm: u32,
+
+    /// Max edits allowed when fuzzy-locating adapters/anchors (fallback path).
+    #[arg(long, default_value_t = 6)]
     pub anchor_max_edits: u32,
 
     /// Max mismatches allowed when matching sample-sheet indices.
