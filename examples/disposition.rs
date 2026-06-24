@@ -45,7 +45,7 @@ fn main() -> anyhow::Result<()> {
         cb_len, umi_len, min_homopolymer: 12, r1_tail_max_mm: 2,
         anchor_max_edits: 6, fallback: FallbackMode::HammingTail, expected: Some(expected),
     };
-    let ecfg = ExtractCfg { min_cdna_len: 20, adapter_max_mm: 2 };
+    let ecfg = ExtractCfg { min_cdna_len: 50, adapter_max_mm: 2 };
 
     let mut counts = [0u64; 7];
     let mut total = 0u64;

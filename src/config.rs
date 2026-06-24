@@ -93,10 +93,9 @@ pub struct Params {
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub keep_partials: bool,
 
-    /// Minimum cDNA length to emit an R2. SBX cDNA is long (~220 bp mean) and the
-    /// no-R2 reads are cDNA-*absent* rather than short, so lowering this recovers
-    /// almost nothing (measured +0.02%); kept as a knob at a safe default.
-    #[arg(long, default_value_t = 20)]
+    /// Minimum cDNA length to emit an R2 — the shortest reliably mappable insert.
+    /// SBX cDNA is long (~220 bp mean); reads below this are treated as no-cDNA.
+    #[arg(long, default_value_t = 50)]
     pub min_cdna_len: usize,
 
     /// With a whitelist, drop pairs whose CB is neither on-whitelist nor within
