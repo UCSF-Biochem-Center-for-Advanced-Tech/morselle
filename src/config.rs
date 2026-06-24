@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
+use crate::extract::ExtractCfg;
 use crate::orient::{FallbackMode, OrientCfg};
 
 /// Convert raw Roche SBX reads into per-sample 10x R1/R2 FASTQs.
@@ -78,6 +79,10 @@ pub struct Params {
     /// Minimum cDNA length to emit an R2.
     #[arg(long, default_value_t = 20)]
     pub min_cdna_len: usize,
+
+    /// Max mismatches for the 13 bp 3' adapter seed used to trim cDNA (M2).
+    #[arg(long, default_value_t = 2)]
+    pub adapter_max_mm: u32,
 }
 
 impl Cli {
@@ -98,6 +103,14 @@ impl Params {
             anchor_max_edits: self.anchor_max_edits,
             fallback: self.orient_fallback,
             expected: None,
+        }
+    }
+
+    /// Build the M2 extraction config from these parameters.
+    pub fn extract_cfg(&self) -> ExtractCfg {
+        ExtractCfg {
+            min_cdna_len: self.min_cdna_len,
+            adapter_max_mm: self.adapter_max_mm,
         }
     }
 }

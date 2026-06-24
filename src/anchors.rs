@@ -26,6 +26,11 @@ pub const P7: &[u8] = b"CAAGCAGAAGACGGCATACGAGAT";
 /// Template-switch oligo (5' assay spacer).
 pub const TSO: &[u8] = b"AAGCAGTGGTATCAACGCAGAGTACATGGG";
 
+/// Universal Illumina 3' read-through adapter. In a canonical P5→P7 read this is
+/// the start of `revcomp(R2 primer)` and marks the END of the cDNA (everything
+/// from here — rc(R2 primer)/rc(i7)/rc(P7) — is trimmed). A cheap Hamming seed.
+pub const ILLUMINA_3P_ADAPTER: &[u8] = b"AGATCGGAAGAGC";
+
 /// Hamming distance between two equal-length slices; counts length mismatch as
 /// the extra positions so callers can pass a window of the same length.
 pub fn hamming(a: &[u8], b: &[u8]) -> u32 {
