@@ -63,8 +63,17 @@ pub struct WhitelistMetrics {
     pub cb_fail: u64,
     /// (on_whitelist + within1) / classified.
     pub cb_hit_rate: f64,
+    /// CBs whose location is dual-anchor confirmed (R1-tail + polyT flanks).
+    pub cb_located_confident: u64,
+    /// Fraction of classified CBs that are confidently located.
+    pub cb_located_confident_pct: f64,
+    /// CB-fails that are confidently located = genuine base errors (not mislocated).
+    pub cb_fail_confident: u64,
+    /// Fraction of CB-fails that are confidently located.
+    pub cb_fail_confident_pct: f64,
     pub gated_out: u64,
     pub realigned: u64,
+    pub corrected_hamming2: u64,
 }
 
 impl Metrics {

@@ -37,6 +37,11 @@ use crate::sample_sheet::SampleSheet;
 /// memory (≈ threads × targets × this) while keeping gzip members reasonably sized.
 const FLUSH_BYTES: usize = 256 * 1024;
 
+/// Minimum dT-primer run length to count as a confident 3' flank for the CB.
+/// Together with a confirmed R1-tail (5' flank) this brackets the 16 bp CB exactly,
+/// so a whitelist miss is a genuine base error rather than a mis-location.
+const MIN_POLYT_FLANK: u16 = 10;
+
 /// Running counts for the pipeline summary.
 #[derive(Default)]
 struct Stats {
@@ -58,6 +63,11 @@ struct Stats {
     cb_fail: u64,
     gated_out: u64,
     realigned: u64,
+    corrected2: u64,
+    /// CBs whose location is dual-anchor confirmed (R1-tail flank + polyT flank).
+    cb_located_confident: u64,
+    /// CB-fails that are nonetheless confidently located (= genuine base errors).
+    cb_fail_confident: u64,
     // demux
     undetermined: u64,
     via_dual: u64,
@@ -86,6 +96,9 @@ impl Stats {
         self.cb_fail += o.cb_fail;
         self.gated_out += o.gated_out;
         self.realigned += o.realigned;
+        self.corrected2 += o.corrected2;
+        self.cb_located_confident += o.cb_located_confident;
+        self.cb_fail_confident += o.cb_fail_confident;
         self.undetermined += o.undetermined;
         self.via_dual += o.via_dual;
         self.via_i5 += o.via_i5;
@@ -110,6 +123,7 @@ struct Shared<'a> {
     umi_len: usize,
     cb_gate: bool,
     realign: bool,
+    lenient: bool,
     index_len: usize,
     /// Number of sample targets; the Undetermined target (when demuxing) is at
     /// index `n_samples`.
@@ -190,6 +204,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         umi_len,
         cb_gate: cli.params.cb_gate,
         realign: cli.params.realign,
+        lenient: cli.params.lenient,
         index_len,
         n_samples,
         targets: &targets,
@@ -271,25 +286,55 @@ fn process_file(input: &Path, sh: &Shared) -> Result<Stats> {
             _ => {}
         }
 
-        // M5: single-indel CB rescue (off unless --realign).
-        let mut realigned_r1: Option<(Vec<u8>, Vec<u8>)> = None;
-        if sh.realign && cb_status == Some(CbStatus::Fail) {
-            if let (Some(w), Some((r1s, _)), Some(pts)) = (sh.whitelist, e.r1, o.polyt_start) {
-                let delta = (pts as i64 - r1s as i64) - (sh.cb_len + sh.umi_len) as i64;
-                if (delta == 1 || delta == -1) && pts >= sh.umi_len && pts <= o.seq.len() {
-                    if let Some(cb) = w.realign_cb(&o.seq[r1s..], delta as i32) {
-                        let mut s = cb.to_vec();
-                        s.extend_from_slice(&o.seq[pts - sh.umi_len..pts]);
-                        let mut q = o.qual[r1s..(r1s + sh.cb_len).min(o.qual.len())].to_vec();
-                        q.resize(sh.cb_len, b'I');
-                        q.extend_from_slice(&o.qual[pts - sh.umi_len..pts]);
-                        realigned_r1 = Some((s, q));
-                        stats.realigned += 1;
+        // Location confidence: the 16 bp CB is definitively bracketed when both
+        // flanks are present — the R1-primer tail (5') is lock-confirmed and the
+        // dT-primer run (3') is long enough. Then a whitelist miss is a true base
+        // error, not a mis-location.
+        let located_confident =
+            o.r1_tail_confirmed && e.polyt_run_len >= MIN_POLYT_FLANK && e.r1.is_some();
+        if cb_status.is_some() && located_confident {
+            stats.cb_located_confident += 1;
+        }
+        if cb_status == Some(CbStatus::Fail) && located_confident {
+            stats.cb_fail_confident += 1;
+        }
+
+        // CB rescue (synthesizes a corrected R1). M5 indel realign (--realign);
+        // then lenient Hamming-2 (--lenient), gated on confident location.
+        let mut corrected_r1: Option<(Vec<u8>, Vec<u8>)> = None;
+        if cb_status == Some(CbStatus::Fail) {
+            if let (Some(w), Some((r1s, r1e))) = (sh.whitelist, e.r1) {
+                if sh.realign {
+                    if let Some(pts) = o.polyt_start {
+                        let delta = (pts as i64 - r1s as i64) - (sh.cb_len + sh.umi_len) as i64;
+                        if (delta == 1 || delta == -1) && pts >= sh.umi_len && pts <= o.seq.len() {
+                            if let Some(cb) = w.realign_cb(&o.seq[r1s..], delta as i32) {
+                                let mut s = cb.to_vec();
+                                s.extend_from_slice(&o.seq[pts - sh.umi_len..pts]);
+                                let mut q =
+                                    o.qual[r1s..(r1s + sh.cb_len).min(o.qual.len())].to_vec();
+                                q.resize(sh.cb_len, b'I');
+                                q.extend_from_slice(&o.qual[pts - sh.umi_len..pts]);
+                                corrected_r1 = Some((s, q));
+                                stats.realigned += 1;
+                            }
+                        }
+                    }
+                }
+                // Lenient within-2 substitution rescue: only when the CB is
+                // confidently located (so the 2 mismatches are real base errors),
+                // keeping the original (correctly-positioned) UMI.
+                if corrected_r1.is_none() && sh.lenient && located_confident {
+                    if let Some(cb2) = w.correct_within2(&o.seq[r1s..r1s + sh.cb_len]) {
+                        let mut s = cb2.to_vec();
+                        s.extend_from_slice(&o.seq[r1s + sh.cb_len..r1e]);
+                        corrected_r1 = Some((s, o.qual[r1s..r1e].to_vec()));
+                        stats.corrected2 += 1;
                     }
                 }
             }
         }
-        let cb_ok = realigned_r1.is_some() || !matches!(cb_status, Some(CbStatus::Fail));
+        let cb_ok = corrected_r1.is_some() || !matches!(cb_status, Some(CbStatus::Fail));
 
         let class = classify_read(o.orientation, e.r1.is_some(), e.r2.is_some(), cb_ok);
         match class {
@@ -308,7 +353,7 @@ fn process_file(input: &Path, sh: &Shared) -> Result<Stats> {
             continue;
         }
 
-        let (r1_seq, r1_qual): (&[u8], &[u8]) = match &realigned_r1 {
+        let (r1_seq, r1_qual): (&[u8], &[u8]) = match &corrected_r1 {
             Some((s, q)) => (s, q),
             None => (&o.seq[r1s..r1e], &o.qual[r1s..r1e]),
         };
@@ -414,8 +459,13 @@ fn build_metrics(stats: &Stats, whitelist: Option<&Whitelist>, demuxer: Option<&
                 cb_within1: stats.cb_within1,
                 cb_fail: stats.cb_fail,
                 cb_hit_rate: pct(stats.cb_on_whitelist + stats.cb_within1, classified),
+                cb_located_confident: stats.cb_located_confident,
+                cb_located_confident_pct: pct(stats.cb_located_confident, classified),
+                cb_fail_confident: stats.cb_fail_confident,
+                cb_fail_confident_pct: pct(stats.cb_fail_confident, stats.cb_fail),
                 gated_out: stats.gated_out,
                 realigned: stats.realigned,
+                corrected_hamming2: stats.corrected2,
             }
         }),
         demux: demuxer.map(|d| {
@@ -467,6 +517,16 @@ fn report(stats: &Stats, demuxer: Option<&Demuxer>) {
                 "{:.1}",
                 100.0 * (stats.cb_on_whitelist + stats.cb_within1) as f64 / classified.max(1) as f64
             ),
+            located_confident_pct = format!(
+                "{:.1}",
+                100.0 * stats.cb_located_confident as f64 / classified.max(1) as f64
+            ),
+            fail_confident_pct = format!(
+                "{:.1}",
+                100.0 * stats.cb_fail_confident as f64 / stats.cb_fail.max(1) as f64
+            ),
+            realigned = stats.realigned,
+            corrected2 = stats.corrected2,
             gated_out = stats.gated_out,
             "CB gate"
         );

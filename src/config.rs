@@ -78,11 +78,19 @@ pub struct Params {
     #[arg(long, default_value_t = false)]
     pub realign: bool,
 
+    /// Lenient CB recovery: for confidently-located CB-fails, accept a unique
+    /// Hamming-2 whitelist hit and rewrite the CB. Off by default (slower, lower
+    /// precision). Only applied when the CB location is dual-anchor confirmed.
+    #[arg(long, default_value_t = false)]
+    pub lenient: bool,
+
     /// Keep partial reads (those missing one library end).
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub keep_partials: bool,
 
-    /// Minimum cDNA length to emit an R2.
+    /// Minimum cDNA length to emit an R2. SBX cDNA is long (~220 bp mean) and the
+    /// no-R2 reads are cDNA-*absent* rather than short, so lowering this recovers
+    /// almost nothing (measured +0.02%); kept as a knob at a safe default.
     #[arg(long, default_value_t = 20)]
     pub min_cdna_len: usize,
 

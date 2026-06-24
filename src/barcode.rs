@@ -37,6 +37,18 @@ pub fn encode16(cb: &[u8]) -> Option<u32> {
     Some(code)
 }
 
+/// Helper for `correct_within2`: record a whitelist hit, flagging ambiguity if a
+/// second distinct barcode is seen.
+fn consider_hit(wl: &Whitelist, code: u32, found: &mut Option<u32>, ambiguous: &mut bool) {
+    if wl.contains_code(code) {
+        match *found {
+            None => *found = Some(code),
+            Some(c) if c != code => *ambiguous = true,
+            _ => {}
+        }
+    }
+}
+
 /// Decode a 2-bit-packed 16 bp barcode back to bytes.
 pub fn decode16(mut code: u32) -> [u8; 16] {
     let mut out = [0u8; 16];
@@ -100,6 +112,11 @@ impl Whitelist {
         self.codes.binary_search(&code).is_ok()
     }
 
+    /// Whether a 16 bp barcode is exactly on the whitelist (diagnostics).
+    pub fn contains(&self, cb: &[u8]) -> bool {
+        encode16(cb).is_some_and(|c| self.contains_code(c))
+    }
+
     /// Classify a 16 bp barcode: exact whitelist hit, within Hamming-1 of a
     /// whitelist member, or fail. (`Indel` is assigned later by M5.)
     pub fn classify(&self, cb: &[u8]) -> CbStatus {
@@ -123,6 +140,52 @@ impl Whitelist {
             }
         }
         CbStatus::Fail
+    }
+
+    /// Lenient correction: return the unique whitelist barcode within Hamming-2
+    /// of `cb` (exact/within-1 included), or `None` if there are zero or multiple.
+    /// ~1080 probes — opt-in (`--lenient`) and only worth applying to confidently
+    /// located CBs.
+    pub fn correct_within2(&self, cb: &[u8]) -> Option<[u8; 16]> {
+        let Some(code) = encode16(cb) else {
+            return None;
+        };
+        if self.contains_code(code) {
+            return Some(decode16(code));
+        }
+        let mut found: Option<u32> = None;
+        let mut ambiguous = false;
+        for i in 0..16 {
+            let shift_i = i * 2;
+            let cur_i = (code >> shift_i) & 0b11;
+            for ai in 0u32..4 {
+                if ai == cur_i {
+                    continue;
+                }
+                let c1 = (code & !(0b11 << shift_i)) | (ai << shift_i);
+                // distance-1
+                consider_hit(self, c1, &mut found, &mut ambiguous);
+                // distance-2 (only j > i to avoid double-visiting)
+                for j in (i + 1)..16 {
+                    let shift_j = j * 2;
+                    let cur_j = (c1 >> shift_j) & 0b11;
+                    for aj in 0u32..4 {
+                        if aj == cur_j {
+                            continue;
+                        }
+                        let c2 = (c1 & !(0b11 << shift_j)) | (aj << shift_j);
+                        consider_hit(self, c2, &mut found, &mut ambiguous);
+                    }
+                }
+                if ambiguous {
+                    return None;
+                }
+            }
+        }
+        match (found, ambiguous) {
+            (Some(c), false) => Some(decode16(c)),
+            _ => None,
+        }
     }
 
     /// M5 indel rescue: when the measured CB+UMI span is one off 28, the CB likely
@@ -249,6 +312,24 @@ mod tests {
         // truth AAACC C AAGAAACACT -> delete one C -> AAACCAAGAAACACT (15)
         let region = b"AAACCAAGAAACACTNNNNNNNNNNNN";
         assert_eq!(w.realign_cb(region, -1), Some(*truth));
+    }
+
+    #[test]
+    fn within2_unique_and_ambiguous() {
+        let truth = b"AAACCCAAGAAACACT";
+        let w = wl(&[truth, b"TTTTTTTTTTTTTTTT"]);
+        // exact
+        assert_eq!(w.correct_within2(truth), Some(*truth));
+        // two substitutions from truth -> unique
+        assert_eq!(w.correct_within2(b"AAACCCAAGAAACAGG"), Some(*truth));
+        // far from everything
+        assert_eq!(w.correct_within2(b"GGGGGGGGGGGGGGGG"), None);
+        // ambiguous: equidistant (1 mm) from two whitelist members
+        let a = b"AAAAAAAAAAAAAAAA";
+        let b = b"AAAAAAAAAAAAAAAC";
+        let w2 = wl(&[a, b]);
+        // "AAAAAAAAAAAAAAAG" is 1mm from both a and b -> ambiguous
+        assert_eq!(w2.correct_within2(b"AAAAAAAAAAAAAAAG"), None);
     }
 
     #[test]
