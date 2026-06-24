@@ -37,6 +37,16 @@ pub fn encode16(cb: &[u8]) -> Option<u32> {
     Some(code)
 }
 
+/// Decode a 2-bit-packed 16 bp barcode back to bytes.
+pub fn decode16(mut code: u32) -> [u8; 16] {
+    let mut out = [0u8; 16];
+    for i in (0..16).rev() {
+        out[i] = b"ACGT"[(code & 0b11) as usize];
+        code >>= 2;
+    }
+    out
+}
+
 /// A sorted set of 2-bit-encoded 16 bp barcodes.
 pub struct Whitelist {
     codes: Vec<u32>,
@@ -114,6 +124,72 @@ impl Whitelist {
         }
         CbStatus::Fail
     }
+
+    /// M5 indel rescue: when the measured CB+UMI span is one off 28, the CB likely
+    /// carries a single indel that frame-shifted the naive 16 bp grab. `region`
+    /// starts at `cb_start`; `delta` = measured_span − expected_span (+1 insertion,
+    /// −1 deletion). Returns the corrected 16 bp CB iff exactly one whitelist
+    /// barcode is consistent with the single indel (ambiguous/none → `None`).
+    pub fn realign_cb(&self, region: &[u8], delta: i32) -> Option<[u8; 16]> {
+        let mut found: Option<u32> = None;
+        let mut ambiguous = false;
+        let mut consider = |code: u32| {
+            if self.contains_code(code) {
+                match found {
+                    None => found = Some(code),
+                    Some(c) if c != code => ambiguous = true,
+                    _ => {}
+                }
+            }
+        };
+
+        match delta {
+            // Insertion: drop one base from the first 17 to recover a 16-mer.
+            1 => {
+                if region.len() < 17 {
+                    return None;
+                }
+                let r = &region[..17];
+                let mut cb = [0u8; 16];
+                for skip in 0..17 {
+                    let mut j = 0;
+                    for (i, &b) in r.iter().enumerate() {
+                        if i != skip {
+                            cb[j] = b;
+                            j += 1;
+                        }
+                    }
+                    if let Some(code) = encode16(&cb) {
+                        consider(code);
+                    }
+                }
+            }
+            // Deletion: insert one base into the first 15 to recover a 16-mer.
+            -1 => {
+                if region.len() < 15 {
+                    return None;
+                }
+                let r = &region[..15];
+                let mut cb = [0u8; 16];
+                for pos in 0..=15 {
+                    cb[..pos].copy_from_slice(&r[..pos]);
+                    cb[pos + 1..].copy_from_slice(&r[pos..]);
+                    for &b in b"ACGT" {
+                        cb[pos] = b;
+                        if let Some(code) = encode16(&cb) {
+                            consider(code);
+                        }
+                    }
+                }
+            }
+            _ => return None,
+        }
+
+        match (found, ambiguous) {
+            (Some(code), false) => Some(decode16(code)),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -146,5 +222,41 @@ mod tests {
         assert_eq!(w.classify(b"AAACCCAAGAAACAGG"), CbStatus::Fail);
         // N -> fail
         assert_eq!(w.classify(b"NAACCCAAGAAACACT"), CbStatus::Fail);
+    }
+
+    #[test]
+    fn decode_roundtrip() {
+        for bc in [b"AAACCCAAGAAACACT", b"ACGTACGTACGTACGT", b"TTTTTTTTTTTTTTTT"] {
+            assert_eq!(&decode16(encode16(bc).unwrap()), bc);
+        }
+    }
+
+    #[test]
+    fn realign_insertion() {
+        let truth = b"AAACCCAAGAAACACT";
+        let w = wl(&[truth]);
+        // region = CB with one inserted base ('G' after position 4) + UMI tail
+        // truth: AAACC|CAAGAAACACT -> insert G -> AAACCGCAAGAAACACT (17) + UMI...
+        let region = b"AAACCGCAAGAAACACTNNNNNNNNNNNN";
+        assert_eq!(w.realign_cb(region, 1), Some(*truth));
+    }
+
+    #[test]
+    fn realign_deletion() {
+        let truth = b"AAACCCAAGAAACACT";
+        let w = wl(&[truth]);
+        // region = CB missing its 6th base (the 2nd 'C' group) -> 15 bases + UMI
+        // truth AAACC C AAGAAACACT -> delete one C -> AAACCAAGAAACACT (15)
+        let region = b"AAACCAAGAAACACTNNNNNNNNNNNN";
+        assert_eq!(w.realign_cb(region, -1), Some(*truth));
+    }
+
+    #[test]
+    fn realign_ambiguous_or_none() {
+        let w = wl(&[b"AAACCCAAGAAACACT", b"TTTTTTTTTTTTTTTT"]);
+        // garbage region -> no whitelist hit
+        assert_eq!(w.realign_cb(b"GGGGGGGGGGGGGGGGGGGGGGGGGGGG", 1), None);
+        // delta 0 not handled
+        assert_eq!(w.realign_cb(b"AAACCCAAGAAACACTNNNNNNNNNNNN", 0), None);
     }
 }

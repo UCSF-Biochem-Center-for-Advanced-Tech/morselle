@@ -188,6 +188,8 @@ pub fn orient<'a>(seq: &'a [u8], qual: &'a [u8], cfg: &OrientCfg) -> Oriented<'a
     // The homopolymer locates the bracket approximately; lock it precisely to the
     // R1-primer tail over a small window (handles dT-boundary fuzz). Fall back to
     // the raw homopolymer offset (unconfirmed) if the tail isn't found nearby.
+    // `polyt_start` stays the *raw* dT-run start: the gap (polyt_start - cb_start)
+    // is the measured CB+UMI span, whose deviation from 28 flags an indel (M5).
     let approx_cb_start = polyt_start.checked_sub(bracket);
     let locked = approx_cb_start.and_then(|s| lock_bracket(&canon_seq, s, cfg.r1_tail_max_mm));
     let r1_tail_confirmed = locked.is_some();
@@ -195,7 +197,6 @@ pub fn orient<'a>(seq: &'a [u8], qual: &'a [u8], cfg: &OrientCfg) -> Oriented<'a
     let cb_umi = cb_start
         .filter(|&s| s + bracket <= canon_seq.len())
         .map(|s| (s, s + bracket));
-    let polyt_refined = cb_umi.map(|(_, e)| e).unwrap_or(polyt_start);
 
     Oriented {
         seq: canon_seq,
@@ -203,7 +204,7 @@ pub fn orient<'a>(seq: &'a [u8], qual: &'a [u8], cfg: &OrientCfg) -> Oriented<'a
         orientation,
         method: OrientMethod::Homopolymer,
         leader_present,
-        polyt_start: Some(polyt_refined),
+        polyt_start: Some(polyt_start),
         cb_umi,
         r1_tail_confirmed,
     }
