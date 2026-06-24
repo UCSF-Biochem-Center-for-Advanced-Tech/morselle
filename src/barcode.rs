@@ -117,6 +117,11 @@ impl Whitelist {
         encode16(cb).is_some_and(|c| self.contains_code(c))
     }
 
+    /// The raw 2-bit-encoded codes (diagnostics: brute-force nearest-neighbor).
+    pub fn codes(&self) -> &[u32] {
+        &self.codes
+    }
+
     /// Classify a 16 bp barcode: exact whitelist hit, within Hamming-1 of a
     /// whitelist member, or fail. (`Indel` is assigned later by M5.)
     pub fn classify(&self, cb: &[u8]) -> CbStatus {
