@@ -15,6 +15,7 @@ covers installing and running it on an Ubuntu server.
 | RAM | 4 GB minimum; ~0.5 GB peak per ~14 worker threads. The barcode whitelist adds ~50 MB |
 | Disk | Free space ≥ ~1× the size of your input FASTQs for the output |
 | Toolchain | Rust 1.74+ (the installer fetches the latest stable via rustup if absent) |
+| Build deps | A C compiler only (`build-essential`); gzip is pure-Rust, so **no cmake / zlib-dev needed** |
 
 Throughput reference (Apple M4 Pro, 14 cores): ~142K reads/s single-thread,
 ~1.3M reads/s at 14 threads → **~13 min per billion reads**. Server CPUs with
@@ -180,6 +181,7 @@ These feed directly into `cellranger-arc count` (use the ARC reference).
 | `sbx10x: command not found` | add the prefix `bin/` to `PATH` (§2) |
 | Very low yield / everything Undetermined | missing/wrong `--whitelist`, or wrong `--orientation` |
 | Build fails on old Ubuntu | update Rust: `rustup update stable` |
+| `is cmake not installed?` / `libz-sys` build error | you're on an old checkout — update the source (the `gzp`/zlib-ng dependency was removed; gzip is now pure-Rust and needs no cmake). As a one-off workaround: `sudo apt-get install -y cmake` |
 | OOM with many threads | lower `--threads` (peak RAM ≈ threads × targets × 256 KB + whitelist) |
 
 Validate a build at any time:

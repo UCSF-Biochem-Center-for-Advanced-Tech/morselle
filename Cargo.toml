@@ -15,7 +15,6 @@ path = "src/main.rs"
 [dependencies]
 needletail = "0.5"
 flate2 = "1.0"
-gzp = "0.11"
 triple_accel = "0.4"
 rayon = "1.10"
 crossbeam-channel = "0.5"
