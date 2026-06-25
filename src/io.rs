@@ -151,12 +151,18 @@ impl ShardedGzWriter {
         if raw.is_empty() {
             return Ok(());
         }
-        let mut enc = GzEncoder::new(Vec::with_capacity(raw.len() / 3 + 64), Compression::default());
-        enc.write_all(raw)?;
-        let bytes = enc.finish()?;
+        let bytes = gzip_member(raw)?;
+        self.write_compressed(&bytes, n)
+    }
+
+    /// Write an already-compressed gzip member under this file's lock.
+    fn write_compressed(&self, bytes: &[u8], n: u64) -> Result<()> {
+        if bytes.is_empty() {
+            return Ok(());
+        }
         {
             let mut g = self.inner.lock().expect("writer lock poisoned");
-            g.write_all(&bytes)?;
+            g.write_all(bytes)?;
         }
         self.records.fetch_add(n, Ordering::Relaxed);
         Ok(())
@@ -173,9 +179,15 @@ impl ShardedGzWriter {
 }
 
 /// A paired R1/R2 sharded writer for one output target (sample/Undetermined).
+///
+/// R1 and R2 must stay mate-ordered (the Nth record in R1 is the mate of the Nth
+/// in R2) or Cell Ranger rejects the input. `gate` serializes each paired append
+/// so the i-th block lands at the same position in both files — without it, two
+/// threads can interleave R1 and R2 writes independently and desync the files.
 pub struct PairShardWriter {
     pub r1: ShardedGzWriter,
     pub r2: ShardedGzWriter,
+    gate: Mutex<()>,
 }
 
 impl PairShardWriter {
@@ -184,17 +196,37 @@ impl PairShardWriter {
         Ok(PairShardWriter {
             r1: ShardedGzWriter::create(&name(1))?,
             r2: ShardedGzWriter::create(&name(2))?,
+            gate: Mutex::new(()),
         })
     }
 
     /// Append a pre-formatted batch (`n` records) of R1 and R2 FASTQ bytes.
+    /// Compression happens off-lock; the two writes happen under one lock so R1
+    /// and R2 blocks are appended atomically and in the same order.
     pub fn append(&self, r1_raw: &[u8], r2_raw: &[u8], n: u64) -> Result<()> {
-        self.r1.append_block(r1_raw, n)?;
-        self.r2.append_block(r2_raw, n)
+        if r1_raw.is_empty() && r2_raw.is_empty() {
+            return Ok(());
+        }
+        let b1 = gzip_member(r1_raw)?;
+        let b2 = gzip_member(r2_raw)?;
+        let _g = self.gate.lock().expect("pair writer lock poisoned");
+        self.r1.write_compressed(&b1, n)?;
+        self.r2.write_compressed(&b2, n)?;
+        Ok(())
     }
 
     pub fn finish(&self) -> Result<()> {
         self.r1.finish()?;
         self.r2.finish()
     }
+}
+
+/// Compress `raw` into a single standalone gzip member (empty in → empty out).
+fn gzip_member(raw: &[u8]) -> Result<Vec<u8>> {
+    if raw.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut enc = GzEncoder::new(Vec::with_capacity(raw.len() / 3 + 64), Compression::default());
+    enc.write_all(raw)?;
+    Ok(enc.finish()?)
 }
