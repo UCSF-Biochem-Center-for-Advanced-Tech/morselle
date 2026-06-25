@@ -8,7 +8,7 @@ use std::env;
 
 use needletail::parse_fastx_file;
 use sbx10x::barcode::Whitelist;
-use sbx10x::demux::{index_regions, DemuxCfg, Demuxer};
+use sbx10x::demux::{index_anchor_starts, DemuxCfg, Demuxer};
 use sbx10x::extract::{extract, ExtractCfg};
 use sbx10x::orient::{orient, FallbackMode, OrientCfg};
 use sbx10x::pipeline::{CbStatus, Orientation};
@@ -97,7 +97,7 @@ fn classify(
     if e.r2.is_none() {
         return Bucket::NoCdna;
     }
-    // CB gate with realign + lenient rescue (matches recommended pipeline).
+    // CB gate with realign + CB reframe + lenient rescue (matches the pipeline).
     let cb = &o.seq[r1s..r1s + cb_len];
     let status = wl.classify(cb);
     let confident = o.r1_tail_confirmed && e.polyt_run_len >= 10;
@@ -112,6 +112,10 @@ fn classify(
                 cb_ok = true;
             }
         }
+        // CB reframe (homopolymer-indel frame shift), confident only
+        if !cb_ok && confident && wl.reframe_cb(&o.seq, r1s, 2).is_some() {
+            cb_ok = true;
+        }
         // lenient within-2, confident only
         if !cb_ok && confident && wl.correct_within2(cb).is_some() {
             cb_ok = true;
@@ -120,12 +124,12 @@ fn classify(
     if !cb_ok {
         return if confident { Bucket::CbFailConfident } else { Bucket::CbFailUncertain };
     }
-    // Demux
-    let (i5, i7) = index_regions(&o.seq, r1s, e.adapter_pos, demux.index_len());
-    let outcome = demux.assign(i5, i7);
+    // Demux (offset-tolerant, matches the pipeline's --index-window 3)
+    let (i5s, i7s) = index_anchor_starts(r1s, e.adapter_pos, demux.index_len());
+    let outcome = demux.assign_windowed(&o.seq, i5s, i7s, 3);
     if outcome.sample.is_some() {
         Bucket::Assigned
-    } else if i5.is_none() && i7.is_none() {
+    } else if i5s.is_none() && i7s.is_none() {
         Bucket::UndetNoIndex
     } else {
         Bucket::UndetNoMatch
