@@ -164,9 +164,15 @@ In `--out-dir`:
 - `<sample>_S<n>_L001_R1_001.fastq.gz` / `_R2_001.fastq.gz` — per-sample pairs in
   Cell Ranger naming (R1 = 28 bp CB+UMI, R2 = cDNA).
 - `Undetermined_S0_L001_R{1,2}_001.fastq.gz` — pairs with no matchable index.
-- `metrics_summary.json` — full run accounting (yields, CB gate, demux breakdown,
-  per-sample counts).
+- `metrics_summary.json` — full run accounting: `total_reads`, `elapsed_secs`,
+  `reads_per_sec`, `threads`, read classes, CB-gate stats, demux breakdown, and
+  per-sample counts.
 - `sample_sheet.csv` — the flat sample sheet derived from the input.
+
+At the end of every run the console (stderr) prints a **RUN SUMMARY** —
+elapsed time, threads, reads/sec, and `processed / emitted / assigned / lost`,
+followed by a `lost breakdown` (unparseable · no_cdna · cb_fail_gated ·
+index_undetermined). Capture it with `2> run1.log` (or `|& tee run1.log`).
 
 These feed directly into `cellranger-arc count` (use the ARC reference).
 

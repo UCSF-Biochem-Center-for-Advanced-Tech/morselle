@@ -17,6 +17,7 @@ pub mod pipeline;
 pub mod sample_sheet;
 
 use std::path::Path;
+use std::time::Instant;
 
 use anyhow::Result;
 use needletail::parse_fastx_file;
@@ -143,6 +144,7 @@ struct Shared<'a> {
 /// demultiplexes by i5/i7 into per-sample FASTQs (plus `Undetermined`). Without a
 /// sheet it writes a single combined `sbx10x_S1_*` pair.
 pub fn run(cli: &Cli) -> Result<()> {
+    let t_start = Instant::now();
     let sheet = match &cli.sample_sheet {
         Some(path) => {
             let sheet = SampleSheet::load(path)?;
@@ -242,8 +244,10 @@ pub fn run(cli: &Cli) -> Result<()> {
         t.finish()?;
     }
 
-    report(&stats, demuxer.as_ref());
-    let metrics = build_metrics(&stats, whitelist.as_ref(), demuxer.as_ref());
+    let elapsed = t_start.elapsed().as_secs_f64();
+    let threads = rayon::current_num_threads();
+    report(&stats, demuxer.as_ref(), elapsed, threads);
+    let metrics = build_metrics(&stats, whitelist.as_ref(), demuxer.as_ref(), elapsed, threads);
     let metrics_path = cli.out_dir.join("metrics_summary.json");
     metrics.write_json(&metrics_path)?;
     info!(out = %metrics_path.display(), "wrote metrics summary");
@@ -523,14 +527,28 @@ fn classify_read(orientation: Orientation, has_r1: bool, has_r2: bool, cb_ok: bo
 }
 
 /// Assemble the serializable metrics summary.
-fn build_metrics(stats: &Stats, whitelist: Option<&Whitelist>, demuxer: Option<&Demuxer>) -> Metrics {
+fn build_metrics(
+    stats: &Stats,
+    whitelist: Option<&Whitelist>,
+    demuxer: Option<&Demuxer>,
+    elapsed_secs: f64,
+    threads: usize,
+) -> Metrics {
     let r2_len_mean = if stats.pairs_emitted > 0 {
         stats.r2_len_sum / stats.pairs_emitted
     } else {
         0
     };
+    let reads_per_sec = if elapsed_secs > 0.0 {
+        (stats.reads as f64 / elapsed_secs) as u64
+    } else {
+        0
+    };
     Metrics {
         total_reads: stats.reads,
+        elapsed_secs,
+        reads_per_sec,
+        threads,
         oriented: stats.oriented,
         oriented_pct: pct(stats.oriented, stats.reads),
         class_full: stats.class_full,
@@ -586,7 +604,7 @@ fn build_metrics(stats: &Stats, whitelist: Option<&Whitelist>, demuxer: Option<&
 }
 
 /// Log the run summary.
-fn report(stats: &Stats, demuxer: Option<&Demuxer>) {
+fn report(stats: &Stats, demuxer: Option<&Demuxer>, elapsed_secs: f64, threads: usize) {
     let p = |x: u64| 100.0 * x as f64 / stats.reads.max(1) as f64;
     info!(
         reads = stats.reads,
@@ -644,4 +662,34 @@ fn report(stats: &Stats, demuxer: Option<&Demuxer>) {
     if stats.r1_not_28 > 0 {
         tracing::warn!(count = stats.r1_not_28, "R1 records not exactly 28 bp");
     }
+
+    // Headline run summary: time, throughput, and where reads ended up.
+    let has_demux = demuxer.is_some();
+    let assigned = if has_demux {
+        stats.pairs_emitted.saturating_sub(stats.undetermined)
+    } else {
+        stats.pairs_emitted
+    };
+    let final_ok = if has_demux { assigned } else { stats.pairs_emitted };
+    let lost = stats.reads.saturating_sub(final_ok);
+    let no_cdna = stats.class_partial.saturating_sub(stats.gated_out);
+    let rps = if elapsed_secs > 0.0 { (stats.reads as f64 / elapsed_secs) as u64 } else { 0 };
+    info!(
+        elapsed = format!("{:.1}s ({:.1} min)", elapsed_secs, elapsed_secs / 60.0),
+        threads,
+        reads_per_sec = rps,
+        processed = stats.reads,
+        emitted = stats.pairs_emitted,
+        assigned = if has_demux { Some(assigned) } else { None },
+        lost,
+        lost_pct = format!("{:.1}", p(lost)),
+        "RUN SUMMARY"
+    );
+    info!(
+        unparseable = stats.class_unparseable,
+        no_cdna,
+        cb_fail_gated = stats.gated_out,
+        index_undetermined = has_demux.then_some(stats.undetermined),
+        "  lost breakdown"
+    );
 }
