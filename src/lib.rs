@@ -63,6 +63,7 @@ struct Stats {
     cb_fail: u64,
     gated_out: u64,
     realigned: u64,
+    reframed: u64,
     corrected2: u64,
     /// CBs whose location is dual-anchor confirmed (R1-tail flank + polyT flank).
     cb_located_confident: u64,
@@ -96,6 +97,7 @@ impl Stats {
         self.cb_fail += o.cb_fail;
         self.gated_out += o.gated_out;
         self.realigned += o.realigned;
+        self.reframed += o.reframed;
         self.corrected2 += o.corrected2;
         self.cb_located_confident += o.cb_located_confident;
         self.cb_fail_confident += o.cb_fail_confident;
@@ -124,6 +126,8 @@ struct Shared<'a> {
     umi_len: usize,
     cb_gate: bool,
     realign: bool,
+    cb_reframe: bool,
+    reframe_window: usize,
     lenient: bool,
     index_len: usize,
     /// Max frame shift tried when matching i5/i7 (absorbs index-shifting indels).
@@ -208,6 +212,8 @@ pub fn run(cli: &Cli) -> Result<()> {
         umi_len,
         cb_gate: cli.params.cb_gate,
         realign: cli.params.realign,
+        cb_reframe: cli.params.cb_reframe,
+        reframe_window: cli.params.reframe_window,
         lenient: cli.params.lenient,
         index_len,
         index_window: cli.params.index_window,
@@ -316,7 +322,8 @@ fn process_file(input: &Path, sh: &Shared) -> Result<Stats> {
         }
 
         // CB rescue (synthesizes a corrected R1). M5 indel realign (--realign);
-        // then lenient Hamming-2 (--lenient), gated on confident location.
+        // then CB reframe (--cb-reframe); then lenient Hamming-2 (--lenient).
+        // Reframe and lenient are gated on confident location.
         let mut corrected_r1: Option<(Vec<u8>, Vec<u8>)> = None;
         if cb_status == Some(CbStatus::Fail) {
             if let (Some(w), Some((r1s, r1e))) = (sh.whitelist, e.r1) {
@@ -333,6 +340,30 @@ fn process_file(input: &Path, sh: &Shared) -> Result<Stats> {
                                 q.extend_from_slice(&o.qual[pts - sh.umi_len..pts]);
                                 corrected_r1 = Some((s, q));
                                 stats.realigned += 1;
+                            }
+                        }
+                    }
+                }
+                // CB reframe rescue: a homopolymer indel shifted the 16 bp CB grab;
+                // try nearby frames (+1 first) for a unique within-1 whitelist hit,
+                // re-registering the UMI off the dT anchor (so R1 stays 28 bp).
+                // Gated on confident location to keep precision.
+                if corrected_r1.is_none() && sh.cb_reframe && located_confident {
+                    if let Some(pts) = o.polyt_start {
+                        if pts >= sh.umi_len {
+                            if let Some((cb, off)) =
+                                w.reframe_cb(&o.seq, r1s, sh.reframe_window)
+                            {
+                                let cb_s = (r1s as i64 + off).max(0) as usize;
+                                let mut s = cb.to_vec();
+                                s.extend_from_slice(&o.seq[pts - sh.umi_len..pts]);
+                                let mut q = o.qual
+                                    [cb_s..(cb_s + sh.cb_len).min(o.qual.len())]
+                                    .to_vec();
+                                q.resize(sh.cb_len, b'I');
+                                q.extend_from_slice(&o.qual[pts - sh.umi_len..pts]);
+                                corrected_r1 = Some((s, q));
+                                stats.reframed += 1;
                             }
                         }
                     }
@@ -526,6 +557,7 @@ fn build_metrics(stats: &Stats, whitelist: Option<&Whitelist>, demuxer: Option<&
                 cb_fail_confident_pct: pct(stats.cb_fail_confident, stats.cb_fail),
                 gated_out: stats.gated_out,
                 realigned: stats.realigned,
+                reframed: stats.reframed,
                 corrected_hamming2: stats.corrected2,
             }
         }),
@@ -587,6 +619,7 @@ fn report(stats: &Stats, demuxer: Option<&Demuxer>) {
                 100.0 * stats.cb_fail_confident as f64 / stats.cb_fail.max(1) as f64
             ),
             realigned = stats.realigned,
+            reframed = stats.reframed,
             corrected2 = stats.corrected2,
             gated_out = stats.gated_out,
             "CB gate"

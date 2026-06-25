@@ -193,6 +193,56 @@ impl Whitelist {
         }
     }
 
+    /// Return the unique whitelist barcode within Hamming-1 of `cb` (exact
+    /// included), or `None` if zero or multiple match. Cheaper sibling of
+    /// `correct_within2` (49 probes); used by the CB-reframe rescue.
+    pub fn correct_within1(&self, cb: &[u8]) -> Option<[u8; 16]> {
+        let code = encode16(cb)?;
+        if self.contains_code(code) {
+            return Some(decode16(code));
+        }
+        let mut found: Option<u32> = None;
+        for pos in 0..16 {
+            let shift = pos * 2;
+            let cur = (code >> shift) & 0b11;
+            for alt in 0u32..4 {
+                if alt != cur {
+                    let nb = (code & !(0b11 << shift)) | (alt << shift);
+                    if self.contains_code(nb) {
+                        match found {
+                            None => found = Some(nb),
+                            Some(c) if c != nb => return None,
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        found.map(decode16)
+    }
+
+    /// CB reframe rescue: a single homopolymer indel in the CB/UMI block (the
+    /// dominant SBX error) frame-shifts the naive 16 bp grab anchored at the rigid
+    /// `cb_start`. Try frame offsets ordered +1 first (the deletion mode that
+    /// dominates, CB sits one base 3′ of the rigid frame), then ±2, returning the
+    /// corrected CB and the winning offset from the first frame that yields a
+    /// UNIQUE within-1 whitelist hit. Caller should gate on confident location so
+    /// the shift reflects a real indel, not a mis-anchor.
+    pub fn reframe_cb(&self, seq: &[u8], cb_start: usize, window: usize) -> Option<([u8; 16], i64)> {
+        for mag in 1..=window as i64 {
+            for k in [mag, -mag] {
+                let s = cb_start as i64 + k;
+                if s < 0 || s as usize + 16 > seq.len() {
+                    continue;
+                }
+                if let Some(cb) = self.correct_within1(&seq[s as usize..s as usize + 16]) {
+                    return Some((cb, k));
+                }
+            }
+        }
+        None
+    }
+
     /// M5 indel rescue: when the measured CB+UMI span is one off 28, the CB likely
     /// carries a single indel that frame-shifted the naive 16 bp grab. `region`
     /// starts at `cb_start`; `delta` = measured_span − expected_span (+1 insertion,
@@ -335,6 +385,36 @@ mod tests {
         let w2 = wl(&[a, b]);
         // "AAAAAAAAAAAAAAAG" is 1mm from both a and b -> ambiguous
         assert_eq!(w2.correct_within2(b"AAAAAAAAAAAAAAAG"), None);
+    }
+
+    #[test]
+    fn within1_unique_and_ambiguous() {
+        let truth = b"AAACCCAAGAAACACT";
+        let w = wl(&[truth, b"TTTTTTTTTTTTTTTT"]);
+        assert_eq!(w.correct_within1(truth), Some(*truth)); // exact
+        assert_eq!(w.correct_within1(b"AAACCCAAGAAACACA"), Some(*truth)); // 1 mm
+        assert_eq!(w.correct_within1(b"AAACCCAAGAAACAGG"), None); // 2 mm -> none
+        // ambiguous: 1 mm from two whitelist members
+        let w2 = wl(&[b"AAAAAAAAAAAAAAAA", b"AAAAAAAAAAAAAAAC"]);
+        assert_eq!(w2.correct_within1(b"AAAAAAAAAAAAAAAG"), None);
+    }
+
+    #[test]
+    fn reframe_recovers_shifted_cb() {
+        let truth = b"AAACCCAAGAAACACT";
+        let w = wl(&[truth, b"TTTTTTTTTTTTTTTT"]);
+        // Rigid cb_start grabs one base too early (a deletion put the CB one base
+        // 3'): prepend a junk base so truth sits at offset +1. Within-1 noise on
+        // the CB ('T' at the last pos) must still resolve uniquely.
+        let mut seq = vec![b'G']; // [0] junk, rigid frame would grab seq[0..16]
+        seq.extend_from_slice(b"AAACCCAAGAAACACT"); // truth at [1..17]
+        seq.extend_from_slice(b"NNNNNNNNNNNN");
+        let (cb, off) = w.reframe_cb(&seq, 0, 2).expect("unique +1 hit");
+        assert_eq!(&cb, truth);
+        assert_eq!(off, 1);
+        // no nearby unique hit -> None
+        let junk: Vec<u8> = b"GGGGGGGGGGGGGGGGGGGG".to_vec();
+        assert_eq!(w.reframe_cb(&junk, 1, 2), None);
     }
 
     #[test]

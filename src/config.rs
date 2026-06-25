@@ -88,6 +88,18 @@ pub struct Params {
     #[arg(long, default_value_t = false)]
     pub realign: bool,
 
+    /// CB reframe rescue: for confidently-located CB-fails, try nearby frames
+    /// (a homopolymer indel shifts the 16 bp grab) and accept a unique within-1
+    /// whitelist hit, re-registering the UMI off the dT anchor. On by default —
+    /// confident-location + unique-hit guards keep precision.
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    pub cb_reframe: bool,
+
+    /// Max CB frame shift (each side) tried by the reframe rescue. Offset +1 (the
+    /// dominant SBX homopolymer-deletion mode) is tried first.
+    #[arg(long, default_value_t = 2)]
+    pub reframe_window: usize,
+
     /// Lenient CB recovery: for confidently-located CB-fails, accept a unique
     /// Hamming-2 whitelist hit and rewrite the CB. Off by default (slower, lower
     /// precision). Only applied when the CB location is dual-anchor confirmed.

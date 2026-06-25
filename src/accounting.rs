@@ -73,6 +73,7 @@ pub struct WhitelistMetrics {
     pub cb_fail_confident_pct: f64,
     pub gated_out: u64,
     pub realigned: u64,
+    pub reframed: u64,
     pub corrected_hamming2: u64,
 }
 
