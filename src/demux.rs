@@ -99,11 +99,8 @@ impl Demuxer {
         }
     }
 
-    /// Assign a read from its (optional) i5/i7 read-region slices. `None` means
-    /// the region was not extractable (read truncated there).
-    pub fn assign(&self, i5_region: Option<&[u8]>, i7_region: Option<&[u8]>) -> Outcome {
-        let a5 = i5_region.and_then(|r| Self::lookup(&self.i5_map, r));
-        let a7 = i7_region.and_then(|r| Self::lookup(&self.i7_map, r));
+    /// Combine per-index sample matches into an outcome.
+    fn combine(&self, a5: Option<usize>, a7: Option<usize>) -> Outcome {
         match (a5, a7) {
             (Some(x), Some(y)) if x == y => Outcome { sample: Some(x), via: DemuxVia::Dual },
             (Some(_), Some(_)) => Outcome { sample: None, via: DemuxVia::Conflict },
@@ -116,6 +113,72 @@ impl Demuxer {
             _ => Outcome { sample: None, via: DemuxVia::None },
         }
     }
+
+    /// Assign a read from its (optional) i5/i7 read-region slices (fixed frame).
+    pub fn assign(&self, i5_region: Option<&[u8]>, i7_region: Option<&[u8]>) -> Outcome {
+        let a5 = i5_region.and_then(|r| Self::lookup(&self.i5_map, r));
+        let a7 = i7_region.and_then(|r| Self::lookup(&self.i7_map, r));
+        self.combine(a5, a7)
+    }
+
+    /// Best unique sample match for an index anchored at `start`, trying offsets
+    /// (0, ±1, …, ±`window`) to absorb R1-primer / adapter indels that shift the
+    /// rigid frame. Returns the first offset (smallest |k|) giving a unique hit.
+    fn match_windowed(
+        map: &HashMap<Box<[u8]>, Slot>,
+        seq: &[u8],
+        start: Option<usize>,
+        index_len: usize,
+        window: isize,
+    ) -> Option<usize> {
+        let start = start? as isize;
+        for k in offset_order(window) {
+            let pos = start + k;
+            if pos < 0 {
+                continue;
+            }
+            let pos = pos as usize;
+            if pos + index_len > seq.len() {
+                continue;
+            }
+            if let Some(s) = Self::lookup(map, &seq[pos..pos + index_len]) {
+                return Some(s);
+            }
+        }
+        None
+    }
+
+    /// Assign a read by offset-tolerant matching around the i5/i7 anchor starts.
+    /// `window` = max frame shift to try each side (0 = rigid, like [`assign`]).
+    pub fn assign_windowed(
+        &self,
+        seq: &[u8],
+        i5_start: Option<usize>,
+        i7_start: Option<usize>,
+        window: isize,
+    ) -> Outcome {
+        let a5 = Self::match_windowed(&self.i5_map, seq, i5_start, self.index_len, window);
+        let a7 = Self::match_windowed(&self.i7_map, seq, i7_start, self.index_len, window);
+        self.combine(a5, a7)
+    }
+}
+
+/// Offsets to try, smallest magnitude first: 0, 1, -1, 2, -2, …
+fn offset_order(window: isize) -> impl Iterator<Item = isize> {
+    std::iter::once(0).chain((1..=window).flat_map(|k| [k, -k]))
+}
+
+/// Anchor START positions for i5 and i7 (before any offset search).
+/// i5 starts `R1_PRIMER.len() + index_len` before the CB; i7 starts
+/// `R2_PRIMER.len()` after the 3' adapter.
+pub fn index_anchor_starts(
+    cb_start: usize,
+    adapter_pos: Option<usize>,
+    index_len: usize,
+) -> (Option<usize>, Option<usize>) {
+    let i5 = cb_start.checked_sub(R1_PRIMER.len() + index_len);
+    let i7 = adapter_pos.map(|p| p + R2_PRIMER.len());
+    (i5, i7)
 }
 
 /// Slice the i5 and i7 read-regions from a canonical read using M1/M2 coords.
@@ -254,6 +317,23 @@ mod tests {
         let d = Demuxer::new(&sh, c);
         let o = d.assign(Some(&revcomp(b"TACGATCAAG")), None);
         assert_eq!(o.sample, None);
+    }
+
+    #[test]
+    fn windowed_recovers_shifted_index() {
+        let sh = sheet();
+        let d = Demuxer::new(&sh, cfg());
+        let m2 = sh.samples.iter().position(|s| s.id == "M2_GEX").unwrap();
+        // M2 read-oriented i5 = revcomp(TACGATCAAG); place it at position 30.
+        let i5_read = revcomp(b"TACGATCAAG");
+        let mut seq = vec![b'G'; 80];
+        seq[30..40].copy_from_slice(&i5_read);
+        // Anchor is off by one (true index starts at 30, anchor says 29).
+        let rigid = d.assign_windowed(&seq, Some(29), None, 0);
+        assert_eq!(rigid.sample, None); // rigid frame misses it
+        let windowed = d.assign_windowed(&seq, Some(29), None, 3);
+        assert_eq!(windowed.sample, Some(m2)); // offset search recovers it
+        assert_eq!(windowed.via, DemuxVia::I5Only);
     }
 
     #[test]

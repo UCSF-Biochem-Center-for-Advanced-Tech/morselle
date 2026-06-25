@@ -26,7 +26,7 @@ use tracing::info;
 use crate::accounting::{pct, DemuxMetrics, Metrics, SampleCount, WhitelistMetrics};
 use crate::barcode::Whitelist;
 use crate::config::Cli;
-use crate::demux::{index_regions, DemuxVia, Demuxer};
+use crate::demux::{index_anchor_starts, DemuxVia, Demuxer};
 use crate::extract::{extract, ExtractCfg};
 use crate::io::{discover_fastqs, PairShardWriter};
 use crate::orient::{orient, OrientCfg, OrientMode};
@@ -126,6 +126,8 @@ struct Shared<'a> {
     realign: bool,
     lenient: bool,
     index_len: usize,
+    /// Max frame shift tried when matching i5/i7 (absorbs index-shifting indels).
+    index_window: isize,
     /// Number of sample targets; the Undetermined target (when demuxing) is at
     /// index `n_samples`.
     n_samples: usize,
@@ -208,6 +210,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         realign: cli.params.realign,
         lenient: cli.params.lenient,
         index_len,
+        index_window: cli.params.index_window,
         n_samples,
         targets: &targets,
     };
@@ -378,8 +381,8 @@ fn process_file(input: &Path, sh: &Shared) -> Result<Stats> {
 
         // Route to a target index: sample, Undetermined (= n_samples), or combined.
         let target_idx = if let Some(d) = sh.demuxer {
-            let (i5, i7) = index_regions(&o.seq, r1s, e.adapter_pos, sh.index_len);
-            let outcome = d.assign(i5, i7);
+            let (i5s, i7s) = index_anchor_starts(r1s, e.adapter_pos, sh.index_len);
+            let outcome = d.assign_windowed(&o.seq, i5s, i7s, sh.index_window);
             match outcome.via {
                 DemuxVia::Dual => stats.via_dual += 1,
                 DemuxVia::I5Only => stats.via_i5 += 1,

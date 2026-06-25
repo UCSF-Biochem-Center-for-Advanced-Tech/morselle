@@ -79,6 +79,11 @@ pub struct Params {
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub single_index: bool,
 
+    /// Max frame shift (each side) tried when matching i5/i7, to absorb indels in
+    /// the R1-primer/adapter region that shift the index. 0 = rigid frame.
+    #[arg(long, default_value_t = 3)]
+    pub index_window: isize,
+
     /// Enable the indel-realign branch (M5). Off by default.
     #[arg(long, default_value_t = false)]
     pub realign: bool,
