@@ -246,19 +246,26 @@ pub fn run(cli: &Cli) -> Result<()> {
 
     // Rewrite each output as a single gzip member (Cell Ranger mis-frames records
     // at concatenated-member boundaries). Parallel across files, largest-first.
-    if cli.params.single_gzip {
+    // Timed separately so the cost of the finalize pass is visible.
+    let finalize_secs = if cli.params.single_gzip {
         let level = cli.params.gzip_level;
         info!(level, files = targets.len() * 2, "finalizing single-member gzip");
+        let t_fin = Instant::now();
         targets
             .par_iter()
             .try_for_each(|t| t.finalize_single_member(level))?;
-        info!("single-member gzip finalize complete");
-    }
+        let s = t_fin.elapsed().as_secs_f64();
+        info!(finalize_secs = format!("{:.1}", s), "single-member gzip finalize complete");
+        s
+    } else {
+        0.0
+    };
 
     let elapsed = t_start.elapsed().as_secs_f64();
     let threads = rayon::current_num_threads();
-    report(&stats, demuxer.as_ref(), elapsed, threads);
-    let metrics = build_metrics(&stats, whitelist.as_ref(), demuxer.as_ref(), elapsed, threads);
+    report(&stats, demuxer.as_ref(), elapsed, finalize_secs, threads);
+    let metrics =
+        build_metrics(&stats, whitelist.as_ref(), demuxer.as_ref(), elapsed, finalize_secs, threads);
     let metrics_path = cli.out_dir.join("metrics_summary.json");
     metrics.write_json(&metrics_path)?;
     info!(out = %metrics_path.display(), "wrote metrics summary");
@@ -543,6 +550,7 @@ fn build_metrics(
     whitelist: Option<&Whitelist>,
     demuxer: Option<&Demuxer>,
     elapsed_secs: f64,
+    finalize_secs: f64,
     threads: usize,
 ) -> Metrics {
     let r2_len_mean = if stats.pairs_emitted > 0 {
@@ -558,6 +566,7 @@ fn build_metrics(
     Metrics {
         total_reads: stats.reads,
         elapsed_secs,
+        finalize_secs,
         reads_per_sec,
         threads,
         oriented: stats.oriented,
@@ -615,7 +624,13 @@ fn build_metrics(
 }
 
 /// Log the run summary.
-fn report(stats: &Stats, demuxer: Option<&Demuxer>, elapsed_secs: f64, threads: usize) {
+fn report(
+    stats: &Stats,
+    demuxer: Option<&Demuxer>,
+    elapsed_secs: f64,
+    finalize_secs: f64,
+    threads: usize,
+) {
     let p = |x: u64| 100.0 * x as f64 / stats.reads.max(1) as f64;
     info!(
         reads = stats.reads,
@@ -685,8 +700,12 @@ fn report(stats: &Stats, demuxer: Option<&Demuxer>, elapsed_secs: f64, threads: 
     let lost = stats.reads.saturating_sub(final_ok);
     let no_cdna = stats.class_partial.saturating_sub(stats.gated_out);
     let rps = if elapsed_secs > 0.0 { (stats.reads as f64 / elapsed_secs) as u64 } else { 0 };
+    let process_secs = (elapsed_secs - finalize_secs).max(0.0);
     info!(
         elapsed = format!("{:.1}s ({:.1} min)", elapsed_secs, elapsed_secs / 60.0),
+        process_secs = format!("{:.1}", process_secs),
+        finalize_secs = format!("{:.1}", finalize_secs),
+        finalize_pct = format!("{:.1}", 100.0 * finalize_secs / elapsed_secs.max(1e-9)),
         threads,
         reads_per_sec = rps,
         processed = stats.reads,
