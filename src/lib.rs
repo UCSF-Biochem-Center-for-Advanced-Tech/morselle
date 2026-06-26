@@ -116,6 +116,15 @@ impl Stats {
     }
 }
 
+/// Wall-clock breakdown of a run, for the summary log and metrics JSON.
+struct Timing {
+    elapsed: f64,
+    load_secs: f64,
+    process_secs: f64,
+    finalize_secs: f64,
+    threads: usize,
+}
+
 /// Read-only context shared across the parallel per-file workers.
 struct Shared<'a> {
     orient_cfg: OrientCfg,
@@ -229,7 +238,12 @@ pub fn run(cli: &Cli) -> Result<()> {
     let mut inputs = inputs;
     inputs.sort_by_key(|p| std::cmp::Reverse(std::fs::metadata(p).map(|m| m.len()).unwrap_or(0)));
 
+    // Everything up to here (sample sheet, file discovery, whitelist load, target
+    // creation) is one-time setup; time it separately from per-read processing.
+    let load_secs = t_start.elapsed().as_secs_f64();
+
     info!(rayon_threads = rayon::current_num_threads(), n_files = inputs.len(), "starting parallel processing");
+    let t_proc = Instant::now();
     let locals = inputs
         .par_iter()
         .map(|input| process_file(input, &shared))
@@ -243,6 +257,7 @@ pub fn run(cli: &Cli) -> Result<()> {
     for t in &targets {
         t.finish()?;
     }
+    let process_secs = t_proc.elapsed().as_secs_f64();
 
     // Rewrite each output as a single gzip member (Cell Ranger mis-frames records
     // at concatenated-member boundaries). Parallel across files, largest-first.
@@ -263,9 +278,9 @@ pub fn run(cli: &Cli) -> Result<()> {
 
     let elapsed = t_start.elapsed().as_secs_f64();
     let threads = rayon::current_num_threads();
-    report(&stats, demuxer.as_ref(), elapsed, finalize_secs, threads);
-    let metrics =
-        build_metrics(&stats, whitelist.as_ref(), demuxer.as_ref(), elapsed, finalize_secs, threads);
+    let timing = Timing { elapsed, load_secs, process_secs, finalize_secs, threads };
+    report(&stats, demuxer.as_ref(), &timing);
+    let metrics = build_metrics(&stats, whitelist.as_ref(), demuxer.as_ref(), &timing);
     let metrics_path = cli.out_dir.join("metrics_summary.json");
     metrics.write_json(&metrics_path)?;
     info!(out = %metrics_path.display(), "wrote metrics summary");
@@ -549,26 +564,26 @@ fn build_metrics(
     stats: &Stats,
     whitelist: Option<&Whitelist>,
     demuxer: Option<&Demuxer>,
-    elapsed_secs: f64,
-    finalize_secs: f64,
-    threads: usize,
+    t: &Timing,
 ) -> Metrics {
     let r2_len_mean = if stats.pairs_emitted > 0 {
         stats.r2_len_sum / stats.pairs_emitted
     } else {
         0
     };
-    let reads_per_sec = if elapsed_secs > 0.0 {
-        (stats.reads as f64 / elapsed_secs) as u64
+    let reads_per_sec = if t.elapsed > 0.0 {
+        (stats.reads as f64 / t.elapsed) as u64
     } else {
         0
     };
     Metrics {
         total_reads: stats.reads,
-        elapsed_secs,
-        finalize_secs,
+        elapsed_secs: t.elapsed,
+        load_secs: t.load_secs,
+        process_secs: t.process_secs,
+        finalize_secs: t.finalize_secs,
         reads_per_sec,
-        threads,
+        threads: t.threads,
         oriented: stats.oriented,
         oriented_pct: pct(stats.oriented, stats.reads),
         class_full: stats.class_full,
@@ -624,13 +639,7 @@ fn build_metrics(
 }
 
 /// Log the run summary.
-fn report(
-    stats: &Stats,
-    demuxer: Option<&Demuxer>,
-    elapsed_secs: f64,
-    finalize_secs: f64,
-    threads: usize,
-) {
+fn report(stats: &Stats, demuxer: Option<&Demuxer>, t: &Timing) {
     let p = |x: u64| 100.0 * x as f64 / stats.reads.max(1) as f64;
     info!(
         reads = stats.reads,
@@ -699,14 +708,16 @@ fn report(
     let final_ok = if has_demux { assigned } else { stats.pairs_emitted };
     let lost = stats.reads.saturating_sub(final_ok);
     let no_cdna = stats.class_partial.saturating_sub(stats.gated_out);
-    let rps = if elapsed_secs > 0.0 { (stats.reads as f64 / elapsed_secs) as u64 } else { 0 };
-    let process_secs = (elapsed_secs - finalize_secs).max(0.0);
+    let rps = if t.elapsed > 0.0 { (stats.reads as f64 / t.elapsed) as u64 } else { 0 };
+    let pctof = |x: f64| format!("{:.1}", 100.0 * x / t.elapsed.max(1e-9));
     info!(
-        elapsed = format!("{:.1}s ({:.1} min)", elapsed_secs, elapsed_secs / 60.0),
-        process_secs = format!("{:.1}", process_secs),
-        finalize_secs = format!("{:.1}", finalize_secs),
-        finalize_pct = format!("{:.1}", 100.0 * finalize_secs / elapsed_secs.max(1e-9)),
-        threads,
+        elapsed = format!("{:.1}s ({:.1} min)", t.elapsed, t.elapsed / 60.0),
+        load_secs = format!("{:.1}", t.load_secs),
+        process_secs = format!("{:.1}", t.process_secs),
+        finalize_secs = format!("{:.1}", t.finalize_secs),
+        process_pct = pctof(t.process_secs),
+        finalize_pct = pctof(t.finalize_secs),
+        threads = t.threads,
         reads_per_sec = rps,
         processed = stats.reads,
         emitted = stats.pairs_emitted,
