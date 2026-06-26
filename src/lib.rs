@@ -121,7 +121,6 @@ struct Timing {
     elapsed: f64,
     load_secs: f64,
     process_secs: f64,
-    finalize_secs: f64,
     threads: usize,
 }
 
@@ -195,21 +194,22 @@ pub fn run(cli: &Cli) -> Result<()> {
     };
 
     // Output targets: per-sample then Undetermined (last) when demuxing, else one
-    // combined target. Writers are concatenated-gzip and thread-safe.
+    // combined target. Each file is a single thread-safe gzip member.
     let demuxer = sheet
         .as_ref()
         .map(|s| Demuxer::new(s, cli.params.demux_cfg()));
     let n_samples = demuxer.as_ref().map_or(1, |d| d.sample_ids().len());
+    let glevel = cli.params.gzip_level;
     let targets: Vec<PairShardWriter> = match &demuxer {
         Some(d) => {
             let mut v = Vec::with_capacity(n_samples + 1);
             for (i, id) in d.sample_ids().iter().enumerate() {
-                v.push(PairShardWriter::create(&cli.out_dir, id, i + 1)?);
+                v.push(PairShardWriter::create(&cli.out_dir, id, i + 1, glevel)?);
             }
-            v.push(PairShardWriter::create(&cli.out_dir, "Undetermined", 0)?);
+            v.push(PairShardWriter::create(&cli.out_dir, "Undetermined", 0, glevel)?);
             v
         }
-        None => vec![PairShardWriter::create(&cli.out_dir, "sbx10x", 1)?],
+        None => vec![PairShardWriter::create(&cli.out_dir, "sbx10x", 1, glevel)?],
     };
     let index_len = demuxer.as_ref().map_or(10, |d| d.index_len());
 
@@ -259,26 +259,9 @@ pub fn run(cli: &Cli) -> Result<()> {
     }
     let process_secs = t_proc.elapsed().as_secs_f64();
 
-    // Rewrite each output as a single gzip member (Cell Ranger mis-frames records
-    // at concatenated-member boundaries). Parallel across files, largest-first.
-    // Timed separately so the cost of the finalize pass is visible.
-    let finalize_secs = if cli.params.single_gzip {
-        let level = cli.params.gzip_level;
-        info!(level, files = targets.len() * 2, "finalizing single-member gzip");
-        let t_fin = Instant::now();
-        targets
-            .par_iter()
-            .try_for_each(|t| t.finalize_single_member(level))?;
-        let s = t_fin.elapsed().as_secs_f64();
-        info!(finalize_secs = format!("{:.1}", s), "single-member gzip finalize complete");
-        s
-    } else {
-        0.0
-    };
-
     let elapsed = t_start.elapsed().as_secs_f64();
     let threads = rayon::current_num_threads();
-    let timing = Timing { elapsed, load_secs, process_secs, finalize_secs, threads };
+    let timing = Timing { elapsed, load_secs, process_secs, threads };
     report(&stats, demuxer.as_ref(), &timing);
     let metrics = build_metrics(&stats, whitelist.as_ref(), demuxer.as_ref(), &timing);
     let metrics_path = cli.out_dir.join("metrics_summary.json");
@@ -581,7 +564,6 @@ fn build_metrics(
         elapsed_secs: t.elapsed,
         load_secs: t.load_secs,
         process_secs: t.process_secs,
-        finalize_secs: t.finalize_secs,
         reads_per_sec,
         threads: t.threads,
         oriented: stats.oriented,
@@ -709,14 +691,10 @@ fn report(stats: &Stats, demuxer: Option<&Demuxer>, t: &Timing) {
     let lost = stats.reads.saturating_sub(final_ok);
     let no_cdna = stats.class_partial.saturating_sub(stats.gated_out);
     let rps = if t.elapsed > 0.0 { (stats.reads as f64 / t.elapsed) as u64 } else { 0 };
-    let pctof = |x: f64| format!("{:.1}", 100.0 * x / t.elapsed.max(1e-9));
     info!(
         elapsed = format!("{:.1}s ({:.1} min)", t.elapsed, t.elapsed / 60.0),
         load_secs = format!("{:.1}", t.load_secs),
         process_secs = format!("{:.1}", t.process_secs),
-        finalize_secs = format!("{:.1}", t.finalize_secs),
-        process_pct = pctof(t.process_secs),
-        finalize_pct = pctof(t.finalize_secs),
         threads = t.threads,
         reads_per_sec = rps,
         processed = stats.reads,

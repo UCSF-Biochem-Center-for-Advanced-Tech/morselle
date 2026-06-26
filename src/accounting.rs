@@ -31,14 +31,12 @@ pub struct DemuxMetrics {
 #[derive(Serialize)]
 pub struct Metrics {
     pub total_reads: u64,
-    /// Wall-clock seconds for the whole run (load + process + finalize).
+    /// Wall-clock seconds for the whole run (load + process).
     pub elapsed_secs: f64,
     /// One-time setup: sample sheet, file discovery, whitelist load, target creation.
     pub load_secs: f64,
-    /// Per-read parallel processing (orient/extract/demux/gate + multi-member write).
+    /// Per-read parallel processing (orient/extract/demux/gate + single-member write).
     pub process_secs: f64,
-    /// Single-member gzip finalize pass (0 if disabled).
-    pub finalize_secs: f64,
     /// Throughput = total_reads / elapsed_secs.
     pub reads_per_sec: u64,
     /// Worker threads used.

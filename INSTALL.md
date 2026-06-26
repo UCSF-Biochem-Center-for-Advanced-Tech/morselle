@@ -15,7 +15,7 @@ covers installing and running it on an Ubuntu server.
 | RAM | 4 GB minimum; ~0.5 GB peak per ~14 worker threads. The barcode whitelist adds ~50 MB |
 | Disk | Free space ≥ ~1× the size of your input FASTQs for the output |
 | Toolchain | Rust 1.74+ (the installer fetches the latest stable via rustup if absent) |
-| Build deps | A C compiler only (`build-essential`); gzip is pure-Rust, so **no cmake / zlib-dev needed** |
+| Build deps | A C compiler (`build-essential`) — used to compile the bundled zlib for output gzip. **No cmake needed** (zlib1g-dev optional; the build vendors zlib if absent) |
 
 Throughput reference (Apple M4 Pro, 14 cores): ~142K reads/s single-thread,
 ~1.3M reads/s at 14 threads → **~13 min per billion reads**. Server CPUs with
@@ -152,8 +152,7 @@ orientations; orientation is auto-detected and enforced per file). Useful flags:
 | `--index-window` | 3 | offset-tolerant i5/i7 matching |
 | `--realign` / `--lenient` | off | extra opt-in CB rescues (small marginal gain) |
 | `--cb-gate` | on | drop pairs whose CB isn't on/near the whitelist |
-| `--single-gzip` | on | rewrite each output as a single gzip member (Cell Ranger compatibility) |
-| `--gzip-level` | 6 | compression level for the single-member finalize (lower = faster/larger) |
+| `--gzip-level` | 6 | output gzip compression level (lower = faster/larger) |
 
 Tune logging with `RUST_LOG` (e.g. `RUST_LOG=debug sbx10x ...`).
 
@@ -177,10 +176,9 @@ followed by a `lost breakdown` (unparseable · no_cdna · cb_fail_gated ·
 index_undetermined). Capture it with `2> run1.log` (or `|& tee run1.log`).
 
 These feed directly into `cellranger-arc count` (use the ARC reference). Each FASTQ
-is written as a **single gzip member** (the parallel writer first emits concatenated
-members, then a finalize pass recompresses each file in place). This matters: Cell
-Ranger mis-frames records at multi-member gzip boundaries, so single-member output is
-required. Leave `--single-gzip` on for any Cell Ranger workflow.
+is written as a **single gzip member** (compressed once, during processing, via the
+zlib backend). This matters: Cell Ranger mis-frames records at multi-member gzip
+boundaries, so single-member output is required — it is always produced.
 
 ---
 

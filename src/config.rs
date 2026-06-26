@@ -124,15 +124,9 @@ pub struct Params {
     #[arg(long, default_value_t = 2)]
     pub adapter_max_mm: u32,
 
-    /// Rewrite each output FASTQ as a SINGLE gzip member after processing. The
-    /// fast parallel writer emits concatenated gzip members (valid gzip), but some
-    /// readers (e.g. Cell Ranger) mis-frame records at member boundaries. On by
-    /// default; disable only if your downstream tool handles multi-member gzip.
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
-    pub single_gzip: bool,
-
-    /// gzip compression level (0–9) for the single-member finalize pass. Lower is
-    /// faster but larger; the default balances both.
+    /// gzip compression level (0–9) for output FASTQs. Each file is written as a
+    /// single gzip member (Cell Ranger mis-frames records at multi-member gzip
+    /// boundaries). Lower is faster but larger; the default balances both.
     #[arg(long, default_value_t = 6)]
     pub gzip_level: u32,
 }

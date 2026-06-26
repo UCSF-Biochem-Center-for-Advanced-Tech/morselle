@@ -1,13 +1,11 @@
 //! FASTQ input discovery/reading and gzip-compressed output writers.
 
 use std::fs::{self, File};
-use std::io::{BufReader, BufWriter, Write};
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use anyhow::{Context, Result};
-use flate2::read::MultiGzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 
@@ -121,148 +119,59 @@ impl PairWriter {
     }
 }
 
-/// A thread-safe, append-only gzip writer used by the parallel pipeline (M6).
+/// A thread-safe, append-only paired writer used by the parallel pipeline.
 ///
-/// Callers pre-format a batch of FASTQ records into a raw byte buffer; this type
-/// gzip-compresses that batch into one independent member (off-lock) and appends
-/// the compressed bytes under a brief I/O lock. Concatenated gzip members form a
-/// valid gzip stream, so many threads can write one sample's file without
-/// serializing on compression.
-pub struct ShardedGzWriter {
-    inner: Mutex<BufWriter<File>>,
-    path: PathBuf,
-    records: AtomicU64,
-}
-
-impl ShardedGzWriter {
-    pub fn create(path: &Path) -> Result<Self> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("cannot create dir {}", parent.display()))?;
-        }
-        let file = File::create(path)
-            .with_context(|| format!("cannot create output {}", path.display()))?;
-        Ok(ShardedGzWriter {
-            inner: Mutex::new(BufWriter::new(file)),
-            path: path.to_path_buf(),
-            records: AtomicU64::new(0),
-        })
-    }
-
-    /// Compress `raw` as one gzip member and append it; `n` = records within.
-    pub fn append_block(&self, raw: &[u8], n: u64) -> Result<()> {
-        if raw.is_empty() {
-            return Ok(());
-        }
-        let bytes = gzip_member(raw)?;
-        self.write_compressed(&bytes, n)
-    }
-
-    /// Write an already-compressed gzip member under this file's lock.
-    fn write_compressed(&self, bytes: &[u8], n: u64) -> Result<()> {
-        if bytes.is_empty() {
-            return Ok(());
-        }
-        {
-            let mut g = self.inner.lock().expect("writer lock poisoned");
-            g.write_all(bytes)?;
-        }
-        self.records.fetch_add(n, Ordering::Relaxed);
-        Ok(())
-    }
-
-    pub fn records(&self) -> u64 {
-        self.records.load(Ordering::Relaxed)
-    }
-
-    pub fn finish(&self) -> Result<()> {
-        self.inner.lock().expect("writer lock poisoned").flush()?;
-        Ok(())
-    }
-
-    /// Rewrite this file as a SINGLE gzip member (the multi-member output is valid
-    /// gzip, but some readers — e.g. Cell Ranger — mis-frame records at member
-    /// boundaries). Decompress all members, recompress as one member into a temp
-    /// file, fsync, then atomically rename over the original. Errors propagate, so
-    /// a partial/failed recompress never replaces the good file. Call after
-    /// `finish()`.
-    pub fn finalize_single_member(&self, level: u32) -> Result<()> {
-        let path = &self.path;
-        let tmp = path.with_extension("gz.tmp");
-        {
-            let src = File::open(path)
-                .with_context(|| format!("finalize: cannot open {}", path.display()))?;
-            let mut dec = MultiGzDecoder::new(BufReader::new(src));
-            let out = File::create(&tmp)
-                .with_context(|| format!("finalize: cannot create {}", tmp.display()))?;
-            let mut enc = GzEncoder::new(BufWriter::new(out), Compression::new(level));
-            std::io::copy(&mut dec, &mut enc)
-                .with_context(|| format!("finalize: recompress failed for {}", path.display()))?;
-            let mut bw = enc.finish().context("finalize: gzip finish failed")?;
-            bw.flush().context("finalize: flush failed")?;
-            bw.get_ref().sync_all().context("finalize: fsync failed")?;
-        }
-        fs::rename(&tmp, path)
-            .with_context(|| format!("finalize: rename {} -> {}", tmp.display(), path.display()))?;
-        Ok(())
-    }
-}
-
-/// A paired R1/R2 sharded writer for one output target (sample/Undetermined).
-///
-/// R1 and R2 must stay mate-ordered (the Nth record in R1 is the mate of the Nth
-/// in R2) or Cell Ranger rejects the input. `gate` serializes each paired append
-/// so the i-th block lands at the same position in both files — without it, two
-/// threads can interleave R1 and R2 writes independently and desync the files.
+/// Each output file is a SINGLE gzip member: callers pre-format a batch of FASTQ
+/// records into raw bytes and `append` writes them straight into a per-file
+/// `GzEncoder` under one lock per target. Both R1 and R2 are written under the
+/// same lock so the Nth record in R1 stays the mate of the Nth in R2 (Cell Ranger
+/// rejects desynced pairs), and one member per file avoids the multi-member
+/// boundary mis-framing some readers (Cell Ranger) exhibit. Compression happens
+/// under the lock; with a fast zlib backend it keeps up with the per-target data
+/// rate, so the lock is rarely contended.
 pub struct PairShardWriter {
-    pub r1: ShardedGzWriter,
-    pub r2: ShardedGzWriter,
-    gate: Mutex<()>,
+    inner: Mutex<Pair>,
+}
+
+struct Pair {
+    r1: GzEncoder<BufWriter<File>>,
+    r2: GzEncoder<BufWriter<File>>,
 }
 
 impl PairShardWriter {
-    pub fn create(dir: &Path, prefix: &str, s_num: usize) -> Result<Self> {
-        let name = |read: u8| dir.join(format!("{prefix}_S{s_num}_L001_R{read}_001.fastq.gz"));
+    pub fn create(dir: &Path, prefix: &str, s_num: usize, level: u32) -> Result<Self> {
+        fs::create_dir_all(dir)
+            .with_context(|| format!("cannot create dir {}", dir.display()))?;
+        let enc = |read: u8| -> Result<GzEncoder<BufWriter<File>>> {
+            let path = dir.join(format!("{prefix}_S{s_num}_L001_R{read}_001.fastq.gz"));
+            let file = File::create(&path)
+                .with_context(|| format!("cannot create output {}", path.display()))?;
+            Ok(GzEncoder::new(BufWriter::new(file), Compression::new(level)))
+        };
         Ok(PairShardWriter {
-            r1: ShardedGzWriter::create(&name(1))?,
-            r2: ShardedGzWriter::create(&name(2))?,
-            gate: Mutex::new(()),
+            inner: Mutex::new(Pair { r1: enc(1)?, r2: enc(2)? }),
         })
     }
 
-    /// Append a pre-formatted batch (`n` records) of R1 and R2 FASTQ bytes.
-    /// Compression happens off-lock; the two writes happen under one lock so R1
-    /// and R2 blocks are appended atomically and in the same order.
-    pub fn append(&self, r1_raw: &[u8], r2_raw: &[u8], n: u64) -> Result<()> {
+    /// Append a pre-formatted batch of R1 and R2 FASTQ bytes. Both go in under one
+    /// lock so the files stay mate-ordered. `_n` (record count) is unused.
+    pub fn append(&self, r1_raw: &[u8], r2_raw: &[u8], _n: u64) -> Result<()> {
         if r1_raw.is_empty() && r2_raw.is_empty() {
             return Ok(());
         }
-        let b1 = gzip_member(r1_raw)?;
-        let b2 = gzip_member(r2_raw)?;
-        let _g = self.gate.lock().expect("pair writer lock poisoned");
-        self.r1.write_compressed(&b1, n)?;
-        self.r2.write_compressed(&b2, n)?;
+        let mut p = self.inner.lock().expect("pair writer lock poisoned");
+        p.r1.write_all(r1_raw)?;
+        p.r2.write_all(r2_raw)?;
         Ok(())
     }
 
+    /// Finish both gzip members (write the final deflate block + trailer) and flush.
     pub fn finish(&self) -> Result<()> {
-        self.r1.finish()?;
-        self.r2.finish()
+        let mut p = self.inner.lock().expect("pair writer lock poisoned");
+        p.r1.try_finish().context("gzip finish R1")?;
+        p.r1.get_mut().flush().context("flush R1")?;
+        p.r2.try_finish().context("gzip finish R2")?;
+        p.r2.get_mut().flush().context("flush R2")?;
+        Ok(())
     }
-
-    /// Rewrite both files as single gzip members (Cell Ranger compatibility).
-    pub fn finalize_single_member(&self, level: u32) -> Result<()> {
-        self.r1.finalize_single_member(level)?;
-        self.r2.finalize_single_member(level)
-    }
-}
-
-/// Compress `raw` into a single standalone gzip member (empty in → empty out).
-fn gzip_member(raw: &[u8]) -> Result<Vec<u8>> {
-    if raw.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut enc = GzEncoder::new(Vec::with_capacity(raw.len() / 3 + 64), Compression::default());
-    enc.write_all(raw)?;
-    Ok(enc.finish()?)
 }
