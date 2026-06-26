@@ -139,11 +139,12 @@ struct Pair {
 }
 
 impl PairShardWriter {
-    pub fn create(dir: &Path, prefix: &str, s_num: usize, level: u32) -> Result<Self> {
+    /// `chunk` is the 1-based file-set number in the Cell Ranger name (`_001`…).
+    pub fn create(dir: &Path, prefix: &str, s_num: usize, chunk: usize, level: u32) -> Result<Self> {
         fs::create_dir_all(dir)
             .with_context(|| format!("cannot create dir {}", dir.display()))?;
         let enc = |read: u8| -> Result<GzEncoder<BufWriter<File>>> {
-            let path = dir.join(format!("{prefix}_S{s_num}_L001_R{read}_001.fastq.gz"));
+            let path = dir.join(format!("{prefix}_S{s_num}_L001_R{read}_{chunk:03}.fastq.gz"));
             let file = File::create(&path)
                 .with_context(|| format!("cannot create output {}", path.display()))?;
             Ok(GzEncoder::new(BufWriter::new(file), Compression::new(level)))

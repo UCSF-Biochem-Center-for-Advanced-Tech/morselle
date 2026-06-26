@@ -153,6 +153,7 @@ orientations; orientation is auto-detected and enforced per file). Useful flags:
 | `--realign` / `--lenient` | off | extra opt-in CB rescues (small marginal gain) |
 | `--cb-gate` | on | drop pairs whose CB isn't on/near the whitelist |
 | `--gzip-level` | 6 | output gzip compression level (lower = faster/larger) |
+| `--split` | 1 | split each sample across N gzip files (`_001`..`_00N`); N>1 parallelizes per-sample compression |
 
 Tune logging with `RUST_LOG` (e.g. `RUST_LOG=debug sbx10x ...`).
 
@@ -179,6 +180,13 @@ These feed directly into `cellranger-arc count` (use the ARC reference). Each FA
 is written as a **single gzip member** (compressed once, during processing, via the
 zlib backend). This matters: Cell Ranger mis-frames records at multi-member gzip
 boundaries, so single-member output is required — it is always produced.
+
+**Throughput tip (`--split`):** compression for one sample goes through one writer,
+so a hot sample can bottleneck on a single core. `--split N` writes that sample as N
+files (`…_R1_001.fastq.gz` … `_00N`), which Cell Ranger reads together, letting N
+threads compress it in parallel. Set N up to `--threads` and keep
+`N × (samples+1) × 2` under your open-file limit (`ulimit -n`); e.g. `--split 8`.
+Within each file R1/R2 stay mate-ordered.
 
 ---
 

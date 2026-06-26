@@ -129,6 +129,13 @@ pub struct Params {
     /// boundaries). Lower is faster but larger; the default balances both.
     #[arg(long, default_value_t = 6)]
     pub gzip_level: u32,
+
+    /// Split each sample's output across N gzip files (Cell Ranger reads them all:
+    /// `_001`..`_00N`). N>1 lets N writer threads compress one sample in parallel,
+    /// removing the single-encoder bottleneck on hot samples. Keep N ≤ --threads
+    /// and mind the open-file limit (`ulimit -n`): N × (samples+1) × 2 files.
+    #[arg(long, default_value_t = 1)]
+    pub split: usize,
 }
 
 impl Cli {

@@ -144,6 +144,9 @@ struct Shared<'a> {
     /// Number of sample targets; the Undetermined target (when demuxing) is at
     /// index `n_samples`.
     n_samples: usize,
+    /// Output chunks per logical target (`--split`). Physical writer for logical
+    /// target `t`, chunk `c` is `targets[t * split + c]`.
+    split: usize,
     targets: &'a [PairShardWriter],
 }
 
@@ -200,16 +203,29 @@ pub fn run(cli: &Cli) -> Result<()> {
         .map(|s| Demuxer::new(s, cli.params.demux_cfg()));
     let n_samples = demuxer.as_ref().map_or(1, |d| d.sample_ids().len());
     let glevel = cli.params.gzip_level;
+    let split = cli.params.split.max(1);
+    // Each logical target gets `split` chunk files (_001.._00N). Layout is
+    // [target0 chunk0..N-1][target1 chunk0..N-1]...; physical = t*split + c.
+    let mk = |prefix: &str, s_num: usize, out: &mut Vec<PairShardWriter>| -> Result<()> {
+        for c in 0..split {
+            out.push(PairShardWriter::create(&cli.out_dir, prefix, s_num, c + 1, glevel)?);
+        }
+        Ok(())
+    };
     let targets: Vec<PairShardWriter> = match &demuxer {
         Some(d) => {
-            let mut v = Vec::with_capacity(n_samples + 1);
+            let mut v = Vec::with_capacity((n_samples + 1) * split);
             for (i, id) in d.sample_ids().iter().enumerate() {
-                v.push(PairShardWriter::create(&cli.out_dir, id, i + 1, glevel)?);
+                mk(id, i + 1, &mut v)?;
             }
-            v.push(PairShardWriter::create(&cli.out_dir, "Undetermined", 0, glevel)?);
+            mk("Undetermined", 0, &mut v)?;
             v
         }
-        None => vec![PairShardWriter::create(&cli.out_dir, "sbx10x", 1, glevel)?],
+        None => {
+            let mut v = Vec::with_capacity(split);
+            mk("sbx10x", 1, &mut v)?;
+            v
+        }
     };
     let index_len = demuxer.as_ref().map_or(10, |d| d.index_len());
 
@@ -229,6 +245,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         index_len,
         index_window: cli.params.index_window,
         n_samples,
+        split,
         targets: &targets,
     };
 
@@ -297,8 +314,14 @@ fn process_file(input: &Path, sh: &Shared) -> Result<Stats> {
     info!(file = %input.display(), orientation = ?expected, "orientation");
     let orient_cfg = OrientCfg { expected, ..sh.orient_cfg };
 
-    // Per-target raw FASTQ buffers: (R1 bytes, R2 bytes, record count).
-    let mut bufs: Vec<(Vec<u8>, Vec<u8>, u64)> = (0..sh.targets.len())
+    // This worker writes to one chunk per logical target (so each chunk file is
+    // touched by few threads — parallel per-sample compression). The rayon worker
+    // index is stable for the duration of this task.
+    let chunk = rayon::current_thread_index().unwrap_or(0) % sh.split;
+
+    // Per-LOGICAL-target raw FASTQ buffers: (R1 bytes, R2 bytes, record count).
+    let n_targets = sh.targets.len() / sh.split;
+    let mut bufs: Vec<(Vec<u8>, Vec<u8>, u64)> = (0..n_targets)
         .map(|_| (Vec::new(), Vec::new(), 0))
         .collect();
 
@@ -460,7 +483,7 @@ fn process_file(input: &Path, sh: &Shared) -> Result<Stats> {
         push_fastq(&mut buf.1, id, &o.seq[r2s..r2e], &o.qual[r2s..r2e]);
         buf.2 += 1;
         if buf.0.len() >= FLUSH_BYTES {
-            sh.targets[target_idx].append(&buf.0, &buf.1, buf.2)?;
+            sh.targets[target_idx * sh.split + chunk].append(&buf.0, &buf.1, buf.2)?;
             buf.0.clear();
             buf.1.clear();
             buf.2 = 0;
@@ -475,10 +498,10 @@ fn process_file(input: &Path, sh: &Shared) -> Result<Stats> {
         stats.r2_len_max = stats.r2_len_max.max(len);
     }
 
-    // Flush any remaining buffered records.
+    // Flush any remaining buffered records (to this worker's chunk).
     for (i, buf) in bufs.iter().enumerate() {
         if buf.2 > 0 {
-            sh.targets[i].append(&buf.0, &buf.1, buf.2)?;
+            sh.targets[i * sh.split + chunk].append(&buf.0, &buf.1, buf.2)?;
         }
     }
     Ok(stats)
