@@ -1,12 +1,13 @@
 //! FASTQ input discovery/reading and gzip-compressed output writers.
 
 use std::fs::{self, File};
-use std::io::{BufWriter, Write};
+use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use anyhow::{Context, Result};
+use flate2::read::MultiGzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 
@@ -129,6 +130,7 @@ impl PairWriter {
 /// serializing on compression.
 pub struct ShardedGzWriter {
     inner: Mutex<BufWriter<File>>,
+    path: PathBuf,
     records: AtomicU64,
 }
 
@@ -142,6 +144,7 @@ impl ShardedGzWriter {
             .with_context(|| format!("cannot create output {}", path.display()))?;
         Ok(ShardedGzWriter {
             inner: Mutex::new(BufWriter::new(file)),
+            path: path.to_path_buf(),
             records: AtomicU64::new(0),
         })
     }
@@ -174,6 +177,33 @@ impl ShardedGzWriter {
 
     pub fn finish(&self) -> Result<()> {
         self.inner.lock().expect("writer lock poisoned").flush()?;
+        Ok(())
+    }
+
+    /// Rewrite this file as a SINGLE gzip member (the multi-member output is valid
+    /// gzip, but some readers — e.g. Cell Ranger — mis-frame records at member
+    /// boundaries). Decompress all members, recompress as one member into a temp
+    /// file, fsync, then atomically rename over the original. Errors propagate, so
+    /// a partial/failed recompress never replaces the good file. Call after
+    /// `finish()`.
+    pub fn finalize_single_member(&self, level: u32) -> Result<()> {
+        let path = &self.path;
+        let tmp = path.with_extension("gz.tmp");
+        {
+            let src = File::open(path)
+                .with_context(|| format!("finalize: cannot open {}", path.display()))?;
+            let mut dec = MultiGzDecoder::new(BufReader::new(src));
+            let out = File::create(&tmp)
+                .with_context(|| format!("finalize: cannot create {}", tmp.display()))?;
+            let mut enc = GzEncoder::new(BufWriter::new(out), Compression::new(level));
+            std::io::copy(&mut dec, &mut enc)
+                .with_context(|| format!("finalize: recompress failed for {}", path.display()))?;
+            let mut bw = enc.finish().context("finalize: gzip finish failed")?;
+            bw.flush().context("finalize: flush failed")?;
+            bw.get_ref().sync_all().context("finalize: fsync failed")?;
+        }
+        fs::rename(&tmp, path)
+            .with_context(|| format!("finalize: rename {} -> {}", tmp.display(), path.display()))?;
         Ok(())
     }
 }
@@ -218,6 +248,12 @@ impl PairShardWriter {
     pub fn finish(&self) -> Result<()> {
         self.r1.finish()?;
         self.r2.finish()
+    }
+
+    /// Rewrite both files as single gzip members (Cell Ranger compatibility).
+    pub fn finalize_single_member(&self, level: u32) -> Result<()> {
+        self.r1.finalize_single_member(level)?;
+        self.r2.finalize_single_member(level)
     }
 }
 

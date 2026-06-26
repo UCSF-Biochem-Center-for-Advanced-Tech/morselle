@@ -244,6 +244,17 @@ pub fn run(cli: &Cli) -> Result<()> {
         t.finish()?;
     }
 
+    // Rewrite each output as a single gzip member (Cell Ranger mis-frames records
+    // at concatenated-member boundaries). Parallel across files, largest-first.
+    if cli.params.single_gzip {
+        let level = cli.params.gzip_level;
+        info!(level, files = targets.len() * 2, "finalizing single-member gzip");
+        targets
+            .par_iter()
+            .try_for_each(|t| t.finalize_single_member(level))?;
+        info!("single-member gzip finalize complete");
+    }
+
     let elapsed = t_start.elapsed().as_secs_f64();
     let threads = rayon::current_num_threads();
     report(&stats, demuxer.as_ref(), elapsed, threads);

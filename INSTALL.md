@@ -152,6 +152,8 @@ orientations; orientation is auto-detected and enforced per file). Useful flags:
 | `--index-window` | 3 | offset-tolerant i5/i7 matching |
 | `--realign` / `--lenient` | off | extra opt-in CB rescues (small marginal gain) |
 | `--cb-gate` | on | drop pairs whose CB isn't on/near the whitelist |
+| `--single-gzip` | on | rewrite each output as a single gzip member (Cell Ranger compatibility) |
+| `--gzip-level` | 6 | compression level for the single-member finalize (lower = faster/larger) |
 
 Tune logging with `RUST_LOG` (e.g. `RUST_LOG=debug sbx10x ...`).
 
@@ -174,7 +176,11 @@ elapsed time, threads, reads/sec, and `processed / emitted / assigned / lost`,
 followed by a `lost breakdown` (unparseable · no_cdna · cb_fail_gated ·
 index_undetermined). Capture it with `2> run1.log` (or `|& tee run1.log`).
 
-These feed directly into `cellranger-arc count` (use the ARC reference).
+These feed directly into `cellranger-arc count` (use the ARC reference). Each FASTQ
+is written as a **single gzip member** (the parallel writer first emits concatenated
+members, then a finalize pass recompresses each file in place). This matters: Cell
+Ranger mis-frames records at multi-member gzip boundaries, so single-member output is
+required. Leave `--single-gzip` on for any Cell Ranger workflow.
 
 ---
 
