@@ -19,7 +19,7 @@ fn main() -> anyhow::Result<()> {
         cb_len: 16, umi_len: 12, min_homopolymer: 12, r1_tail_max_mm: 2,
         anchor_max_edits: 6, fallback: FallbackMode::HammingTail, expected: None,
     };
-    let ecfg = ExtractCfg { min_cdna_len: 20, adapter_max_mm: 2 };
+    let ecfg = ExtractCfg { min_cdna_len: 20, adapter_max_mm: 2, max_r2_len: 0 };
 
     // [confident?][orientation: 0=P5led,1=P7led,2=unknown]
     let mut tab = [[0u64; 3]; 2];

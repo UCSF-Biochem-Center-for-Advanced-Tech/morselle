@@ -152,6 +152,7 @@ orientations; orientation is auto-detected and enforced per file). Useful flags:
 | `--index-window` | 3 | offset-tolerant i5/i7 matching |
 | `--realign` / `--lenient` | off | extra opt-in CB rescues (small marginal gain) |
 | `--cb-gate` | on | drop pairs whose CB isn't on/near the whitelist |
+| `--max-r2-len` | 0 (uncapped) | cap R2 length; **set to ~90 for Cell Ranger** (it mis-trims long R2) |
 | `--gzip-level` | 6 | output gzip compression level (lower = faster/larger) |
 | `--split` | 1 | split each sample across N gzip files (`_001`..`_00N`); N>1 parallelizes per-sample compression |
 
@@ -180,6 +181,14 @@ These feed directly into `cellranger-arc count` (use the ARC reference). Each FA
 is written as a **single gzip member** (compressed once, during processing, via the
 zlib backend). This matters: Cell Ranger mis-frames records at multi-member gzip
 boundaries, so single-member output is required — it is always produced.
+
+**Cell Ranger needs short R2 (`--max-r2-len`):** SBX cDNA runs to >1 kb, but Cell
+Ranger expects standard ~90 bp R2 and **mis-trims very long reads** (it trims the 3′
+adapter off the sequence but desyncs the quality → STAR `quality string length is not
+equal to sequence length`). Set `--max-r2-len 90` (your chemistry's R2 length) for any
+Cell Ranger run — it caps R2 to the standard regime, which is all Cell Ranger/STAR use
+for gene mapping anyway. Caps sequence and quality together (no desync). Read counts
+are unchanged.
 
 **Throughput tip (`--split`):** compression for one sample goes through one writer,
 so a hot sample can bottleneck on a single core. `--split N` writes that sample as N

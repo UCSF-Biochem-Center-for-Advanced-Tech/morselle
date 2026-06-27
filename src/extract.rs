@@ -19,6 +19,9 @@ pub struct ExtractCfg {
     pub min_cdna_len: usize,
     /// Max mismatches for the 3' adapter trim seed.
     pub adapter_max_mm: u32,
+    /// Cap R2 (cDNA) length; 0 = uncapped. SBX cDNA can be >1 kb, but Cell Ranger
+    /// expects standard ~90 bp R2 and mis-trims very long reads — cap to match.
+    pub max_r2_len: usize,
 }
 
 /// Extraction result: ranges `[start, end)` into the canonical sequence.
@@ -99,8 +102,13 @@ pub fn extract(
         polyt_end = Some(cdna_start);
 
         adapter_pos = find_adapter(seq, cdna_start, cfg.adapter_max_mm);
-        let cdna_end = adapter_pos.unwrap_or(seq.len());
+        let mut cdna_end = adapter_pos.unwrap_or(seq.len());
         adapter_trimmed = adapter_pos.is_some();
+        // Cap R2 length (Cell Ranger expects standard short R2; very long reads
+        // trigger its trimming bugs). Caps seq and qual identically downstream.
+        if cfg.max_r2_len > 0 {
+            cdna_end = cdna_end.min(cdna_start + cfg.max_r2_len);
+        }
         if cdna_end > cdna_start && cdna_end - cdna_start >= cfg.min_cdna_len {
             r2 = Some((cdna_start, cdna_end));
         }
@@ -127,6 +135,7 @@ mod tests {
         ExtractCfg {
             min_cdna_len: 20,
             adapter_max_mm: 2,
+            max_r2_len: 0,
         }
     }
 

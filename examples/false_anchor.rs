@@ -43,7 +43,7 @@ fn main() -> anyhow::Result<()> {
         cb_len: 16, umi_len: 12, min_homopolymer: 12, r1_tail_max_mm: 2,
         anchor_max_edits: 6, fallback: FallbackMode::HammingTail, expected: None,
     };
-    let ecfg = ExtractCfg { min_cdna_len: 20, adapter_max_mm: 2 };
+    let ecfg = ExtractCfg { min_cdna_len: 20, adapter_max_mm: 2, max_r2_len: 0 };
 
     let mut unc_fail = 0u64;           // uncertain + CB-fail reads
     let mut unc_has_real = 0u64;       // ... with real structure elsewhere

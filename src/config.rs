@@ -115,6 +115,13 @@ pub struct Params {
     #[arg(long, default_value_t = 50)]
     pub min_cdna_len: usize,
 
+    /// Cap emitted R2 (cDNA) length; 0 = uncapped (full-length SBX cDNA). Cell
+    /// Ranger expects standard short R2 (~90 bp) and mis-trims very long reads
+    /// (seq/qual desync), so set this to your chemistry's R2 length (e.g. 90) for
+    /// Cell Ranger input. STAR uses ~90 bp for gene mapping regardless.
+    #[arg(long, default_value_t = 0)]
+    pub max_r2_len: usize,
+
     /// With a whitelist, drop pairs whose CB is neither on-whitelist nor within
     /// Hamming-1 (M4). Disable to emit all and let Cell Ranger filter.
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
@@ -164,6 +171,7 @@ impl Params {
         ExtractCfg {
             min_cdna_len: self.min_cdna_len,
             adapter_max_mm: self.adapter_max_mm,
+            max_r2_len: self.max_r2_len,
         }
     }
 

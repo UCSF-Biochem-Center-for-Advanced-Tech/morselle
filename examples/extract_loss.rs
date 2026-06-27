@@ -52,7 +52,7 @@ fn main() -> anyhow::Result<()> {
     let expected = if orient_arg == "p7-led" { Orientation::P7Led } else { Orientation::P5Led };
     let ocfg = OrientCfg { cb_len, umi_len, min_homopolymer: 12, r1_tail_max_mm: 2,
         anchor_max_edits: 6, fallback: FallbackMode::HammingTail, expected: Some(expected) };
-    let ecfg = ExtractCfg { min_cdna_len: 50, adapter_max_mm: 2 };
+    let ecfg = ExtractCfg { min_cdna_len: 50, adapter_max_mm: 2, max_r2_len: 0 };
 
     let mut w_unp = writer(&out_unp);
     let mut w_cbf = writer(&out_cbf);

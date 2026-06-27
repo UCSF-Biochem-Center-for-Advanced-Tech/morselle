@@ -58,7 +58,7 @@ fn main() -> anyhow::Result<()> {
         cb_len: 16, umi_len: 12, min_homopolymer: 12, r1_tail_max_mm: 2,
         anchor_max_edits: 6, fallback: FallbackMode::HammingTail, expected: Some(expected),
     };
-    let ecfg = ExtractCfg { min_cdna_len: 50, adapter_max_mm: 2 };
+    let ecfg = ExtractCfg { min_cdna_len: 50, adapter_max_mm: 2, max_r2_len: 0 };
 
     let mut total = 0u64;
     let (mut located, mut has_i5, mut has_i7) = (0u64, 0u64, 0u64);
