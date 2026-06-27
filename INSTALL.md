@@ -182,13 +182,14 @@ is written as a **single gzip member** (compressed once, during processing, via 
 zlib backend). This matters: Cell Ranger mis-frames records at multi-member gzip
 boundaries, so single-member output is required — it is always produced.
 
-**Cell Ranger needs short R2 (`--max-r2-len`):** SBX cDNA runs to >1 kb, but Cell
-Ranger expects standard ~90 bp R2 and **mis-trims very long reads** (it trims the 3′
-adapter off the sequence but desyncs the quality → STAR `quality string length is not
-equal to sequence length`). Set `--max-r2-len 90` (your chemistry's R2 length) for any
-Cell Ranger run — it caps R2 to the standard regime, which is all Cell Ranger/STAR use
-for gene mapping anyway. Caps sequence and quality together (no desync). Read counts
-are unchanged.
+**Long R2 + Cell Ranger:** Cell Ranger expects standard ~90 bp R2 and can mis-trim
+very long reads that still carry the 3′ read-through adapter (it trims the adapter off
+the sequence but desyncs the quality → STAR `quality string length is not equal to
+sequence length`). sbx10x trims that adapter itself — including SBX homopolymer-indel
+variants (`AAGAGC`→`AAAGAGC`) and 3′-end partials — so the emitted cDNA is adapter-free
+and full-length R2 should pass. If a rare residual still trips Cell Ranger, fall back to
+`--max-r2-len 90` (caps R2 to the standard regime, sequence + quality together; read
+counts unchanged), which Cell Ranger handles natively.
 
 **Throughput tip (`--split`):** compression for one sample goes through one writer,
 so a hot sample can bottleneck on a single core. `--split N` writes that sample as N

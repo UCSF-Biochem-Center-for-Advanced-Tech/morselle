@@ -70,15 +70,100 @@ fn dt_run_end(seq: &[u8], approx_start: usize) -> usize {
     last + 1
 }
 
-/// Leftmost position ≥ `from` where the 3' read-through adapter matches within
-/// `max_mm` (Hamming). Allocation-free.
+/// Minimum 3' read-through adapter overlap to trim a partial adapter at the read
+/// end. Short partials must match near-exactly (mismatch budget scales with
+/// length, below), so 7 bp is safe — chance of a 7 bp exact adapter prefix at a
+/// read's 3' end is ~6e-5.
+const MIN_PARTIAL_ADAPTER: usize = 7;
+
+/// Leftmost position ≥ `from` where the 3' read-through adapter matches. Catches:
+///   * full-length match within `max_mm` substitutions (the common case);
+///   * full-length match with a single indel + ≤`max_mm` substitutions — SBX makes
+///     indel errors in homopolymers (e.g. AAGAGC→AAAGAGC), which a pure-Hamming
+///     seed misses because the insertion frame-shifts it to many mismatches;
+///   * a partial adapter (≥ `MIN_PARTIAL_ADAPTER` bp) running off the 3' end.
+/// Trimming the adapter ourselves keeps cDNA out of downstream tools' adapter
+/// trimmers (Cell Ranger mis-trims long reads that still carry the adapter).
+/// Allocation-free. The indel check runs only at a cheap 3 bp prefix anchor.
 fn find_adapter(seq: &[u8], from: usize, max_mm: u32) -> Option<usize> {
     let a = ILLUMINA_3P_ADAPTER;
     let m = a.len();
-    if from + m > seq.len() {
-        return None;
+    let end = seq.len();
+    let mut i = from;
+    while i < end {
+        let remain = end - i;
+        if remain >= m {
+            if hamming(&seq[i..i + m], a) <= max_mm {
+                return Some(i);
+            }
+            // Indel path: anchor on the indel-safe 3 bp prefix (no homopolymer),
+            // then verify a single-indel alignment.
+            if seq[i] == a[0] && seq[i + 1] == a[1] && seq[i + 2] == a[2]
+                && adapter_single_indel(&seq[i..], a, max_mm)
+            {
+                return Some(i);
+            }
+        } else if remain >= MIN_PARTIAL_ADAPTER {
+            // Partial adapter running off the 3' end: match the adapter prefix,
+            // mismatch budget scaling with overlap (7 bp exact; 8+ bp allow 1) —
+            // false trims stay ~0.04% and only cost a few 3' bp, while leaving an
+            // adapter risks crashing downstream trimmers.
+            let allowed = (remain / 8) as u32;
+            if hamming(&seq[i..end], &a[..remain]) <= allowed {
+                return Some(i);
+            }
+        } else {
+            break;
+        }
+        i += 1;
     }
-    (from..=seq.len() - m).find(|&i| hamming(&seq[i..i + m], a) <= max_mm)
+    None
+}
+
+/// True if adapter `a` matches `s` (which starts at the candidate position) with
+/// exactly one indel and ≤`max_mm` substitutions. Tries an insertion in the read
+/// (extra base, e.g. homopolymer expansion) and a deletion in the read.
+fn adapter_single_indel(s: &[u8], a: &[u8], max_mm: u32) -> bool {
+    let m = a.len();
+    // Insertion in read: skip one read base. s[0..k]≈a[0..k], s[k+1..m+1]≈a[k..m].
+    if s.len() >= m + 1 {
+        for k in 0..m {
+            let mut mm = 0u32;
+            for j in 0..k {
+                if s[j] != a[j] {
+                    mm += 1;
+                }
+            }
+            for j in k..m {
+                if s[j + 1] != a[j] {
+                    mm += 1;
+                }
+            }
+            if mm <= max_mm {
+                return true;
+            }
+        }
+    }
+    // Deletion in read: skip one adapter base. s[0..k]≈a[0..k], s[k..m-1]≈a[k+1..m].
+    if s.len() >= m - 1 {
+        for k in 0..m {
+            let mut mm = 0u32;
+            for j in 0..k {
+                if s[j] != a[j] {
+                    mm += 1;
+                }
+            }
+            for j in (k + 1)..m {
+                if s[j - 1] != a[j] {
+                    mm += 1;
+                }
+            }
+            if mm <= max_mm {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Bracket R1 (CB+UMI) and R2 (cDNA) on a canonical read.
@@ -130,6 +215,54 @@ mod tests {
     use crate::anchors::{revcomp, P5, R1_PRIMER};
     use crate::orient::{orient, FallbackMode, OrientCfg};
     use crate::pipeline::Orientation;
+
+    #[test]
+    fn adapter_exact_and_substitution() {
+        let cdna = b"ACGTACGTACGTACGTACGT"; // 20bp, no adapter
+        let mut s = cdna.to_vec();
+        let astart = s.len();
+        s.extend_from_slice(ILLUMINA_3P_ADAPTER); // exact adapter
+        s.extend_from_slice(b"CACGTCTGAACTCC");
+        assert_eq!(find_adapter(&s, 0, 2), Some(astart));
+        // one substitution in the adapter still found
+        let mut s2 = cdna.to_vec();
+        s2.extend_from_slice(b"AGATCGGAAGTGC"); // A->T at pos 10
+        assert_eq!(find_adapter(&s2, 0, 2), Some(cdna.len()));
+    }
+
+    #[test]
+    fn adapter_homopolymer_insertion() {
+        // The real Cell-Ranger-breaking case: AAGAGC -> AAAGAGC (extra A).
+        let cdna = b"ACGTACGTACGTACGTACGT";
+        let mut s = cdna.to_vec();
+        let astart = s.len();
+        s.extend_from_slice(b"AGATCGGAAAGAGCACACGTCTGAACTCC"); // indel adapter
+        // pure-Hamming (no indel handling) would miss this; find_adapter catches it
+        assert_eq!(find_adapter(&s, 0, 2), Some(astart));
+    }
+
+    #[test]
+    fn adapter_partial_at_end() {
+        let cdna = b"ACGTACGTACGTACGTACGT";
+        let mut s = cdna.to_vec();
+        let astart = s.len();
+        s.extend_from_slice(&ILLUMINA_3P_ADAPTER[..11]); // 11bp partial (>= MIN_PARTIAL)
+        assert_eq!(find_adapter(&s, 0, 2), Some(astart));
+        // a 7bp exact partial (the dominant real residual) IS called
+        let mut s7 = cdna.to_vec();
+        s7.extend_from_slice(&ILLUMINA_3P_ADAPTER[..7]); // "AGATCGG"
+        assert_eq!(find_adapter(&s7, 0, 2), Some(cdna.len()));
+        // a too-short tail (< MIN_PARTIAL) is not called
+        let mut s2 = cdna.to_vec();
+        s2.extend_from_slice(&ILLUMINA_3P_ADAPTER[..5]);
+        assert_eq!(find_adapter(&s2, 0, 2), None);
+    }
+
+    #[test]
+    fn adapter_absent_not_falsely_trimmed() {
+        let s = b"ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT";
+        assert_eq!(find_adapter(s, 0, 2), None);
+    }
 
     fn ecfg() -> ExtractCfg {
         ExtractCfg {
