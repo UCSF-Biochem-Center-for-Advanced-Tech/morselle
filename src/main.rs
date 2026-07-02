@@ -7,7 +7,8 @@ use tracing_subscriber::EnvFilter;
 use sbx10x::config::Cli;
 
 fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    cli.params.apply_presets();
 
     // Logging: respect RUST_LOG, default to info.
     tracing_subscriber::fmt()

@@ -152,7 +152,8 @@ orientations; orientation is auto-detected and enforced per file). Useful flags:
 | `--index-window` | 3 | offset-tolerant i5/i7 matching |
 | `--realign` / `--lenient` | off | extra opt-in CB rescues (small marginal gain) |
 | `--cb-gate` | on | drop pairs whose CB isn't on/near the whitelist |
-| `--max-r2-len` | 0 (uncapped) | cap R2 length; **set to ~90 for Cell Ranger** (it mis-trims long R2) |
+| `--cellranger` | off | Cell Ranger compatibility preset — applies the settings it requires (currently `--max-r2-len 649`; explicit flags override). **Use this for Cell Ranger input.** |
+| `--max-r2-len` | 0 (uncapped) | cap R2 (cDNA) length, seq+qual together; 0 = full-length. Cell Ranger hard-caps at 649 bp (`--cellranger` sets this) |
 | `--gzip-level` | 6 | output gzip compression level (lower = faster/larger) |
 | `--split` | 1 | split each sample across N gzip files (`_001`..`_00N`); N>1 parallelizes per-sample compression |
 
@@ -182,14 +183,14 @@ is written as a **single gzip member** (compressed once, during processing, via 
 zlib backend). This matters: Cell Ranger mis-frames records at multi-member gzip
 boundaries, so single-member output is required — it is always produced.
 
-**Long R2 + Cell Ranger:** Cell Ranger expects standard ~90 bp R2 and can mis-trim
-very long reads that still carry the 3′ read-through adapter (it trims the adapter off
-the sequence but desyncs the quality → STAR `quality string length is not equal to
-sequence length`). sbx10x trims that adapter itself — including SBX homopolymer-indel
-variants (`AAGAGC`→`AAAGAGC`) and 3′-end partials — so the emitted cDNA is adapter-free
-and full-length R2 should pass. If a rare residual still trips Cell Ranger, fall back to
-`--max-r2-len 90` (caps R2 to the standard regime, sequence + quality together; read
-counts unchanged), which Cell Ranger handles natively.
+**Long R2 + Cell Ranger:** Cell Ranger has a **hard 649 bp read-length cap** — a read of
+650 bp or longer fails with STAR `quality string length is not equal to sequence length`.
+SBX cDNA routinely exceeds this. Pass **`--cellranger`** to apply the Cell Ranger
+compatibility preset (currently `--max-r2-len 649`), which caps R2 to 649 bp (sequence +
+quality together; read counts unchanged). sbx10x also trims the 3′ read-through adapter
+itself — including SBX homopolymer-indel variants (`AAGAGC`→`AAAGAGC`) and 3′-end
+partials — so the emitted cDNA is adapter-free; the cap simply keeps every read inside
+Cell Ranger's length limit. STAR uses ~90 bp for gene mapping regardless of R2 length.
 
 **Throughput tip (`--split`):** compression for one sample goes through one writer,
 so a hot sample can bottleneck on a single core. `--split N` writes that sample as N

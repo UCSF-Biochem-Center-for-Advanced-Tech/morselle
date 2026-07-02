@@ -143,7 +143,17 @@ pub struct Params {
     /// and mind the open-file limit (`ulimit -n`): N × (samples+1) × 2 files.
     #[arg(long, default_value_t = 1)]
     pub split: usize,
+
+    /// Cell Ranger compatibility preset. Applies the settings Cell Ranger requires
+    /// (currently `--max-r2-len 649`: Cell Ranger has a hard 649 bp read cap and
+    /// fails at 650 bp with "quality string length is not equal to sequence
+    /// length"). Explicit flags override the preset. More presets may be added.
+    #[arg(long, default_value_t = false)]
+    pub cellranger: bool,
 }
+
+/// R2 length cap Cell Ranger tolerates — it hard-fails at 650 bp.
+pub const CELLRANGER_MAX_R2_LEN: usize = 649;
 
 impl Cli {
     /// R1 length = CB + UMI (28 bp for v3 GEX).
@@ -153,6 +163,19 @@ impl Cli {
 }
 
 impl Params {
+    /// Apply convenience presets (e.g. `--cellranger`) to the parsed parameters.
+    /// A preset only fills in values the user left at their default, so an
+    /// explicit flag always wins. Call once, right after parsing.
+    pub fn apply_presets(&mut self) {
+        if self.cellranger {
+            // Cell Ranger hard-caps reads at 649 bp (fails at 650). Only set it
+            // if the user hasn't already chosen a cap.
+            if self.max_r2_len == 0 {
+                self.max_r2_len = CELLRANGER_MAX_R2_LEN;
+            }
+        }
+    }
+
     /// Build the M1 orientation config from these parameters.
     pub fn orient_cfg(&self) -> OrientCfg {
         OrientCfg {
@@ -181,5 +204,32 @@ impl Params {
             index_max_mm: self.index_max_mm,
             allow_single_index: self.single_index,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Params {
+        // The Params group carries no required fields, so it parses standalone.
+        let mut p = Params::parse_from(std::iter::once("sbx10x").chain(args.iter().copied()));
+        p.apply_presets();
+        p
+    }
+
+    #[test]
+    fn no_preset_leaves_r2_uncapped() {
+        assert_eq!(parse(&[]).max_r2_len, 0);
+    }
+
+    #[test]
+    fn cellranger_preset_sets_r2_cap() {
+        assert_eq!(parse(&["--cellranger"]).max_r2_len, CELLRANGER_MAX_R2_LEN);
+    }
+
+    #[test]
+    fn explicit_max_r2_len_overrides_preset() {
+        assert_eq!(parse(&["--cellranger", "--max-r2-len", "90"]).max_r2_len, 90);
     }
 }

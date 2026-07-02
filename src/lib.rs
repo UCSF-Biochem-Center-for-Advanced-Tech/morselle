@@ -25,6 +25,7 @@ use rayon::prelude::*;
 use tracing::info;
 
 use crate::accounting::{pct, DemuxMetrics, Metrics, SampleCount, WhitelistMetrics};
+use crate::anchors::revcomp;
 use crate::barcode::Whitelist;
 use crate::config::Cli;
 use crate::demux::{index_anchor_starts, DemuxVia, Demuxer};
@@ -478,9 +479,27 @@ fn process_file(input: &Path, sh: &Shared) -> Result<Stats> {
             0
         };
 
+        // R1 (CB+UMI) and R2 (cDNA) sit on the SAME strand of the canonical read,
+        // but Illumina paired-end mates come from OPPOSITE strands. The first-strand
+        // cDNA following polyT is the reverse complement of the mRNA sense, so the
+        // canonical R2 slice maps antisense. Emit revcomp(R2) with reversed quality
+        // to match the Illumina convention (R1 as-is, R2 flipped) — otherwise Cell
+        // Ranger reports ~50% "Reads Mapped Antisense to Gene".
+        let mut r2_seq = revcomp(&o.seq[r2s..r2e]);
+        let mut r2_qual = o.qual[r2s..r2e].to_vec();
+        r2_qual.reverse();
+        // Apply the R2 length cap HERE, at write, on the reverse-complemented read:
+        // the R2 primer reads from the (now leading) adapter-proximal end, so keeping
+        // the first `max_r2_len` bases mirrors a real sequencer stopping after that
+        // many cycles. The whole fragment was retained through extraction/trimming.
+        if sh.extract_cfg.max_r2_len > 0 && r2_seq.len() > sh.extract_cfg.max_r2_len {
+            r2_seq.truncate(sh.extract_cfg.max_r2_len);
+            r2_qual.truncate(sh.extract_cfg.max_r2_len);
+        }
+
         let buf = &mut bufs[target_idx];
         push_fastq(&mut buf.0, id, r1_seq, r1_qual);
-        push_fastq(&mut buf.1, id, &o.seq[r2s..r2e], &o.qual[r2s..r2e]);
+        push_fastq(&mut buf.1, id, &r2_seq, &r2_qual);
         buf.2 += 1;
         if buf.0.len() >= FLUSH_BYTES {
             sh.targets[target_idx * sh.split + chunk].append(&buf.0, &buf.1, buf.2)?;
@@ -493,7 +512,7 @@ fn process_file(input: &Path, sh: &Shared) -> Result<Stats> {
         if e.adapter_trimmed {
             stats.adapter_trimmed += 1;
         }
-        let len = (r2e - r2s) as u64;
+        let len = r2_seq.len() as u64; // emitted (post-cap) R2 length
         stats.r2_len_sum += len;
         stats.r2_len_max = stats.r2_len_max.max(len);
     }

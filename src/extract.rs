@@ -19,8 +19,10 @@ pub struct ExtractCfg {
     pub min_cdna_len: usize,
     /// Max mismatches for the 3' adapter trim seed.
     pub adapter_max_mm: u32,
-    /// Cap R2 (cDNA) length; 0 = uncapped. SBX cDNA can be >1 kb, but Cell Ranger
-    /// expects standard ~90 bp R2 and mis-trims very long reads — cap to match.
+    /// Cap emitted R2 length; 0 = uncapped. SBX cDNA can be >1 kb, but Cell Ranger
+    /// hard-caps reads at 649 bp. NOT applied here — `extract` retains the whole
+    /// fragment; the cap is applied by the emitter after reverse-complementing into
+    /// R2 orientation, so it keeps the bases the R2 primer would read.
     pub max_r2_len: usize,
 }
 
@@ -29,7 +31,10 @@ pub struct ExtractCfg {
 pub struct Extracted {
     /// CB+UMI range (R1), 28 bp, or `None` if not located.
     pub r1: Option<(usize, usize)>,
-    /// cDNA range (R2), or `None` if absent / below `min_cdna_len`.
+    /// cDNA range (R2) in the canonical (polyT) frame, or `None` if absent / below
+    /// `min_cdna_len`. NOTE: this slice is on the same strand as R1; the emitter
+    /// reverse-complements it (and reverses its quality) so R2 follows the Illumina
+    /// paired-end convention and maps sense to the gene.
     pub r2: Option<(usize, usize)>,
     /// End of the dT-primer run = cDNA start.
     pub polyt_end: Option<usize>,
@@ -187,13 +192,12 @@ pub fn extract(
         polyt_end = Some(cdna_start);
 
         adapter_pos = find_adapter(seq, cdna_start, cfg.adapter_max_mm);
-        let mut cdna_end = adapter_pos.unwrap_or(seq.len());
+        let cdna_end = adapter_pos.unwrap_or(seq.len());
         adapter_trimmed = adapter_pos.is_some();
-        // Cap R2 length (Cell Ranger expects standard short R2; very long reads
-        // trigger its trimming bugs). Caps seq and qual identically downstream.
-        if cfg.max_r2_len > 0 {
-            cdna_end = cdna_end.min(cdna_start + cfg.max_r2_len);
-        }
+        // Retain the WHOLE adapter-trimmed cDNA fragment here; any `--max-r2-len`
+        // cap is applied at write time, after the fragment is reverse-complemented
+        // into R2 orientation, so the cap keeps the bases the R2 primer would
+        // actually read (see the emitter in lib.rs). See `ExtractCfg::max_r2_len`.
         if cdna_end > cdna_start && cdna_end - cdna_start >= cfg.min_cdna_len {
             r2 = Some((cdna_start, cdna_end));
         }
