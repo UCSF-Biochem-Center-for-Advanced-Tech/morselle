@@ -16,10 +16,12 @@ pub mod orient;
 pub mod pipeline;
 pub mod sample_sheet;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use anyhow::Result;
+use crossbeam_channel::{bounded, Receiver, Sender};
 use needletail::parse_fastx_file;
 use rayon::prelude::*;
 use tracing::info;
@@ -81,6 +83,11 @@ struct Stats {
 }
 
 impl Stats {
+    /// A zeroed `Stats` sized for `n_samples` per-sample counters.
+    fn new(n_samples: usize) -> Self {
+        Stats { per_sample: vec![0; n_samples], ..Default::default() }
+    }
+
     /// Accumulate a per-file `Stats` into this total.
     fn merge(&mut self, o: Stats) {
         self.reads += o.reads;
@@ -260,14 +267,46 @@ pub fn run(cli: &Cli) -> Result<()> {
     // creation) is one-time setup; time it separately from per-read processing.
     let load_secs = t_start.elapsed().as_secs_f64();
 
-    info!(rayon_threads = rayon::current_num_threads(), n_files = inputs.len(), "starting parallel processing");
-    let t_proc = Instant::now();
-    let locals = inputs
-        .par_iter()
-        .map(|input| process_file(input, &shared))
-        .collect::<Result<Vec<_>>>()?;
+    // Path selection. With many files (files ≥ workers) the one-file-per-thread
+    // path is optimal: each file inflates+processes on its own core, giving up to
+    // `workers` concurrent decodes. With few files (e.g. a single large one) that
+    // path leaves cores idle — serial gzip inflate caps one file to one core — so
+    // the pipelined path dedicates a reader per file and hands record batches to the
+    // full worker pool. `--reader-threads N` forces the pipelined path with N readers.
+    let n_workers = rayon::current_num_threads();
+    let forced_readers = cli.params.reader_threads;
+    let use_pipeline = forced_readers > 0 || inputs.len() < n_workers;
 
-    let mut stats = Stats { per_sample: vec![0; n_samples], ..Default::default() };
+    let t_proc = Instant::now();
+    let locals = if use_pipeline {
+        let n_readers = if forced_readers > 0 {
+            forced_readers.min(inputs.len())
+        } else {
+            inputs.len()
+        }
+        .max(1);
+        info!(
+            mode = "pipelined",
+            readers = n_readers,
+            workers = n_workers,
+            n_files = inputs.len(),
+            "starting parallel processing"
+        );
+        run_pipelined(&inputs, &shared, n_readers, n_workers)?
+    } else {
+        info!(
+            mode = "per-file",
+            rayon_threads = n_workers,
+            n_files = inputs.len(),
+            "starting parallel processing"
+        );
+        inputs
+            .par_iter()
+            .map(|input| process_file(input, &shared))
+            .collect::<Result<Vec<_>>>()?
+    };
+
+    let mut stats = Stats::new(n_samples);
     for s in locals {
         stats.merge(s);
     }
@@ -332,32 +371,11 @@ fn push_fastq_r2_rc(
     out
 }
 
-/// Orient → extract → demux → gate → realign every read in one file, buffering
-/// per-target output and flushing compressed batches to the shared writers.
-/// Returns this file's `Stats` (merged by the caller).
-fn process_file(input: &Path, sh: &Shared) -> Result<Stats> {
-    let mut stats = Stats { per_sample: vec![0; sh.n_samples], ..Default::default() };
-
-    // Determine the run orientation for this file and enforce it (each run is
-    // orientation-pure). Auto = detect from a pre-scan of confident reads.
-    let expected = match sh.orient_mode {
-        OrientMode::P5Led => Some(Orientation::P5Led),
-        OrientMode::P7Led => Some(Orientation::P7Led),
-        OrientMode::Auto => detect_orientation(input, &sh.orient_cfg, &sh.extract_cfg)?,
-    };
-    info!(file = %input.display(), orientation = ?expected, "orientation");
-    let orient_cfg = OrientCfg { expected, ..sh.orient_cfg };
-
-    // This worker writes to one chunk per logical target (so each chunk file is
-    // touched by few threads — parallel per-sample compression). The rayon worker
-    // index is stable for the duration of this task.
-    let chunk = rayon::current_thread_index().unwrap_or(0) % sh.split;
-
-    // Per-LOGICAL-target raw FASTQ buffers: (R1 bytes, R2 bytes, record count).
-    // Pre-size to the flush threshold (plus slack for the record that crosses it)
-    // so a hot target never reallocates mid-run.
-    let n_targets = sh.targets.len() / sh.split;
-    let mut bufs: Vec<(Vec<u8>, Vec<u8>, u64)> = (0..n_targets)
+/// Allocate the per-LOGICAL-target raw FASTQ buffers `(R1 bytes, R2 bytes, count)`.
+/// Pre-sized to the flush threshold (plus slack for the record that crosses it) so
+/// a hot target never reallocates mid-run.
+fn make_target_bufs(n_targets: usize) -> Vec<(Vec<u8>, Vec<u8>, u64)> {
+    (0..n_targets)
         .map(|_| {
             (
                 Vec::with_capacity(FLUSH_BYTES + 4096),
@@ -365,17 +383,39 @@ fn process_file(input: &Path, sh: &Shared) -> Result<Stats> {
                 0,
             )
         })
-        .collect();
+        .collect()
+}
 
-    let mut reader = parse_fastx_file(input)?;
-    while let Some(rec) = reader.next() {
-        let rec = rec?;
-        let id = rec.id();
-        let seq = rec.seq();
-        let qual = rec.qual().unwrap_or(&[]);
-        stats.reads += 1;
+/// Flush any records still buffered per target to this worker's `chunk` shard.
+fn flush_target_bufs(bufs: &[(Vec<u8>, Vec<u8>, u64)], sh: &Shared, chunk: usize) -> Result<()> {
+    for (i, buf) in bufs.iter().enumerate() {
+        if buf.2 > 0 {
+            sh.targets[i * sh.split + chunk].append(&buf.0, &buf.1, buf.2)?;
+        }
+    }
+    Ok(())
+}
 
-        let o = orient(&seq, qual, &orient_cfg);
+/// Process one read: orient → extract → CB classify/rescue → gate → demux → emit
+/// into `bufs` (flushing the crossing batch to `chunk`), accumulating into `stats`.
+/// `orient_cfg` carries the enforced per-file orientation. Shared by both the
+/// one-file-per-thread path ([`process_file`]) and the pipelined path
+/// ([`worker_loop`]).
+#[allow(clippy::too_many_arguments)]
+fn process_one(
+    id: &[u8],
+    seq: &[u8],
+    qual: &[u8],
+    orient_cfg: &OrientCfg,
+    sh: &Shared,
+    bufs: &mut [(Vec<u8>, Vec<u8>, u64)],
+    chunk: usize,
+    stats: &mut Stats,
+) -> Result<()> {
+    stats.reads += 1;
+
+    {
+        let o = orient(seq, qual, orient_cfg);
         if o.orientation != Orientation::Unknown {
             stats.oriented += 1;
         }
@@ -476,13 +516,13 @@ fn process_file(input: &Path, sh: &Shared) -> Result<Stats> {
         }
 
         let (Some((r1s, r1e)), Some((r2s, r2e))) = (e.r1, e.r2) else {
-            continue; // need both R1 and R2 to emit a pair
+            return Ok(()); // need both R1 and R2 to emit a pair
         };
 
         // Gate: drop CB-fail pairs that weren't rescued (unless gating is off).
         if sh.cb_gate && !cb_ok {
             stats.gated_out += 1;
-            continue;
+            return Ok(());
         }
 
         let (r1_seq, r1_qual): (&[u8], &[u8]) = match &corrected_r1 {
@@ -550,14 +590,192 @@ fn process_file(input: &Path, sh: &Shared) -> Result<Stats> {
         stats.r2_len_sum += len;
         stats.r2_len_max = stats.r2_len_max.max(len);
     }
+    Ok(())
+}
 
-    // Flush any remaining buffered records (to this worker's chunk).
-    for (i, buf) in bufs.iter().enumerate() {
-        if buf.2 > 0 {
-            sh.targets[i * sh.split + chunk].append(&buf.0, &buf.1, buf.2)?;
+/// Resolve the per-file orientation to enforce (detecting it for `Auto`).
+fn file_orientation(input: &Path, sh: &Shared) -> Result<Option<Orientation>> {
+    let expected = match sh.orient_mode {
+        OrientMode::P5Led => Some(Orientation::P5Led),
+        OrientMode::P7Led => Some(Orientation::P7Led),
+        OrientMode::Auto => detect_orientation(input, &sh.orient_cfg, &sh.extract_cfg)?,
+    };
+    info!(file = %input.display(), orientation = ?expected, "orientation");
+    Ok(expected)
+}
+
+/// One-file-per-thread path (used when files ≥ workers): orient → extract → demux →
+/// gate → emit every read in one file on a single worker. Returns this file's
+/// `Stats` (merged by the caller). Each file inflates serially on its own thread, so
+/// parallelism comes from many files running at once.
+fn process_file(input: &Path, sh: &Shared) -> Result<Stats> {
+    let mut stats = Stats::new(sh.n_samples);
+    let expected = file_orientation(input, sh)?;
+    let orient_cfg = OrientCfg { expected, ..sh.orient_cfg };
+
+    // This worker writes to one chunk per logical target (so each chunk file is
+    // touched by few threads — parallel per-sample compression). The rayon worker
+    // index is stable for the duration of this task.
+    let chunk = rayon::current_thread_index().unwrap_or(0) % sh.split;
+    let n_targets = sh.targets.len() / sh.split;
+    let mut bufs = make_target_bufs(n_targets);
+
+    let mut reader = parse_fastx_file(input)?;
+    while let Some(rec) = reader.next() {
+        let rec = rec?;
+        process_one(
+            rec.id(),
+            &rec.seq(),
+            rec.qual().unwrap_or(&[]),
+            &orient_cfg,
+            sh,
+            &mut bufs,
+            chunk,
+            &mut stats,
+        )?;
+    }
+    flush_target_bufs(&bufs, sh, chunk)?;
+    Ok(stats)
+}
+
+/// Records read from one file, flat-packed for cheap cross-thread transfer: all ids
+/// / seqs / quals concatenated, with per-record lengths. One `Batch` carries the
+/// enforced orientation of its source file. Avoids per-record heap allocations.
+struct Batch {
+    orientation: Option<Orientation>,
+    ids: Vec<u8>,
+    seqs: Vec<u8>,
+    quals: Vec<u8>,
+    /// `(id_len, seq_len)` per record; `qual_len == seq_len` for FASTQ.
+    lens: Vec<(u32, u32)>,
+}
+
+/// Records per batch — big enough to amortize channel/sync overhead, small enough
+/// to keep memory bounded and workers fed promptly.
+const BATCH_READS: usize = 4096;
+
+impl Batch {
+    fn with_orientation(orientation: Option<Orientation>) -> Self {
+        Batch {
+            orientation,
+            ids: Vec::new(),
+            seqs: Vec::new(),
+            quals: Vec::new(),
+            lens: Vec::with_capacity(BATCH_READS),
         }
     }
+
+    fn push(&mut self, id: &[u8], seq: &[u8], qual: &[u8]) {
+        self.ids.extend_from_slice(id);
+        self.seqs.extend_from_slice(seq);
+        self.quals.extend_from_slice(qual);
+        self.lens.push((id.len() as u32, seq.len() as u32));
+    }
+
+    fn len(&self) -> usize {
+        self.lens.len()
+    }
+}
+
+/// Reader thread body: pull files from the shared work queue, detect+enforce each
+/// file's orientation, and stream record batches into `tx`. One reader per file
+/// (serial gzip inflate can't be parallelized within a file), so many readers only
+/// help across files; a single large file uses one reader feeding the whole pool.
+fn reader_loop(
+    files: &[PathBuf],
+    next: &AtomicUsize,
+    sh: &Shared,
+    tx: Sender<Batch>,
+) -> Result<()> {
+    loop {
+        let idx = next.fetch_add(1, Ordering::Relaxed);
+        let Some(input) = files.get(idx) else { break };
+        let expected = file_orientation(input, sh)?;
+        let mut reader = parse_fastx_file(input)?;
+        let mut batch = Batch::with_orientation(expected);
+        while let Some(rec) = reader.next() {
+            let rec = rec?;
+            batch.push(rec.id(), &rec.seq(), rec.qual().unwrap_or(&[]));
+            if batch.len() >= BATCH_READS {
+                let full = std::mem::replace(&mut batch, Batch::with_orientation(expected));
+                if tx.send(full).is_err() {
+                    return Ok(()); // all workers gone
+                }
+            }
+        }
+        if batch.len() > 0 && tx.send(batch).is_err() {
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
+/// Worker thread body: consume batches, run [`process_one`] per record, and flush
+/// output to this worker's `chunk` shard. Returns the worker's accumulated `Stats`.
+fn worker_loop(worker_id: usize, sh: &Shared, rx: Receiver<Batch>) -> Result<Stats> {
+    let chunk = worker_id % sh.split;
+    let n_targets = sh.targets.len() / sh.split;
+    let mut bufs = make_target_bufs(n_targets);
+    let mut stats = Stats::new(sh.n_samples);
+
+    while let Ok(batch) = rx.recv() {
+        let orient_cfg = OrientCfg { expected: batch.orientation, ..sh.orient_cfg };
+        let (mut io, mut so) = (0usize, 0usize);
+        for &(id_len, seq_len) in &batch.lens {
+            let (id_len, seq_len) = (id_len as usize, seq_len as usize);
+            let id = &batch.ids[io..io + id_len];
+            let seq = &batch.seqs[so..so + seq_len];
+            let qual = &batch.quals[so..so + seq_len];
+            process_one(id, seq, qual, &orient_cfg, sh, &mut bufs, chunk, &mut stats)?;
+            io += id_len;
+            so += seq_len;
+        }
+    }
+    flush_target_bufs(&bufs, sh, chunk)?;
     Ok(stats)
+}
+
+/// Pipelined path (used when files < workers): `n_readers` reader threads decouple
+/// serial gzip decode from processing, streaming batches over a bounded channel to
+/// `n_workers` workers — so a single large file still saturates the machine. Returns
+/// one `Stats` per worker (merged by the caller).
+fn run_pipelined(
+    inputs: &[PathBuf],
+    sh: &Shared,
+    n_readers: usize,
+    n_workers: usize,
+) -> Result<Vec<Stats>> {
+    // Bounded so readers apply backpressure instead of racing ahead into memory.
+    let (tx, rx) = bounded::<Batch>(n_workers * 2);
+    let next = AtomicUsize::new(0);
+
+    std::thread::scope(|scope| -> Result<Vec<Stats>> {
+        let reader_handles: Vec<_> = (0..n_readers)
+            .map(|_| {
+                let tx = tx.clone();
+                scope.spawn(|| reader_loop(inputs, &next, sh, tx))
+            })
+            .collect();
+        drop(tx); // workers see the channel close once every reader clone is dropped
+
+        let worker_handles: Vec<_> = (0..n_workers)
+            .map(|w| {
+                let rx = rx.clone();
+                scope.spawn(move || worker_loop(w, sh, rx))
+            })
+            .collect();
+        drop(rx);
+
+        // Surface any reader error, then collect the workers' stats.
+        for h in reader_handles {
+            h.join().expect("reader thread panicked")?;
+        }
+        let mut locals = Vec::with_capacity(n_workers);
+        for h in worker_handles {
+            locals.push(h.join().expect("worker thread panicked")?);
+        }
+        Ok(locals)
+    })
 }
 
 /// Detect a file's dominant orientation from a pre-scan of confident reads.

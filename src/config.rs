@@ -145,6 +145,16 @@ pub struct Params {
     #[arg(long, default_value_t = 1)]
     pub split: usize,
 
+    /// I/O parallelism strategy. `0` (auto): when there are fewer input files than
+    /// worker threads (e.g. a single large file), decouple gzip decode from
+    /// processing — one reader thread per file streams record batches to the full
+    /// worker pool, so a 1-file run still uses every core (serial gzip inflate is
+    /// then the only ceiling). With many files the classic one-file-per-thread path
+    /// is used instead. Set `N>0` to force the pipelined path with N reader threads
+    /// (capped at the file count); useful to tune decode vs. process balance.
+    #[arg(long, default_value_t = 0)]
+    pub reader_threads: usize,
+
     /// Cell Ranger compatibility preset. Applies the settings Cell Ranger requires
     /// (currently `--max-r2-len 649`: Cell Ranger has a hard 649 bp read cap and
     /// fails at 650 bp with "quality string length is not equal to sequence

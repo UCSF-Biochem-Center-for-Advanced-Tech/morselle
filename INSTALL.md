@@ -156,6 +156,7 @@ orientations; orientation is auto-detected and enforced per file). Useful flags:
 | `--max-r2-len` | 0 (uncapped) | cap R2 (cDNA) length, seq+qual together; 0 = full-length. Cell Ranger hard-caps at 649 bp (`--cellranger` sets this) |
 | `--gzip-level` | 4 | output gzip compression level (lower = faster/larger); output compression is the wall-clock floor at scale |
 | `--split` | 1 | split each sample across N gzip files (`_001`..`_00N`); N>1 parallelizes per-sample compression |
+| `--reader-threads` | 0 (auto) | I/O strategy. Auto: with few input files (e.g. a single large one) decode is decoupled from processing so every core is used; with many files the classic one-file-per-thread path is used. `N>0` forces the pipelined path with N reader threads |
 
 Tune logging with `RUST_LOG` (e.g. `RUST_LOG=debug sbx10x ...`).
 

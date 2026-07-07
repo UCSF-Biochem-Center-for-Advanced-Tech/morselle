@@ -128,6 +128,7 @@ orientations; orientation is auto-detected and enforced per file).
 | `--max-r2-len` | 0 (uncapped) | Cap emitted R2 length (seq+qual together). Cell Ranger hard-caps at 649 bp; `--cellranger` sets this. |
 | `--gzip-level` | 4 | Output gzip compression level (lower = faster/larger). |
 | `--split` | 1 | Split each sample across N gzip files (`_001`..`_00N`) so N threads compress one sample in parallel. |
+| `--reader-threads` | 0 (auto) | I/O parallelism. Auto uses every core even for a single input file (see below); `N>0` forces the pipelined path with N readers. |
 
 Run `sbx10x --help` for the complete list. Set `RUST_LOG=debug` for verbose logging.
 
@@ -181,9 +182,22 @@ Library crate (`src/`), each module a pipeline stage:
 | `config.rs` | CLI definition and runtime parameters. |
 | `lib.rs` | Orchestration: parallel per-file processing and emission. |
 
-Parallelism is across input files via [rayon](https://crates.io/crates/rayon);
 FASTQ parsing uses [needletail](https://crates.io/crates/needletail) and gzip uses
 [flate2](https://crates.io/crates/flate2) with the zlib backend.
+
+**Input parallelism.** Serial gzip inflate caps one file to one core, so the executor
+adapts to the file count (override with `--reader-threads`):
+
+- **Many files (files ≥ workers):** one file per worker thread via
+  [rayon](https://crates.io/crates/rayon) — up to `workers` concurrent decodes, each
+  thread decoding and processing its own file. Optimal when files are plentiful.
+- **Few files (files < workers, e.g. one large file):** decode is decoupled from
+  processing — one reader thread per file streams record batches over a bounded
+  channel to the full worker pool, so even a single-file run saturates every core.
+  A single huge file is then bounded only by serial gzip inflate throughput.
+
+Output stays mate-ordered (the Nth R1 record is always the mate of the Nth R2) in
+both modes; the pipelined path does not preserve input record order across the file.
 
 ---
 
