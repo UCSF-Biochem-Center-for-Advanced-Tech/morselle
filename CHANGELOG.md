@@ -1,0 +1,67 @@
+# Changelog
+
+All notable changes to `sbx10x` are documented here. The format is based on
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
+follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+- `--cellranger` compatibility preset that applies the settings Cell Ranger
+  requires (currently `--max-r2-len 649`); explicit flags override it.
+- `--reader-threads` (default `0` = auto) selecting the I/O strategy.
+- Pipelined I/O path for runs with few input files: one reader thread per file
+  decouples serial gzip decode from processing and streams record batches over a
+  bounded channel to the full worker pool, so a single large file now uses every
+  core. Runs with many files keep the one-file-per-thread path. Auto-selected by
+  file count; mate-order (Nth R1 == Nth R2) is preserved in both paths.
+- README with overview, pipeline description, install, usage, options, and
+  architecture.
+
+### Changed
+- **R2 is now emitted reverse-complemented** (with reversed quality) to match the
+  Illumina paired-end convention, fixing the ~46% "Reads Mapped Antisense to Gene"
+  reported by Cell Ranger.
+- `--max-r2-len` is applied at write time (after reverse-complementing) instead of
+  during extraction, so the whole cDNA fragment is retained through adapter trimming
+  and the cap keeps the bases the R2 primer would actually read.
+- Default `--gzip-level` lowered from 6 to 4 (output compression is the wall-clock
+  floor at scale; level 4 favors throughput for a small size increase).
+- Hot-path speedups (byte-identical output): early-exit Hamming for the 3' adapter
+  scan, and a zero-allocation R2 emitter that reverse-complements directly into the
+  output buffer and only touches the emitted (≤ cap) bases.
+
+### Fixed
+- Cell Ranger `quality string length is not equal to sequence length` on long reads:
+  Cell Ranger hard-caps reads at 649 bp (fails at 650). Use `--cellranger` (or
+  `--max-r2-len 649`) to cap R2 within the limit.
+
+## [0.1.0] — milestone build (M0–M7)
+
+Initial end-to-end pipeline converting raw Roche SBX long reads into per-sample 10x
+R1/R2 FASTQs for Cell Ranger ARC.
+
+### Added
+- **M0** — crate scaffold: CLI, logging, module layout, FASTQ read/write passthrough.
+- **M1** — per-read orientation to a canonical P5→P7 frame: homopolymer-first
+  (poly-dT) anchoring with a windowed Hamming R1-primer-tail confirm, and per-run
+  orientation detection/enforcement that re-anchors past false cDNA homopolymers.
+- **M2** — R1 (CB+UMI) and R2 (cDNA) bracket extraction with 3' read-through adapter
+  trimming, including indel-tolerant matching for SBX homopolymer variants
+  (`AAGAGC`→`AAAGAGC`) and 3'-end partial adapters.
+- **M3** — demultiplex by i5/i7 against the sample sheet into per-sample FASTQs, with
+  offset-tolerant (windowed) index matching. BCL Convert v2 sample sheet parser
+  (flat `sample,i7,i5` CSV fallback); normalized flat `sample_sheet.csv` emitted.
+- **M4** — cell-barcode whitelist gate (`737K-arc-v1`, 2-bit packed), read-class
+  tiers, and `metrics_summary.json` run accounting.
+- **M5** — single-indel CB realignment behind `--realign`.
+- **M6** — parallel processing across files (rayon); loss analysis with location
+  confidence and `--lenient` rescue.
+- CB reframe rescue for homopolymer-indel frame shifts (`--cb-reframe`, on by default).
+- Single-member gzip output (Cell Ranger mis-frames records at multi-member gzip
+  boundaries) written during processing.
+- `--split` to shard each sample across N gzip files for parallel compression.
+- End-of-run RUN SUMMARY report: timing, throughput, and lost breakdown.
+- Ubuntu install script (`install.sh`) and installation manual (`INSTALL.md`).
+
+[Unreleased]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbx10x/compare/main...HEAD
