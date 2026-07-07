@@ -6,6 +6,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-07-07
+
 ### Added
 - `bench_whitelist` example: microbenchmark comparing the whitelist membership
   backends (sorted `Vec` vs `FxHashSet`) across sizes 96 → ~2M on hit/fail streams.
@@ -70,4 +72,5 @@ R1/R2 FASTQs for Cell Ranger ARC.
 - End-of-run RUN SUMMARY report: timing, throughput, and lost breakdown.
 - Ubuntu install script (`install.sh`) and installation manual (`INSTALL.md`).
 
-[Unreleased]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbx10x/compare/main...HEAD
+[Unreleased]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbx10x/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbx10x/releases/tag/v0.2.0
