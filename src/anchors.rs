@@ -44,18 +44,43 @@ pub fn hamming(a: &[u8], b: &[u8]) -> u32 {
     d
 }
 
+/// True iff the Hamming distance between `a` and `b` is ≤ `max`, early-exiting as
+/// soon as the budget is exceeded. For short seeds scanned across a long read (the
+/// 3' adapter trim), most positions blow the budget in the first few bases, so this
+/// is much cheaper than summing the full distance and comparing. Same result as
+/// `hamming(a, b) <= max`.
+pub fn hamming_leq(a: &[u8], b: &[u8], max: u32) -> bool {
+    let common = a.len().min(b.len());
+    let mut d = (a.len().max(b.len()) - common) as u32;
+    if d > max {
+        return false;
+    }
+    for i in 0..common {
+        if a[i] != b[i] {
+            d += 1;
+            if d > max {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Complement one DNA base (IUPAC ACGTN, case-insensitive → upper); non-ACGT → `N`.
+#[inline]
+pub fn comp(b: u8) -> u8 {
+    match b {
+        b'A' | b'a' => b'T',
+        b'C' | b'c' => b'G',
+        b'G' | b'g' => b'C',
+        b'T' | b't' => b'A',
+        _ => b'N',
+    }
+}
+
 /// Reverse-complement a DNA sequence (IUPAC ACGTN, case-insensitive -> upper).
 pub fn revcomp(seq: &[u8]) -> Vec<u8> {
-    seq.iter()
-        .rev()
-        .map(|&b| match b {
-            b'A' | b'a' => b'T',
-            b'C' | b'c' => b'G',
-            b'G' | b'g' => b'C',
-            b'T' | b't' => b'A',
-            _ => b'N',
-        })
-        .collect()
+    seq.iter().rev().map(|&b| comp(b)).collect()
 }
 
 #[cfg(test)]

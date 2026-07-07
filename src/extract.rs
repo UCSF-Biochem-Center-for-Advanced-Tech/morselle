@@ -10,7 +10,7 @@
 //! All positions are returned as ranges into the canonical sequence — zero-copy;
 //! the caller slices `seq`/`qual`.
 
-use crate::anchors::{hamming, ILLUMINA_3P_ADAPTER};
+use crate::anchors::{hamming_leq, ILLUMINA_3P_ADAPTER};
 
 /// Tuning for [`extract`].
 #[derive(Debug, Clone, Copy)]
@@ -98,7 +98,7 @@ fn find_adapter(seq: &[u8], from: usize, max_mm: u32) -> Option<usize> {
     while i < end {
         let remain = end - i;
         if remain >= m {
-            if hamming(&seq[i..i + m], a) <= max_mm {
+            if hamming_leq(&seq[i..i + m], a, max_mm) {
                 return Some(i);
             }
             // Indel path: anchor on the indel-safe 3 bp prefix (no homopolymer),
@@ -114,7 +114,7 @@ fn find_adapter(seq: &[u8], from: usize, max_mm: u32) -> Option<usize> {
             // false trims stay ~0.04% and only cost a few 3' bp, while leaving an
             // adapter risks crashing downstream trimmers.
             let allowed = (remain / 8) as u32;
-            if hamming(&seq[i..end], &a[..remain]) <= allowed {
+            if hamming_leq(&seq[i..end], &a[..remain], allowed) {
                 return Some(i);
             }
         } else {

@@ -25,7 +25,7 @@ use rayon::prelude::*;
 use tracing::info;
 
 use crate::accounting::{pct, DemuxMetrics, Metrics, SampleCount, WhitelistMetrics};
-use crate::anchors::revcomp;
+use crate::anchors::comp;
 use crate::barcode::Whitelist;
 use crate::config::Cli;
 use crate::demux::{index_anchor_starts, DemuxVia, Demuxer};
@@ -299,6 +299,39 @@ fn push_fastq(buf: &mut Vec<u8>, id: &[u8], seq: &[u8], qual: &[u8]) {
     buf.push(b'\n');
 }
 
+/// Append one FASTQ record whose SEQ is the reverse-complement of `seq[start..end]`
+/// and whose QUAL is the reverse of `qual[start..end]`, optionally capped to
+/// `max_len` bases (0 = uncapped). This is the R2 emit: the cap keeps the first
+/// `max_len` bases of the reverse-complemented read (the R2 primer's first cycles),
+/// so we only touch the last `max_len` bases of the cDNA — no `revcomp` allocation
+/// and no work past the cap. Returns the emitted length. Identical bytes to
+/// `revcomp(&seq[start..end])` reversed-qual, then truncated.
+fn push_fastq_r2_rc(
+    buf: &mut Vec<u8>,
+    id: &[u8],
+    seq: &[u8],
+    qual: &[u8],
+    start: usize,
+    end: usize,
+    max_len: usize,
+) -> usize {
+    let full = end - start;
+    let out = if max_len > 0 { full.min(max_len) } else { full };
+    buf.reserve(id.len() + 2 * out + 6);
+    buf.push(b'@');
+    buf.extend_from_slice(id);
+    buf.push(b'\n');
+    for k in 0..out {
+        buf.push(comp(seq[end - 1 - k]));
+    }
+    buf.extend_from_slice(b"\n+\n");
+    for k in 0..out {
+        buf.push(qual[end - 1 - k]);
+    }
+    buf.push(b'\n');
+    out
+}
+
 /// Orient → extract → demux → gate → realign every read in one file, buffering
 /// per-target output and flushing compressed batches to the shared writers.
 /// Returns this file's `Stats` (merged by the caller).
@@ -321,9 +354,17 @@ fn process_file(input: &Path, sh: &Shared) -> Result<Stats> {
     let chunk = rayon::current_thread_index().unwrap_or(0) % sh.split;
 
     // Per-LOGICAL-target raw FASTQ buffers: (R1 bytes, R2 bytes, record count).
+    // Pre-size to the flush threshold (plus slack for the record that crosses it)
+    // so a hot target never reallocates mid-run.
     let n_targets = sh.targets.len() / sh.split;
     let mut bufs: Vec<(Vec<u8>, Vec<u8>, u64)> = (0..n_targets)
-        .map(|_| (Vec::new(), Vec::new(), 0))
+        .map(|_| {
+            (
+                Vec::with_capacity(FLUSH_BYTES + 4096),
+                Vec::with_capacity(FLUSH_BYTES + 4096),
+                0,
+            )
+        })
         .collect();
 
     let mut reader = parse_fastx_file(input)?;
@@ -484,22 +525,15 @@ fn process_file(input: &Path, sh: &Shared) -> Result<Stats> {
         // cDNA following polyT is the reverse complement of the mRNA sense, so the
         // canonical R2 slice maps antisense. Emit revcomp(R2) with reversed quality
         // to match the Illumina convention (R1 as-is, R2 flipped) — otherwise Cell
-        // Ranger reports ~50% "Reads Mapped Antisense to Gene".
-        let mut r2_seq = revcomp(&o.seq[r2s..r2e]);
-        let mut r2_qual = o.qual[r2s..r2e].to_vec();
-        r2_qual.reverse();
-        // Apply the R2 length cap HERE, at write, on the reverse-complemented read:
-        // the R2 primer reads from the (now leading) adapter-proximal end, so keeping
-        // the first `max_r2_len` bases mirrors a real sequencer stopping after that
-        // many cycles. The whole fragment was retained through extraction/trimming.
-        if sh.extract_cfg.max_r2_len > 0 && r2_seq.len() > sh.extract_cfg.max_r2_len {
-            r2_seq.truncate(sh.extract_cfg.max_r2_len);
-            r2_qual.truncate(sh.extract_cfg.max_r2_len);
-        }
-
+        // Ranger reports ~50% "Reads Mapped Antisense to Gene". The `--max-r2-len`
+        // cap is applied here (at write, on the reverse-complemented read): the R2
+        // primer reads from the adapter-proximal end, so keeping the first N bases
+        // mirrors a sequencer stopping after N cycles. `push_fastq_r2_rc` writes the
+        // revcomp straight into the buffer, touching only the emitted (≤N) bases.
         let buf = &mut bufs[target_idx];
         push_fastq(&mut buf.0, id, r1_seq, r1_qual);
-        push_fastq(&mut buf.1, id, &r2_seq, &r2_qual);
+        let emitted_r2 =
+            push_fastq_r2_rc(&mut buf.1, id, &o.seq, &o.qual, r2s, r2e, sh.extract_cfg.max_r2_len);
         buf.2 += 1;
         if buf.0.len() >= FLUSH_BYTES {
             sh.targets[target_idx * sh.split + chunk].append(&buf.0, &buf.1, buf.2)?;
@@ -512,7 +546,7 @@ fn process_file(input: &Path, sh: &Shared) -> Result<Stats> {
         if e.adapter_trimmed {
             stats.adapter_trimmed += 1;
         }
-        let len = r2_seq.len() as u64; // emitted (post-cap) R2 length
+        let len = emitted_r2 as u64; // emitted (post-cap) R2 length
         stats.r2_len_sum += len;
         stats.r2_len_max = stats.r2_len_max.max(len);
     }
@@ -753,4 +787,45 @@ fn report(stats: &Stats, demuxer: Option<&Demuxer>, t: &Timing) {
         index_undetermined = has_demux.then_some(stats.undetermined),
         "  lost breakdown"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::anchors::revcomp;
+
+    /// The optimized R2 emitter must produce byte-identical output to the original
+    /// `revcomp(seq[start..end])` + reversed-qual + truncate approach it replaced.
+    fn reference_r2(id: &[u8], seq: &[u8], qual: &[u8], start: usize, end: usize, cap: usize) -> Vec<u8> {
+        let mut r2_seq = revcomp(&seq[start..end]);
+        let mut r2_qual = qual[start..end].to_vec();
+        r2_qual.reverse();
+        if cap > 0 && r2_seq.len() > cap {
+            r2_seq.truncate(cap);
+            r2_qual.truncate(cap);
+        }
+        let mut buf = Vec::new();
+        push_fastq(&mut buf, id, &r2_seq, &r2_qual);
+        buf
+    }
+
+    #[test]
+    fn r2_rc_matches_reference() {
+        let seq = b"ACGTACGTNNGGCCTTAAACGTACGTTTGGCCAA";
+        let qual: Vec<u8> = (0..seq.len() as u8).map(|i| b'!' + (i % 40)).collect();
+        let id = b"read/1";
+        // Sweep sub-ranges and caps (including 0 = uncapped and caps > length).
+        for start in 0..6 {
+            for end in (start + 1)..=seq.len() {
+                for cap in [0usize, 1, 5, 10, end - start, end - start + 5] {
+                    let mut got = Vec::new();
+                    let out = push_fastq_r2_rc(&mut got, id, seq, &qual, start, end, cap);
+                    let want = reference_r2(id, seq, &qual, start, end, cap);
+                    assert_eq!(got, want, "start={start} end={end} cap={cap}");
+                    let expected_len = if cap > 0 { (end - start).min(cap) } else { end - start };
+                    assert_eq!(out, expected_len);
+                }
+            }
+        }
+    }
 }
