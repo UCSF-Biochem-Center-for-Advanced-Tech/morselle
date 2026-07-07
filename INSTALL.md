@@ -154,7 +154,7 @@ orientations; orientation is auto-detected and enforced per file). Useful flags:
 | `--cb-gate` | on | drop pairs whose CB isn't on/near the whitelist |
 | `--cellranger` | off | Cell Ranger compatibility preset — applies the settings it requires (currently `--max-r2-len 649`; explicit flags override). **Use this for Cell Ranger input.** |
 | `--max-r2-len` | 0 (uncapped) | cap R2 (cDNA) length, seq+qual together; 0 = full-length. Cell Ranger hard-caps at 649 bp (`--cellranger` sets this) |
-| `--gzip-level` | 6 | output gzip compression level (lower = faster/larger) |
+| `--gzip-level` | 4 | output gzip compression level (lower = faster/larger); output compression is the wall-clock floor at scale |
 | `--split` | 1 | split each sample across N gzip files (`_001`..`_00N`); N>1 parallelizes per-sample compression |
 
 Tune logging with `RUST_LOG` (e.g. `RUST_LOG=debug sbx10x ...`).

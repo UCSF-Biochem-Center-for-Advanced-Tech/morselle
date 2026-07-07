@@ -133,8 +133,9 @@ pub struct Params {
 
     /// gzip compression level (0–9) for output FASTQs. Each file is written as a
     /// single gzip member (Cell Ranger mis-frames records at multi-member gzip
-    /// boundaries). Lower is faster but larger; the default balances both.
-    #[arg(long, default_value_t = 6)]
+    /// boundaries). Lower is faster but larger; the default (4) favors throughput,
+    /// since output compression is the run's wall-clock floor at scale.
+    #[arg(long, default_value_t = 4)]
     pub gzip_level: u32,
 
     /// Split each sample's output across N gzip files (Cell Ranger reads them all:

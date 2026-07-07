@@ -126,7 +126,7 @@ orientations; orientation is auto-detected and enforced per file).
 | `--realign` / `--lenient` | off | Extra opt-in CB rescues (small marginal gain). |
 | `--min-cdna-len` | 50 | Shortest cDNA emitted as R2. |
 | `--max-r2-len` | 0 (uncapped) | Cap emitted R2 length (seq+qual together). Cell Ranger hard-caps at 649 bp; `--cellranger` sets this. |
-| `--gzip-level` | 6 | Output gzip compression level (lower = faster/larger). |
+| `--gzip-level` | 4 | Output gzip compression level (lower = faster/larger). |
 | `--split` | 1 | Split each sample across N gzip files (`_001`..`_00N`) so N threads compress one sample in parallel. |
 
 Run `sbx10x --help` for the complete list. Set `RUST_LOG=debug` for verbose logging.
