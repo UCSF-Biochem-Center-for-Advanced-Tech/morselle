@@ -25,7 +25,7 @@ fn main() -> anyhow::Result<()> {
     let max: usize = args.next().map(|s| s.parse().unwrap()).unwrap_or(40000);
 
     let wl = Whitelist::load(std::path::Path::new(&wlp))?;
-    let codes = wl.codes();
+    let codes = wl.codes_sorted();
     let ocfg = OrientCfg {
         cb_len: 16, umi_len: 12, min_homopolymer: 12, r1_tail_max_mm: 2,
         anchor_max_edits: 6, fallback: FallbackMode::HammingTail, expected: None,
@@ -71,7 +71,7 @@ fn main() -> anyhow::Result<()> {
         .map(|&(code, located, _)| {
             let mut best = 99u32;
             let mut best_code = 0u32;
-            for &w in codes {
+            for &w in &codes {
                 let d = dist16(code, w);
                 if d < best { best = d; best_code = w; if d == 0 { break; } }
             }
@@ -122,7 +122,7 @@ fn main() -> anyhow::Result<()> {
     let mut reframed = [0u64; 2];  // recovered by a nonzero offset, [located]
     let mut offset_hist = std::collections::BTreeMap::<i64, u64>::new();
     for &(code, located, reframe) in &items {
-        if wl.codes().binary_search(&code).is_ok() {
+        if codes.binary_search(&code).is_ok() {
             continue; // already exact at offset 0
         }
         let li = if located { 0 } else { 1 };

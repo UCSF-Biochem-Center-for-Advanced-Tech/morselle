@@ -54,7 +54,8 @@ fn collisions(forms: &[Vec<u8>]) -> (usize, usize) {
 
 fn main() -> anyhow::Result<()> {
     let wl = Whitelist::load(std::path::Path::new(&env::args().nth(1).unwrap()))?;
-    let n = wl.codes().len();
+    let codes = wl.codes_sorted();
+    let n = codes.len();
     println!("whitelist barcodes: {n}");
 
     // homopolymer run-length distribution (max run per barcode)
@@ -63,7 +64,7 @@ fn main() -> anyhow::Result<()> {
     let mut any_run4 = 0u64;
     let mut full: Vec<Vec<u8>> = Vec::with_capacity(n);
     let mut bucket: Vec<Vec<u8>> = Vec::with_capacity(n);
-    for &code in wl.codes() {
+    for &code in &codes {
         let cb = decode16(code);
         let mut maxrun = 1usize;
         let mut i = 0;

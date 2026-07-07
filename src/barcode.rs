@@ -4,9 +4,13 @@
 //! whose gel-bead barcodes come from `737K-arc-v1.txt.gz` (NOT any 3' GEX list).
 //! Validated: Roche's known-good CBs hit it 73% as-is (0% reverse-complemented).
 //!
-//! Barcodes are 2-bit packed into a `u32` (16 bp = 32 bits) and held in a sorted
-//! vec for cache-friendly binary search. CB status is exact / Hamming-1 neighbor
-//! (49 probes) / fail. We do NOT rewrite barcodes — Cell Ranger ARC corrects.
+//! Barcodes are 2-bit packed into a `u32` (16 bp = 32 bits) and held in an
+//! `FxHashSet` for O(1) membership. CB status is exact / Hamming-1 neighbor
+//! (49 probes) / fail; the fail path probes all 48 single-substitution neighbors,
+//! which scatter across the code space, so O(1) lookups beat a binary search whose
+//! ~log₂(N) comparisons each miss cache. FxHash (multiply+rotate) is used rather
+//! than the slow default SipHash — with SipHash the set can lose to binary search
+//! on `u32` keys. We do NOT rewrite barcodes — Cell Ranger ARC corrects.
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -14,6 +18,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use flate2::read::MultiGzDecoder;
+use rustc_hash::FxHashSet;
 
 use crate::pipeline::CbStatus;
 
@@ -59,9 +64,9 @@ pub fn decode16(mut code: u32) -> [u8; 16] {
     out
 }
 
-/// A sorted set of 2-bit-encoded 16 bp barcodes.
+/// A set of 2-bit-encoded 16 bp barcodes with O(1) membership.
 pub struct Whitelist {
-    codes: Vec<u32>,
+    codes: FxHashSet<u32>,
 }
 
 impl Whitelist {
@@ -76,7 +81,8 @@ impl Whitelist {
             Box::new(BufReader::new(file))
         };
 
-        let mut codes = Vec::with_capacity(1 << 20);
+        let mut codes =
+            FxHashSet::with_capacity_and_hasher(1 << 20, rustc_hash::FxBuildHasher);
         for line in reader.lines() {
             let line = line?;
             let bc = line.trim().as_bytes();
@@ -86,7 +92,7 @@ impl Whitelist {
             // whitelist files may be single-column or `barcode<TAB>...`
             let bc = bc.split(|&c| c == b'\t' || c == b' ').next().unwrap_or(bc);
             if let Some(code) = encode16(bc) {
-                codes.push(code);
+                codes.insert(code); // the set dedups
             } else {
                 anyhow::bail!(
                     "whitelist {} has a non-16bp/non-ACGT entry: {}",
@@ -95,8 +101,6 @@ impl Whitelist {
                 );
             }
         }
-        codes.sort_unstable();
-        codes.dedup();
         Ok(Whitelist { codes })
     }
 
@@ -109,7 +113,7 @@ impl Whitelist {
     }
 
     fn contains_code(&self, code: u32) -> bool {
-        self.codes.binary_search(&code).is_ok()
+        self.codes.contains(&code)
     }
 
     /// Whether a 16 bp barcode is exactly on the whitelist (diagnostics).
@@ -117,9 +121,12 @@ impl Whitelist {
         encode16(cb).is_some_and(|c| self.contains_code(c))
     }
 
-    /// The raw 2-bit-encoded codes (diagnostics: brute-force nearest-neighbor).
-    pub fn codes(&self) -> &[u32] {
-        &self.codes
+    /// All 2-bit-encoded codes, sorted (diagnostics: brute-force nearest-neighbor
+    /// scans and iteration). Materializes a `Vec` — not for the hot path.
+    pub fn codes_sorted(&self) -> Vec<u32> {
+        let mut v: Vec<u32> = self.codes.iter().copied().collect();
+        v.sort_unstable();
+        v
     }
 
     /// Classify a 16 bp barcode: exact whitelist hit, within Hamming-1 of a
@@ -325,8 +332,7 @@ mod tests {
     }
 
     fn wl(barcodes: &[&[u8]]) -> Whitelist {
-        let mut codes: Vec<u32> = barcodes.iter().map(|b| encode16(b).unwrap()).collect();
-        codes.sort_unstable();
+        let codes: FxHashSet<u32> = barcodes.iter().map(|b| encode16(b).unwrap()).collect();
         Whitelist { codes }
     }
 

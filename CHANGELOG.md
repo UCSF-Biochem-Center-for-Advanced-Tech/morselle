@@ -7,6 +7,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `bench_whitelist` example: microbenchmark comparing the whitelist membership
+  backends (sorted `Vec` vs `FxHashSet`) across sizes 96 → ~2M on hit/fail streams.
 - `--cellranger` compatibility preset that applies the settings Cell Ranger
   requires (currently `--max-r2-len 649`); explicit flags override it.
 - `--reader-threads` (default `0` = auto) selecting the I/O strategy.
@@ -30,6 +32,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Hot-path speedups (byte-identical output): early-exit Hamming for the 3' adapter
   scan, and a zero-allocation R2 emitter that reverse-complements directly into the
   output buffer and only touches the emitted (≤ cap) bases.
+- Whitelist membership now uses `FxHashSet<u32>` (O(1)) instead of a sorted `Vec`
+  binary search. Benchmarked (`bench_whitelist`) at ~10× faster CB hits and ~2–5×
+  faster CB-fails (the 48-neighbor path) on 736k–2M whitelists; ~2.5× the barcode
+  memory (<20 MB at 2M). `Whitelist::codes()` → `codes_sorted()` (diagnostics only).
 
 ### Fixed
 - Cell Ranger `quality string length is not equal to sequence length` on long reads:
