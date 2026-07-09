@@ -84,8 +84,14 @@ pub struct Params {
     #[arg(long, default_value_t = 3)]
     pub index_window: isize,
 
-    /// Enable the indel-realign branch (M5). Off by default.
-    #[arg(long, default_value_t = false)]
+    /// Single-indel CB realignment (M5): when the measured CB+UMI span is off by
+    /// exactly ±1, the CB carries a homopolymer indel that frame-shifted the 16 bp
+    /// grab — recover it by trying the single-indel corrections for a unique
+    /// whitelist hit. Gated on that structural span signal, so it is precision-safe
+    /// (validated: recoveries land on real-cell barcodes ~4–10× above chance, and
+    /// genuine single-indels are correct-or-abstain in simulation). Recovers ~+1% of
+    /// reads. On by default; disable with `--realign false`.
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub realign: bool,
 
     /// CB reframe rescue: for confidently-located CB-fails, try nearby frames

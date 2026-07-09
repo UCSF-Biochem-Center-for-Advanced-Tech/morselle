@@ -150,7 +150,8 @@ orientations; orientation is auto-detected and enforced per file). Useful flags:
 | `--orientation` | auto | force `p5-led` / `p7-led` if auto-detect is wrong |
 | `--cb-reframe` | on | rescue homopolymer-indel frame-shifted barcodes |
 | `--index-window` | 3 | offset-tolerant i5/i7 matching |
-| `--realign` / `--lenient` | off | extra opt-in CB rescues (small marginal gain) |
+| `--realign` | on | single-indel CB rescue (recovers ~+1% of reads at high precision); disable with `--realign false` |
+| `--lenient` | off | within-2 CB rescue — **leave off** (only ~51% precise on the dense ARC whitelist) |
 | `--cb-gate` | on | drop pairs whose CB isn't on/near the whitelist |
 | `--cellranger` | off | Cell Ranger compatibility preset — applies the settings it requires (currently `--max-r2-len 649`; explicit flags override). **Use this for Cell Ranger input.** |
 | `--max-r2-len` | 0 (uncapped) | cap R2 (cDNA) length, seq+qual together; 0 = full-length. Cell Ranger hard-caps at 649 bp (`--cellranger` sets this) |

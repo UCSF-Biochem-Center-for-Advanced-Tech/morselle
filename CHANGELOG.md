@@ -6,6 +6,24 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- **`--realign` (single-indel CB rescue) is now ON by default** (was off). Analysis of
+  run_5p showed the residual 3′-end CB "errors" are largely misaligned barcodes — a
+  homopolymer indel frame-shifts the 16 bp grab so a random base lands in the last CB
+  slot (transition bias collapses 81%→43% toward pos 15; insertion rate rises 5×).
+  These are recovered by single-indel realignment, gated on the structural CB+UMI span
+  signal (±1). Measured ~+1% of reads recovered at high precision: genuine single-indels
+  are correct-or-abstain in simulation (0% wrong), and recoveries land on real-cell
+  barcodes ~4–10× above chance. The flag is now settable (`--realign true|false`).
+
+### Added
+- Diagnostic examples: `lenient_precision` and `realign_precision` (recall/precision of
+  the within-2 and single-indel CB rescues via error injection), `cb_error_profile`
+  (CB substitution position/type + frame tests), and `realign_concordance` (real-data
+  precision proxy — do realign recoveries land on abundant real-cell barcodes?).
+- Finding (no code change): lenient within-2 rescue stays OFF — ~51% precision on the
+  dense 736K ARC whitelist (within-2 neighborhoods are usually ambiguous).
+
 ## [0.2.0] — 2026-07-07
 
 ### Added

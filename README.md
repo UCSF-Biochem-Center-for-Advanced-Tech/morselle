@@ -123,7 +123,8 @@ orientations; orientation is auto-detected and enforced per file).
 | `--cb-reframe` | on | Rescue homopolymer-indel frame-shifted barcodes. |
 | `--index-window` | 3 | Offset-tolerant i5/i7 matching (absorbs indels shifting the index). |
 | `--index-max-mm` | 1 | Max mismatches when matching sample-sheet indices. |
-| `--realign` / `--lenient` | off | Extra opt-in CB rescues (small marginal gain). |
+| `--realign` | on | Single-indel CB rescue — recovers ~+1% of reads at high precision (`--realign false` to disable). |
+| `--lenient` | off | Within-2 CB rescue — leave off (~51% precise on the dense ARC whitelist). |
 | `--min-cdna-len` | 50 | Shortest cDNA emitted as R2. |
 | `--max-r2-len` | 0 (uncapped) | Cap emitted R2 length (seq+qual together). Cell Ranger hard-caps at 649 bp; `--cellranger` sets this. |
 | `--gzip-level` | 4 | Output gzip compression level (lower = faster/larger). |
