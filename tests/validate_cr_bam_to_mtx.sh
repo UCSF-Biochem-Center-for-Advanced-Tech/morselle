@@ -20,11 +20,14 @@ for fixture in "$fixtures"/*_gene_matrix; do
     "$binary" "$fixture/possorted_genome_bam.bam" \
         --features "$expected/features.tsv.gz" \
         --barcodes "$expected/barcodes.tsv.gz" \
+        --genome GRCh38 \
         --output "$actual"
-    diff -u <(gzip -dc "$expected/features.tsv.gz") <(gzip -dc "$actual/features.tsv.gz")
-    diff -u <(gzip -dc "$expected/barcodes.tsv.gz") <(gzip -dc "$actual/barcodes.tsv.gz")
+    mex="$actual/raw_feature_bc_matrix"
+    diff -u <(gzip -dc "$expected/features.tsv.gz") <(gzip -dc "$mex/features.tsv.gz")
+    diff -u <(gzip -dc "$expected/barcodes.tsv.gz") <(gzip -dc "$mex/barcodes.tsv.gz")
     python3 "$repo/tests/validate_cr_matrix.py" \
-        "$expected/matrix.mtx.gz" "$actual/matrix.mtx.gz"
+        "$expected/matrix.mtx.gz" "$mex/matrix.mtx.gz"
+    test -s "$actual/raw_feature_bc_matrix.h5"
     test -s "$actual/metrics_summary.json"
     rm -rf "$actual"
     trap - EXIT

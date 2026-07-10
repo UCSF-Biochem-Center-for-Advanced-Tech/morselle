@@ -6,6 +6,8 @@
   matrices from corrected BAM molecule tags, with gzip/plain output, optional
   feature/barcode templates, structured run metrics, and fixture validation.
 - The installer now builds, installs, and verifies both command-line apps.
+- `cr-bam-to-mtx` now emits the Cell Ranger `outs/raw_feature_bc_matrix/` MEX
+  directory and its `outs/raw_feature_bc_matrix.h5` CSC-format neighbor.
 
 All notable changes to `sbx10x` are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to

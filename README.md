@@ -74,14 +74,28 @@ Cell Ranger BAM:
 cr-bam-to-mtx possorted_genome_bam.bam \
   --features raw_feature_bc_matrix/features.tsv.gz \
   --barcodes raw_feature_bc_matrix/barcodes.tsv.gz \
-  --output reconstructed_raw_feature_bc_matrix
+  --genome GRCh38 \
+  --output outs
 ```
 
 It counts the `xf` bit-8 molecule representatives using the corrected `CB`, `UB`,
 `GX`, and `GN` tags. The feature/barcode templates preserve zero-count rows and
 columns and Cell Ranger ordering; without them, only observed features and
-barcodes can be recovered. Output includes `features.tsv.gz`, `barcodes.tsv.gz`,
-`matrix.mtx.gz`, `metrics_summary.json`, and an stderr `RUN SUMMARY`.
+barcodes can be recovered. The Cell Ranger-style output layout is:
+
+```text
+outs/
+├── raw_feature_bc_matrix/
+│   ├── barcodes.tsv.gz
+│   ├── features.tsv.gz
+│   └── matrix.mtx.gz
+├── raw_feature_bc_matrix.h5
+└── metrics_summary.json
+```
+
+The H5 file stores the same matrix in 10x CSC format. `--genome` supplies its
+feature genome label because that value cannot be recovered reliably from a BAM.
+Every run also prints an stderr `RUN SUMMARY`.
 
 The three coordinate-sliced Cell Ranger fixtures can be checked with:
 

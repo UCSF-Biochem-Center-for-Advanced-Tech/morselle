@@ -76,15 +76,17 @@ files so zero-count features/barcodes and original ordering are retained:
 cr-bam-to-mtx /data/outs/possorted_genome_bam.bam \
   --features /data/outs/raw_feature_bc_matrix/features.tsv.gz \
   --barcodes /data/outs/raw_feature_bc_matrix/barcodes.tsv.gz \
-  --output /data/reconstructed_raw_feature_bc_matrix
+  --genome GRCh38 \
+  --output /data/reconstructed/outs
 ```
 
-The output directory contains the three standard compressed Matrix Market files
-plus `metrics_summary.json`. The app prints a `RUN SUMMARY` with elapsed time,
-throughput, records, molecules, features, barcodes, and nonzero entries. Complete,
-matching BAM/matrix pairs should agree exactly. Coordinate-sliced BAMs can
-under-count boundary genes when their molecule-representative alignment lies
-outside the retained interval.
+The output follows Cell Ranger's layout: the three compressed Matrix Market files
+are under `outs/raw_feature_bc_matrix/`, with `outs/raw_feature_bc_matrix.h5` as
+their HDF5 neighbor and `outs/metrics_summary.json` for run accounting. The app
+prints a `RUN SUMMARY` with elapsed time, throughput, records, molecules, features,
+barcodes, and nonzero entries. Complete, matching BAM/matrix pairs should agree
+exactly. Coordinate-sliced BAMs can under-count boundary genes when their
+molecule-representative alignment lies outside the retained interval.
 
 ---
 

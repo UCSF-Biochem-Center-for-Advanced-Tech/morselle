@@ -9,6 +9,7 @@ use std::time::Instant;
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use flate2::{read::MultiGzDecoder, write::GzEncoder, Compression};
+use hdf5::types::VarLenAscii;
 use rust_htslib::bam::{self, record::Aux, Read};
 use serde::Serialize;
 use tracing::info;
@@ -25,9 +26,13 @@ pub struct Cli {
     #[arg(value_name = "BAM")]
     pub bam: PathBuf,
 
-    /// Output directory for matrix files and metrics_summary.json.
-    #[arg(short, long, default_value = "cr_bam_to_mtx_out")]
+    /// Cell Ranger-style outs directory.
+    #[arg(short, long, default_value = "outs")]
     pub output: PathBuf,
+
+    /// Genome label stored for every feature in raw_feature_bc_matrix.h5.
+    #[arg(long, default_value = "unknown")]
+    pub genome: String,
 
     /// Optional Cell Ranger features.tsv[.gz] template, including zero-count rows.
     #[arg(long)]
@@ -64,6 +69,8 @@ struct Matrix {
 struct Metrics {
     input_bam: String,
     output_dir: String,
+    mex_dir: String,
+    h5_file: String,
     elapsed_secs: f64,
     records_read: u64,
     records_per_sec: u64,
@@ -79,12 +86,19 @@ struct Metrics {
 pub fn run(cli: &Cli) -> Result<()> {
     let started = Instant::now();
     let matrix = read_matrix(&cli.bam, cli.features.as_deref(), cli.barcodes.as_deref())?;
-    write_matrix(&matrix, &cli.output, !cli.no_gzip)?;
+    fs::create_dir_all(&cli.output)
+        .with_context(|| format!("creating {}", cli.output.display()))?;
+    let mex_dir = cli.output.join("raw_feature_bc_matrix");
+    let h5_file = cli.output.join("raw_feature_bc_matrix.h5");
+    write_matrix(&matrix, &mex_dir, !cli.no_gzip)?;
+    write_h5(&matrix, &h5_file, &cli.genome)?;
 
     let elapsed = started.elapsed().as_secs_f64();
     let metrics = Metrics {
         input_bam: cli.bam.display().to_string(),
         output_dir: cli.output.display().to_string(),
+        mex_dir: mex_dir.display().to_string(),
+        h5_file: h5_file.display().to_string(),
         elapsed_secs: elapsed,
         records_read: matrix.records,
         records_per_sec: if elapsed > 0.0 {
@@ -288,6 +302,124 @@ fn write_matrix(matrix: &Matrix, output: &Path, gzip: bool) -> Result<()> {
     Ok(())
 }
 
+fn ascii(value: &str, field: &str) -> Result<VarLenAscii> {
+    VarLenAscii::from_ascii(value.as_bytes())
+        .with_context(|| format!("{field} contains a non-ASCII or NUL character: {value:?}"))
+}
+
+/// Write the standard 10x CSC HDF5 feature-barcode matrix alongside the MEX
+/// directory. The barcode-major BTreeMap is already in CSC traversal order.
+fn write_h5(matrix: &Matrix, path: &Path, genome: &str) -> Result<()> {
+    let file = hdf5::File::create(path).with_context(|| format!("creating {}", path.display()))?;
+    let group = file.create_group("matrix")?;
+    let features = group.create_group("features")?;
+
+    let barcodes: Vec<_> = matrix
+        .barcodes
+        .iter()
+        .map(|value| ascii(value, "barcode"))
+        .collect::<Result<_>>()?;
+    let ids: Vec<_> = matrix
+        .features
+        .iter()
+        .map(|feature| ascii(&feature.id, "feature ID"))
+        .collect::<Result<_>>()?;
+    let names: Vec<_> = matrix
+        .features
+        .iter()
+        .map(|feature| ascii(&feature.name, "feature name"))
+        .collect::<Result<_>>()?;
+    let gene_expression = ascii("Gene Expression", "feature type")?;
+    let feature_types = vec![gene_expression; matrix.features.len()];
+    let genome = ascii(genome, "genome")?;
+    let genomes = vec![genome; matrix.features.len()];
+    let all_tag_keys = vec![ascii("genome", "tag key")?];
+
+    let mut data = Vec::<u32>::with_capacity(matrix.counts.len());
+    let mut indices = Vec::<u32>::with_capacity(matrix.counts.len());
+    let mut indptr = Vec::<u32>::with_capacity(matrix.barcodes.len() + 1);
+    indptr.push(0);
+    let mut entries = matrix.counts.iter().peekable();
+    for barcode in 0..matrix.barcodes.len() {
+        while let Some((&(entry_barcode, feature), &count)) = entries.peek() {
+            if entry_barcode != barcode {
+                break;
+            }
+            data.push(u32::try_from(count).context("UMI count exceeds HDF5 uint32 range")?);
+            indices
+                .push(u32::try_from(feature).context("feature index exceeds HDF5 uint32 range")?);
+            entries.next();
+        }
+        indptr
+            .push(u32::try_from(data.len()).context("matrix has more than 2^32 nonzero entries")?);
+    }
+    if entries.next().is_some() {
+        bail!("matrix contains a barcode index outside the barcode table");
+    }
+    let shape = [matrix.features.len() as u64, matrix.barcodes.len() as u64];
+
+    group
+        .new_dataset_builder()
+        .with_data(&barcodes)
+        .create("barcodes")?;
+    group
+        .new_dataset_builder()
+        .with_data(&data)
+        .deflate(1)
+        .create("data")?;
+    group
+        .new_dataset_builder()
+        .with_data(&indices)
+        .deflate(1)
+        .create("indices")?;
+    group
+        .new_dataset_builder()
+        .with_data(&indptr)
+        .deflate(1)
+        .create("indptr")?;
+    group
+        .new_dataset_builder()
+        .with_data(&shape)
+        .create("shape")?;
+    features
+        .new_dataset_builder()
+        .with_data(&all_tag_keys)
+        .create("_all_tag_keys")?;
+    features
+        .new_dataset_builder()
+        .with_data(&feature_types)
+        .create("feature_type")?;
+    features
+        .new_dataset_builder()
+        .with_data(&genomes)
+        .create("genome")?;
+    features
+        .new_dataset_builder()
+        .with_data(&ids)
+        .create("id")?;
+    features
+        .new_dataset_builder()
+        .with_data(&names)
+        .create("name")?;
+
+    file.new_attr::<VarLenAscii>()
+        .shape(())
+        .create("filetype")?
+        .write_scalar(&ascii("matrix", "filetype")?)?;
+    file.new_attr::<u32>()
+        .shape(())
+        .create("version")?
+        .write_scalar(&2)?;
+    file.new_attr::<VarLenAscii>()
+        .shape(())
+        .create("software_version")?
+        .write_scalar(&ascii(
+            &format!("cr-bam-to-mtx-{}", env!("CARGO_PKG_VERSION")),
+            "software version",
+        )?)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -336,5 +468,59 @@ mod tests {
         let text = fs::read_to_string(dir.path().join("matrix.mtx")).unwrap();
         let data: Vec<_> = text.lines().filter(|line| !line.starts_with('%')).collect();
         assert_eq!(data, ["2 2 3", "1 1 1", "2 1 2", "1 2 3"]);
+    }
+
+    #[test]
+    fn writes_cell_ranger_csc_h5() {
+        let matrix = Matrix {
+            features: vec![
+                Feature {
+                    id: "g1".into(),
+                    name: "G1".into(),
+                },
+                Feature {
+                    id: "g2".into(),
+                    name: "G2".into(),
+                },
+            ],
+            barcodes: vec!["bc1-1".into(), "bc2-1".into(), "bc3-1".into()],
+            counts: [((0, 1), 2), ((0, 0), 1), ((2, 0), 3)]
+                .into_iter()
+                .collect(),
+            records: 6,
+            molecules: 6,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("raw_feature_bc_matrix.h5");
+        write_h5(&matrix, &path, "GRCh38").unwrap();
+
+        let file = hdf5::File::open(path).unwrap();
+        let group = file.group("matrix").unwrap();
+        assert_eq!(
+            group.dataset("shape").unwrap().read_raw::<u64>().unwrap(),
+            [2, 3]
+        );
+        assert_eq!(
+            group.dataset("data").unwrap().read_raw::<u32>().unwrap(),
+            [1, 2, 3]
+        );
+        assert_eq!(
+            group.dataset("indices").unwrap().read_raw::<u32>().unwrap(),
+            [0, 1, 0]
+        );
+        assert_eq!(
+            group.dataset("indptr").unwrap().read_raw::<u32>().unwrap(),
+            [0, 2, 2, 3]
+        );
+        let features = group.group("features").unwrap();
+        let genomes = features
+            .dataset("genome")
+            .unwrap()
+            .read_raw::<VarLenAscii>()
+            .unwrap();
+        assert_eq!(
+            genomes.iter().map(|x| x.as_str()).collect::<Vec<_>>(),
+            ["GRCh38", "GRCh38"]
+        );
     }
 }
