@@ -52,6 +52,8 @@ struct Feature {
 struct Matrix {
     features: Vec<Feature>,
     barcodes: Vec<String>,
+    /// (barcode index, feature index) -> molecule count. Keeping the barcode
+    /// first makes Matrix Market output match Cell Ranger's column-major order.
     counts: BTreeMap<(usize, usize), u64>,
     records: u64,
     molecules: u64,
@@ -230,7 +232,7 @@ fn read_matrix(
         let Some(&barcode) = barcode_indexes.get(barcode.as_str()) else {
             bail!("counted barcode {barcode} is absent from barcode template");
         };
-        *counts.entry((*feature, barcode)).or_insert(0) += 1;
+        *counts.entry((barcode, *feature)).or_insert(0) += 1;
     }
 
     Ok(Matrix {
@@ -280,7 +282,7 @@ fn write_matrix(matrix: &Matrix, output: &Path, gzip: bool) -> Result<()> {
         matrix.barcodes.len(),
         matrix.counts.len()
     )?;
-    for (&(feature, barcode), &count) in &matrix.counts {
+    for (&(barcode, feature), &count) in &matrix.counts {
         writeln!(mtx, "{} {} {}", feature + 1, barcode + 1, count)?;
     }
     Ok(())
@@ -306,5 +308,33 @@ mod tests {
         write_matrix(&matrix, dir.path(), false).unwrap();
         let text = fs::read_to_string(dir.path().join("matrix.mtx")).unwrap();
         assert!(text.ends_with("1 1 1\n1 1 2\n"));
+    }
+
+    #[test]
+    fn writes_cell_ranger_barcode_major_order() {
+        let matrix = Matrix {
+            features: vec![
+                Feature {
+                    id: "g1".into(),
+                    name: "G1".into(),
+                },
+                Feature {
+                    id: "g2".into(),
+                    name: "G2".into(),
+                },
+            ],
+            barcodes: vec!["bc1-1".into(), "bc2-1".into()],
+            // Keys are (barcode, feature), deliberately inserted out of order.
+            counts: [((1, 0), 3), ((0, 1), 2), ((0, 0), 1)]
+                .into_iter()
+                .collect(),
+            records: 6,
+            molecules: 6,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        write_matrix(&matrix, dir.path(), false).unwrap();
+        let text = fs::read_to_string(dir.path().join("matrix.mtx")).unwrap();
+        let data: Vec<_> = text.lines().filter(|line| !line.starts_with('%')).collect();
+        assert_eq!(data, ["2 2 3", "1 1 1", "2 1 2", "1 2 3"]);
     }
 }
