@@ -3,7 +3,7 @@
 # sbx10x installer for Ubuntu (also works on most Debian-family systems).
 #
 # Installs build prerequisites, the Rust toolchain (if missing), builds the
-# release binary, and installs it (plus the ARC whitelist, if available) under
+# release binaries, and installs them (plus the ARC whitelist, if available) under
 # a prefix. Idempotent and safe to re-run.
 #
 # Usage:
@@ -68,7 +68,7 @@ if [[ $SKIP_APT -eq 0 ]] && command -v apt-get >/dev/null 2>&1; then
   fi
   log "installing build prerequisites via apt-get..."
   $APT_SUDO apt-get update -y
-  $APT_SUDO apt-get install -y build-essential curl pkg-config git ca-certificates
+  $APT_SUDO apt-get install -y build-essential curl pkg-config git ca-certificates cmake clang libclang-dev
 else
   log "skipping apt-get (--skip-apt or apt-get not found)."
   command -v cc >/dev/null 2>&1 || warn "no C compiler found; install build-essential."
@@ -88,19 +88,22 @@ command -v cargo >/dev/null 2>&1 || die "cargo still not on PATH; open a new she
 log "using $(cargo --version)"
 
 # 3. Build ----------------------------------------------------------------------
-log "building release binary (this may take a few minutes the first time)..."
+log "building release binaries (this may take a few minutes the first time)..."
 if [[ -f Cargo.lock ]]; then
   cargo build --release --locked
 else
   cargo build --release
 fi
 [[ -x target/release/sbx10x ]] || die "build did not produce target/release/sbx10x"
+[[ -x target/release/cr-bam-to-mtx ]] || die "build did not produce target/release/cr-bam-to-mtx"
 
 # 4. Install binary -------------------------------------------------------------
 BIN_DIR="$PREFIX/bin"
 log "installing binary -> $BIN_DIR/sbx10x"
 $SUDO install -d "$BIN_DIR"
 $SUDO install -m 0755 target/release/sbx10x "$BIN_DIR/sbx10x"
+log "installing binary -> $BIN_DIR/cr-bam-to-mtx"
+$SUDO install -m 0755 target/release/cr-bam-to-mtx "$BIN_DIR/cr-bam-to-mtx"
 
 # 5. Install whitelist (optional) ----------------------------------------------
 SHARE_DIR="$PREFIX/share/sbx10x"
@@ -124,6 +127,7 @@ fi
 
 # 6. Verify + smoke test --------------------------------------------------------
 log "installed: $("$BIN_DIR/sbx10x" --version 2>/dev/null || echo '(version check failed)')"
+log "installed: $("$BIN_DIR/cr-bam-to-mtx" --version 2>/dev/null || echo '(version check failed)')"
 SMOKE_FQ="tests/fixtures/smoke.fastq.gz"
 SMOKE_SS="tests/fixtures/CE15204_bclconvert_input.csv"
 if [[ -f "$SMOKE_FQ" && -f "$SMOKE_SS" ]]; then
@@ -139,4 +143,4 @@ if [[ -f "$SMOKE_FQ" && -f "$SMOKE_SS" ]]; then
   rm -rf "$SMOKE_OUT"
 fi
 
-log "done. Ensure $BIN_DIR is on your PATH, then run: sbx10x --help"
+log "done. Ensure $BIN_DIR is on your PATH, then run: sbx10x --help or cr-bam-to-mtx --help"

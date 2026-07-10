@@ -8,6 +8,7 @@ pub mod accounting;
 pub mod anchors;
 pub mod barcode;
 pub mod config;
+pub mod cr_bam_to_mtx;
 pub mod demux;
 pub mod extract;
 pub mod homopolymer;

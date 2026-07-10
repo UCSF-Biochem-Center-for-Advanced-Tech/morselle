@@ -15,7 +15,7 @@ covers installing and running it on an Ubuntu server.
 | RAM | 4 GB minimum; ~0.5 GB peak per ~14 worker threads. The barcode whitelist adds ~50 MB |
 | Disk | Free space ≥ ~1× the size of your input FASTQs for the output |
 | Toolchain | Rust 1.74+ (the installer fetches the latest stable via rustup if absent) |
-| Build deps | A C compiler (`build-essential`) — used to compile the bundled zlib for output gzip. **No cmake needed** (zlib1g-dev optional; the build vendors zlib if absent) |
+| Build deps | `build-essential`, `pkg-config`, `cmake`, `clang`, and `libclang-dev` (the latter three build the HTSlib BAM reader used by `cr-bam-to-mtx`) |
 
 Throughput reference (Apple M4 Pro, 14 cores): ~142K reads/s single-thread,
 ~1.3M reads/s at 14 threads → **~13 min per billion reads**. Server CPUs with
@@ -33,10 +33,11 @@ From the `sbx10x` source directory:
 
 This will:
 
-1. `apt-get install` build prerequisites (`build-essential curl pkg-config git`).
+1. `apt-get install` build prerequisites (`build-essential`, `cmake`, `clang`,
+   `libclang-dev`, and supporting packages).
 2. Install the Rust toolchain via rustup if `cargo` is not already on `PATH`.
-3. Build the optimized release binary (`cargo build --release --locked`).
-4. Install the binary to `/usr/local/bin/sbx10x`.
+3. Build the optimized release binaries (`cargo build --release --locked`).
+4. Install `sbx10x` and `cr-bam-to-mtx` to `/usr/local/bin/`.
 5. Install the ARC whitelist to `/usr/local/share/sbx10x/` **if it is present**
    in `resources/cellranger_barcodes/` (see §4 — it is not committed to git).
 6. Run a built-in smoke test.
@@ -61,7 +62,29 @@ Verify:
 ```bash
 sbx10x --version
 sbx10x --help
+cr-bam-to-mtx --version
+cr-bam-to-mtx --help
 ```
+
+### BAM to raw gene-expression matrix
+
+The second installed app reconstructs Cell Ranger molecule counts from a complete
+Cell Ranger BAM. For an exactly shaped raw matrix, provide the matching template
+files so zero-count features/barcodes and original ordering are retained:
+
+```bash
+cr-bam-to-mtx /data/outs/possorted_genome_bam.bam \
+  --features /data/outs/raw_feature_bc_matrix/features.tsv.gz \
+  --barcodes /data/outs/raw_feature_bc_matrix/barcodes.tsv.gz \
+  --output /data/reconstructed_raw_feature_bc_matrix
+```
+
+The output directory contains the three standard compressed Matrix Market files
+plus `metrics_summary.json`. The app prints a `RUN SUMMARY` with elapsed time,
+throughput, records, molecules, features, barcodes, and nonzero entries. Complete,
+matching BAM/matrix pairs should agree exactly. Coordinate-sliced BAMs can
+under-count boundary genes when their molecule-representative alignment lies
+outside the retained interval.
 
 ---
 
@@ -219,5 +242,6 @@ Validate a build at any time:
 
 ```bash
 cargo test --release      # unit tests
+./tests/validate_cr_bam_to_mtx.sh /path/to/test_fixtures
 ./install.sh              # re-run; includes the smoke test
 ```

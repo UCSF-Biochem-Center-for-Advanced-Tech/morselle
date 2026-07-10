@@ -27,3 +27,7 @@ anyhow = "1.0"
 thiserror = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rust-htslib = { version = "0.49", default-features = false, features = ["bzip2", "lzma"] }
+
+[dev-dependencies]
+tempfile = "3"

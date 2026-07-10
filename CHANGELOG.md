@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Added the `cr-bam-to-mtx` companion app for reconstructing Cell Ranger raw GEX
+  matrices from corrected BAM molecule tags, with gzip/plain output, optional
+  feature/barcode templates, structured run metrics, and fixture validation.
+- The installer now builds, installs, and verifies both command-line apps.
+
 All notable changes to `sbx10x` are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).

@@ -62,6 +62,31 @@ Verify:
 ```bash
 sbx10x --version
 sbx10x --help
+cr-bam-to-mtx --version
+cr-bam-to-mtx --help
+```
+
+The repository also installs `cr-bam-to-mtx`, which reconstructs a Cell Ranger
+raw gene-expression matrix from the corrected molecule annotations in a complete
+Cell Ranger BAM:
+
+```bash
+cr-bam-to-mtx possorted_genome_bam.bam \
+  --features raw_feature_bc_matrix/features.tsv.gz \
+  --barcodes raw_feature_bc_matrix/barcodes.tsv.gz \
+  --output reconstructed_raw_feature_bc_matrix
+```
+
+It counts the `xf` bit-8 molecule representatives using the corrected `CB`, `UB`,
+`GX`, and `GN` tags. The feature/barcode templates preserve zero-count rows and
+columns and Cell Ranger ordering; without them, only observed features and
+barcodes can be recovered. Output includes `features.tsv.gz`, `barcodes.tsv.gz`,
+`matrix.mtx.gz`, `metrics_summary.json`, and an stderr `RUN SUMMARY`.
+
+The three coordinate-sliced Cell Ranger fixtures can be checked with:
+
+```bash
+./tests/validate_cr_bam_to_mtx.sh /path/to/test_fixtures
 ```
 
 See **[INSTALL.md](INSTALL.md)** for the full operations manual: system requirements,
