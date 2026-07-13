@@ -1,8 +1,8 @@
-# sbx10x — Installation & Operations Manual (Ubuntu)
+# sbx10x — Installation & Operations Manual (Ubuntu and macOS)
 
 `sbx10x` converts raw Roche SBX long reads (one full library molecule per read,
 P5→P7) into per-sample 10x R1/R2 FASTQs ready for Cell Ranger ARC. This guide
-covers installing and running it on an Ubuntu server.
+covers installing and running it on Ubuntu/Debian and macOS.
 
 ---
 
@@ -10,12 +10,13 @@ covers installing and running it on an Ubuntu server.
 
 | | Recommended |
 |---|---|
-| OS | Ubuntu 20.04 LTS or newer (any Debian-family distro works) |
+| OS | Ubuntu 20.04+ / Debian-family Linux, or macOS with Homebrew |
 | CPU | 8+ cores; scales across files (a 64–128-core node clears a full run in minutes) |
 | RAM | 4 GB minimum; ~0.5 GB peak per ~14 worker threads. The barcode whitelist adds ~50 MB |
 | Disk | Free space ≥ ~1× the size of your input FASTQs for the output |
 | Toolchain | Rust 1.74+ (the installer fetches the latest stable via rustup if absent) |
-| Build deps | `build-essential`, `pkg-config`, `cmake`, `clang`, and `libclang-dev` (the latter three build the HTSlib BAM reader used by `cr-bam-to-mtx`) |
+| Build deps | Linux: `build-essential`, `pkg-config`, `cmake`, `clang`, `libclang-dev`; macOS: Xcode Command Line Tools plus Homebrew `cmake` and `pkg-config` |
+| Alignment tools | `minimap2` and `samtools` (installed automatically by apt/Homebrew) |
 
 Throughput reference (Apple M4 Pro, 14 cores): ~142K reads/s single-thread,
 ~1.3M reads/s at 14 threads → **~13 min per billion reads**. Server CPUs with
@@ -33,8 +34,8 @@ From the `sbx10x` source directory:
 
 This will:
 
-1. `apt-get install` build prerequisites (`build-essential`, `cmake`, `clang`,
-   `libclang-dev`, and supporting packages).
+1. Install build prerequisites, `minimap2`, and `samtools` using `apt-get` on
+   Ubuntu/Debian or Homebrew on macOS.
 2. Install the Rust toolchain via rustup if `cargo` is not already on `PATH`.
 3. Build the optimized release binaries (`cargo build --release --locked`).
 4. Install `sbx10x` and `cr-bam-to-mtx` to `/usr/local/bin/`.
@@ -47,7 +48,8 @@ Common variants:
 ```bash
 ./install.sh --prefix "$HOME/.local"          # user-local install (no sudo)
 ./install.sh --whitelist /data/737K-arc-v1.txt.gz
-./install.sh --skip-apt                         # packages already present / no sudo
+./install.sh --skip-packages                    # packages already present / no sudo
+./install.sh --skip-apt                         # legacy alias for --skip-packages
 ./install.sh --skip-rust                        # use the cargo already installed
 ```
 
@@ -64,6 +66,8 @@ sbx10x --version
 sbx10x --help
 cr-bam-to-mtx --version
 cr-bam-to-mtx --help
+minimap2 --version
+samtools --version
 ```
 
 ### BAM to raw gene-expression matrix

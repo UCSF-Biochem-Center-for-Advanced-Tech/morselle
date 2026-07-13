@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
-# sbx10x installer for Ubuntu (also works on most Debian-family systems).
+# sbx10x installer for Ubuntu/Debian and macOS.
 #
 # Installs build prerequisites, the Rust toolchain (if missing), builds the
 # release binaries, and installs them (plus the ARC whitelist, if available) under
 # a prefix. Idempotent and safe to re-run.
 #
 # Usage:
-#   ./install.sh [--prefix DIR] [--whitelist PATH] [--skip-apt] [--skip-rust]
+#   ./install.sh [--prefix DIR] [--whitelist PATH] [--skip-packages] [--skip-rust]
 #
 # Options:
 #   --prefix DIR      install root (default: /usr/local). Binary -> DIR/bin,
@@ -15,8 +15,8 @@
 #   --whitelist PATH  path to 737K-arc-v1.txt.gz to install. If omitted, the
 #                     copy bundled in resources/cellranger_barcodes/ is used
 #                     when present.
-#   --skip-apt        do not run apt-get (use when packages are already present
-#                     or you lack sudo).
+#   --skip-packages   do not run apt-get/Homebrew (packages must already exist).
+#   --skip-apt        backward-compatible alias for --skip-packages.
 #   --skip-rust       do not install rustup (use the cargo already on PATH).
 #   -h, --help        show this help.
 #
@@ -24,7 +24,7 @@ set -euo pipefail
 
 PREFIX="/usr/local"
 WHITELIST=""
-SKIP_APT=0
+SKIP_PACKAGES=0
 SKIP_RUST=0
 
 log()  { printf '\033[1;36m[sbx10x]\033[0m %s\n' "$*"; }
@@ -35,9 +35,9 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --prefix)    PREFIX="${2:?--prefix needs a value}"; shift 2 ;;
     --whitelist) WHITELIST="${2:?--whitelist needs a value}"; shift 2 ;;
-    --skip-apt)  SKIP_APT=1; shift ;;
+    --skip-packages|--skip-apt) SKIP_PACKAGES=1; shift ;;
     --skip-rust) SKIP_RUST=1; shift ;;
-    -h|--help)   sed -n '2,30p' "$0"; exit 0 ;;
+    -h|--help)   sed -n '2,21p' "$0"; exit 0 ;;
     *)           die "unknown option: $1 (try --help)" ;;
   esac
 done
@@ -59,20 +59,34 @@ if [[ $EUID -ne 0 ]] && ! writable_prefix; then
   SUDO="sudo"
 fi
 
-# 1. System build prerequisites -------------------------------------------------
-if [[ $SKIP_APT -eq 0 ]] && command -v apt-get >/dev/null 2>&1; then
+# 1. System packages ------------------------------------------------------------
+OS="$(uname -s)"
+if [[ $SKIP_PACKAGES -eq 1 ]]; then
+  log "skipping system packages (--skip-packages)."
+elif [[ "$OS" == "Linux" ]] && command -v apt-get >/dev/null 2>&1; then
   APT_SUDO=""
   if [[ $EUID -ne 0 ]]; then
-    command -v sudo >/dev/null 2>&1 || die "apt-get needs root; install prereqs manually or re-run with --skip-apt"
+    command -v sudo >/dev/null 2>&1 || die "apt-get needs root; install packages manually or re-run with --skip-packages"
     APT_SUDO="sudo"
   fi
-  log "installing build prerequisites via apt-get..."
+  log "installing build prerequisites, minimap2, and samtools via apt-get..."
   $APT_SUDO apt-get update -y
-  $APT_SUDO apt-get install -y build-essential curl pkg-config git ca-certificates cmake clang libclang-dev
+  $APT_SUDO apt-get install -y \
+    build-essential curl pkg-config git ca-certificates cmake clang libclang-dev \
+    minimap2 samtools
+elif [[ "$OS" == "Darwin" ]]; then
+  command -v brew >/dev/null 2>&1 || die "Homebrew is required on macOS; install it from https://brew.sh or use --skip-packages"
+  log "installing build prerequisites, minimap2, and samtools via Homebrew..."
+  brew install cmake pkg-config minimap2 samtools
 else
-  log "skipping apt-get (--skip-apt or apt-get not found)."
-  command -v cc >/dev/null 2>&1 || warn "no C compiler found; install build-essential."
+  die "unsupported package manager; install a C compiler, cmake, clang, minimap2, and samtools, then use --skip-packages"
 fi
+
+command -v cc >/dev/null 2>&1 || die "no C compiler found"
+command -v minimap2 >/dev/null 2>&1 || die "minimap2 not found after package setup"
+command -v samtools >/dev/null 2>&1 || die "samtools not found after package setup"
+log "using minimap2 $(minimap2 --version)"
+log "using samtools $(samtools --version-only)"
 
 # 2. Rust toolchain -------------------------------------------------------------
 if ! command -v cargo >/dev/null 2>&1; then

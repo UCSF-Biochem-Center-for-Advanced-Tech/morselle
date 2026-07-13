@@ -1,19 +1,12 @@
 # Changelog
 
-## Unreleased
-
-- Added the `cr-bam-to-mtx` companion app for reconstructing Cell Ranger raw GEX
-  matrices from corrected BAM molecule tags, with gzip/plain output, optional
-  feature/barcode templates, structured run metrics, and fixture validation.
-- The installer now builds, installs, and verifies both command-line apps.
-- `cr-bam-to-mtx` now emits the Cell Ranger `outs/raw_feature_bc_matrix/` MEX
-  directory and its `outs/raw_feature_bc_matrix.h5` CSC-format neighbor.
-
 All notable changes to `sbx10x` are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.3.0] — 2026-07-12
 
 ### Changed
 - **`--realign` (single-indel CB rescue) is now ON by default** (was off). Analysis of
@@ -26,6 +19,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   barcodes ~4–10× above chance. The flag is now settable (`--realign true|false`).
 
 ### Added
+- `cr-bam-to-mtx`: reconstructs Cell Ranger raw GEX matrices from corrected BAM
+  molecule tags, including Cell Ranger-compatible MEX coordinate ordering, the
+  `outs/raw_feature_bc_matrix/` layout, and its CSC HDF5 neighbor
+  `outs/raw_feature_bc_matrix.h5`.
+- Structured `metrics_summary.json`, a `RUN SUMMARY`, and fixture validation for
+  `cr-bam-to-mtx`.
+- The installer now builds, installs, and verifies both command-line apps.
+- The installer installs and verifies `minimap2` and `samtools` through
+  `apt-get` on Ubuntu/Debian and Homebrew on macOS.
 - Diagnostic examples: `lenient_precision` and `realign_precision` (recall/precision of
   the within-2 and single-indel CB rescues via error injection), `cb_error_profile`
   (CB substitution position/type + frame tests), and `realign_concordance` (real-data
@@ -99,5 +101,6 @@ R1/R2 FASTQs for Cell Ranger ARC.
 - End-of-run RUN SUMMARY report: timing, throughput, and lost breakdown.
 - Ubuntu install script (`install.sh`) and installation manual (`INSTALL.md`).
 
-[Unreleased]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbx10x/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbx10x/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbx10x/releases/tag/v0.3.0
 [0.2.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbx10x/releases/tag/v0.2.0

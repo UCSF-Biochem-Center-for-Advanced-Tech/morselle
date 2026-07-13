@@ -43,14 +43,15 @@ Illumina paired-end convention and maps sense to the gene.
 
 ## Install
 
-From the source directory on an Ubuntu/Debian host:
+From the source directory on Ubuntu/Debian or macOS:
 
 ```bash
 ./install.sh
 ```
 
-This installs build prerequisites, the Rust toolchain (via rustup if absent), builds
-the optimized binary, and installs it to `/usr/local/bin/sbx10x`. User-local install
+This installs build prerequisites, `minimap2`, `samtools`, and the Rust toolchain
+(via rustup if absent), builds the optimized binaries, and installs them under
+`/usr/local/bin`. Linux uses `apt-get`; macOS uses Homebrew. User-local install
 without sudo:
 
 ```bash
