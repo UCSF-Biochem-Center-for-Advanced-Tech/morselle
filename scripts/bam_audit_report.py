@@ -21,7 +21,9 @@ Usage:  python3 bam_audit_report.py <bam_audit_out_dir>
 """
 import gzip
 import json
+import math
 import sys
+from collections import Counter
 from pathlib import Path
 
 ORDER = [("illumina", "ILLUMINA"), ("p5", "SBX p5"), ("p7", "SBX p7")]
@@ -61,6 +63,19 @@ def load_molecules(d, tag):
 
 def pct(x, d):
     return 100.0 * x / d if d else 0.0
+
+
+def pearson(a, b):
+    """Pearson correlation over the union of keys, treating absence as zero."""
+    keys = a.keys() | b.keys()
+    if len(keys) < 2:
+        return float("nan")
+    av = sum(a.get(k, 0) for k in keys) / len(keys)
+    bv = sum(b.get(k, 0) for k in keys) / len(keys)
+    cov = sum((a.get(k, 0) - av) * (b.get(k, 0) - bv) for k in keys)
+    va = sum((a.get(k, 0) - av) ** 2 for k in keys)
+    vb = sum((b.get(k, 0) - bv) ** 2 for k in keys)
+    return cov / math.sqrt(va * vb) if va and vb else float("nan")
 
 
 def contamination(js):
@@ -146,7 +161,7 @@ def mapping(js):
                   f"{pct(b['mismatches'], b['aligned_bases']):>8.3f}")
 
 
-def concordance(mols):
+def concordance(mols, sample_rate):
     print("\n" + "=" * 78)
     print("3. MOLECULE CONCORDANCE   (same CB+UMI, counted representative: same gene?)")
     print("=" * 78)
@@ -157,13 +172,25 @@ def concordance(mols):
         if not a or not b:
             continue
         shared = [k for k in a.keys() & b.keys() if a[k]["counted"] and b[k]["counted"]]
+        ac = {k for k, value in a.items() if value["counted"]}
+        bc = {k for k, value in b.items() if value["counted"]}
         n = len(shared)
         agree = sum(1 for k in shared if a[k]["gene"] == b[k]["gene"])
         print(f"\n  {names[x]} vs {names[y]}{'  (long-vs-long control)' if x == 'p5' else ''}")
+        print(f"    counted molecule keys (sampled; ~estimated at 1/{sample_rate}):")
+        print(f"      shared       {len(ac & bc):>9,}  ~{len(ac & bc) * sample_rate:>12,}")
+        print(f"      {names[x]:<10} only {len(ac - bc):>9,}  ~{len(ac - bc) * sample_rate:>12,}")
+        print(f"      {names[y]:<10} only {len(bc - ac):>9,}  ~{len(bc - ac) * sample_rate:>12,}")
         print(f"    both counted a molecule with a gene: {n:,}")
         if n:
             print(f"    agree            {agree:>9,}   {100.0*agree/n:6.2f}%")
             print(f"    different gene   {n-agree:>9,}   {100.0*(n-agree)/n:6.2f}%")
+        cells_a = Counter(k[0] for k in ac)
+        cells_b = Counter(k[0] for k in bc)
+        genes_a = Counter(g for k in ac for g in a[k]["gene"])
+        genes_b = Counter(g for k in bc for g in b[k]["gene"])
+        print(f"    per-cell molecule Pearson r: {pearson(cells_a, cells_b):.4f}")
+        print(f"    per-gene molecule Pearson r: {pearson(genes_a, genes_b):.4f}")
 
 
 def advantage(mols):
@@ -234,7 +261,7 @@ def main():
     mols = {tag: load_molecules(d, tag) for tag, _ in ORDER}
     contamination(js)
     mapping(js)
-    concordance(mols)
+    concordance(mols, next(iter(samples)))
     advantage(mols)
 
 

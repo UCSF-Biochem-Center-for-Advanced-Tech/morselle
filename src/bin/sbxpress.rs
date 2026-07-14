@@ -12,6 +12,7 @@ const HELP: &str = "sbxpress — SBX single-cell gene-expression processing\n\n\
 Usage: sbxpress <COMMAND> [ARGUMENTS]\n\n\
 Commands:\n\
   extract    Extract and demultiplex tagged cDNA FASTQs from raw SBX reads\n\
+  illumina   Convert paired Illumina 10x FASTQs to tagged R2-only FASTQ\n\
   minimap    Run minimap2 with transparent argument and stream forwarding\n\
   annotate   Add gene, transcript, region, and collision annotations to BAM\n\
   molecules  Correct UMIs, resolve gene collisions, and mark representatives\n\
@@ -37,6 +38,7 @@ fn helper_dir(executable: &Path) -> Option<PathBuf> {
 fn engine(command: &str) -> Option<&'static str> {
     match command {
         "extract" => Some("sbx10x"),
+        "illumina" => Some("sbxpress-illumina"),
         "annotate" => Some("sbx10x-annotate"),
         "molecules" => Some("sbx10x-molecules"),
         "audit" => Some("bam-audit"),
@@ -106,6 +108,7 @@ mod tests {
     #[test]
     fn every_public_engine_has_a_private_helper() {
         assert_eq!(engine("extract"), Some("sbx10x"));
+        assert_eq!(engine("illumina"), Some("sbxpress-illumina"));
         assert_eq!(engine("annotate"), Some("sbx10x-annotate"));
         assert_eq!(engine("molecules"), Some("sbx10x-molecules"));
         assert_eq!(engine("audit"), Some("bam-audit"));

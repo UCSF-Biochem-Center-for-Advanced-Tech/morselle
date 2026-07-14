@@ -142,6 +142,24 @@ The standard tags preserve all compatible assignments. Additional local-use tags
 gene/transcript subsets and `XP`, the terminal-supported gene count. Those tags
 and their JSON resolution metrics are not emitted for other assay types.
 
+### Convert matched Illumina FASTQs
+
+For a platform-controlled comparison, convert standard 10x Illumina R1/R2 files
+to the same tagged R2-only handoff produced by `sbxpress extract --minimap2`:
+
+```bash
+sbxpress illumina \
+  --r1 sample_L001_R1_001.fastq.gz \
+  --r2 sample_L001_R2_001.fastq.gz \
+  --whitelist /usr/local/share/sbxpress/barcodes/3M-february-2018.txt.gz \
+  --output sample.illumina.minimap.fastq.gz
+```
+
+Repeat `--r1` and `--r2` in matching order for additional lanes. The converter
+checks mate names and record counts, reads the 16 bp barcode plus 12 bp UMI from
+R1, preserves R2 orientation, and emits `CR`, `CB`, `UR`, `UB`, `CY`, and `UY`.
+Its JSON metrics default to `<output>.metrics.json`.
+
 ### BAM to raw gene-expression matrix
 
 The second installed app reconstructs Cell Ranger molecule counts from a complete

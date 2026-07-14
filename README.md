@@ -162,6 +162,21 @@ Eligible reads receive `xf=17`; the selected representative receives `xf=25`
 (Cell Ranger bit 8). `XV` records the molecule-level gene collision degree and
 `XW` records `U`nique, `W`inner, `L`oser, or unresolved `T`ie. Ties are not counted.
 
+Audit a molecule BAM with comparison-ready mapping, annotation, collision, UMI,
+and sensitivity metrics:
+
+```bash
+sbxpress audit sample.molecules.coordinate.bam \
+  --label SBX --output sample.audit.json \
+  --molecules sample.molecules.tsv.gz --molecule-sample 64
+```
+
+The JSON includes mapping and region counts, gene/transcript compatibility
+degrees, exact `xf` bit/value counts, UMI-corrected records, SBX `XW` outcome
+record counts, detected genes/cells, and the mean/median/P10/P90/max molecules per
+cell. Consistent molecule subsamples support platform-only molecule estimates,
+gene agreement, and per-cell/per-gene concordance in `scripts/bam_audit_report.py`.
+
 The three coordinate-sliced Cell Ranger fixtures can be checked with:
 
 ```bash
@@ -292,6 +307,30 @@ sbxpress minimap -a -x splice -uf -k14 --secondary=no -y reference.mmi /data/out
 Do not create a combined barcode+UMI tag at this stage. Group records by `(CB, UR)`
 for UMI correction, then by `(CB, UB, gene)` after gene assignment; an `MI` tag, if
 needed, should be generated only at that downstream molecule-calling step.
+
+### Illumina input for matched-platform comparisons
+
+`sbxpress illumina` converts standard paired 10x Illumina FASTQs into the same
+R2-only minimap2 handoff used by `sbxpress extract --minimap2`. R1 supplies the
+16 bp cell barcode and 12 bp UMI; R2 is emitted unchanged because Illumina R2 is
+already in mapping orientation. Exact and uniquely resolvable Hamming-1 cell
+barcodes are retained, while invalid, absent, and ambiguous barcodes are gated.
+
+Repeat `--r1` and `--r2` in matching order for multiple lanes or shards:
+
+```bash
+sbxpress illumina \
+  --r1 sample_L001_R1_001.fastq.gz --r2 sample_L001_R2_001.fastq.gz \
+  --r1 sample_L002_R1_001.fastq.gz --r2 sample_L002_R2_001.fastq.gz \
+  --whitelist resources/cellranger_barcodes/3M-february-2018.txt.gz \
+  --output sample.illumina.minimap.fastq.gz
+
+sbxpress minimap -a -x splice:sr --secondary=no -y reference.mmi \
+  sample.illumina.minimap.fastq.gz | sbxpress annotate - --gtf genes.gtf --output -
+```
+
+The output comments carry `CR`, `CB`, `UR`, `UB`, `CY`, and `UY`. A JSON report
+is written to `<output>.metrics.json` unless `--metrics` specifies another path.
 
 ---
 

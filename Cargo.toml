@@ -1,6 +1,6 @@
 [package]
 name = "sbxpress"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 description = "Convert raw Roche SBX reads into per-sample 10x R1/R2 FASTQs for Cell Ranger"
 
@@ -23,6 +23,10 @@ path = "src/bin/sbx10x-molecules.rs"
 [[bin]]
 name = "sbxpress"
 path = "src/bin/sbxpress.rs"
+
+[[bin]]
+name = "sbxpress-illumina"
+path = "src/bin/sbxpress-illumina.rs"
 
 [dependencies]
 needletail = "0.5"

@@ -6,6 +6,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-07-13
+
+### Added
+- `sbxpress illumina` converts paired 10x Illumina R1/R2 FASTQs into the same
+  whitelist-corrected, minimap2-tagged R2-only handoff produced by SBX extraction.
+- `sbxpress audit` now reports explicit mapped/unique-gene counts, Cell Ranger
+  `xf` values and bits, UMI correction impact, SBX collision outcome records,
+  detected genes/cells, and molecules-per-cell distributions. The comparison
+  report adds platform-only molecules and per-cell/per-gene concordance.
+
 ## [0.3.1] — 2026-07-13
 
 ### Fixed
@@ -139,7 +149,8 @@ R1/R2 FASTQs for Cell Ranger ARC.
 - End-of-run RUN SUMMARY report: timing, throughput, and lost breakdown.
 - Ubuntu install script (`install.sh`) and installation manual (`INSTALL.md`).
 
-[Unreleased]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbx10x/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbx10x/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbx10x/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbx10x/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbx10x/releases/tag/v0.3.0
 [0.2.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbx10x/releases/tag/v0.2.0

@@ -40,7 +40,7 @@ use clap::{CommandFactory, FromArgMatches, Parser};
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use rust_htslib::bam::{self, record::Cigar, Read};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::Serialize;
 
 /// Longest read-length bin edge; everything above lands in the final bin.
@@ -138,6 +138,21 @@ fn splitmix64(mut z: u64) -> u64 {
     x ^ (x >> 31)
 }
 
+/// Stable FNV-1a hash for variable-length molecule components. This is used only
+/// for bounded-memory cardinality sampling, not identity reconstruction.
+fn stable_hash(parts: &[&[u8]]) -> u64 {
+    let mut value = 0xcbf29ce484222325u64;
+    for part in parts {
+        for &byte in *part {
+            value ^= byte as u64;
+            value = value.wrapping_mul(0x100000001b3);
+        }
+        value ^= 0xff;
+        value = value.wrapping_mul(0x100000001b3);
+    }
+    value
+}
+
 /// 2-bit pack a barcode/UMI; None on any non-ACGT base.
 fn pack(s: &[u8]) -> Option<u64> {
     let mut c = 0u64;
@@ -209,12 +224,30 @@ struct LenBin {
 }
 
 #[derive(Default, Serialize)]
+struct MoleculesPerCell {
+    mean: f64,
+    median: f64,
+    p10: f64,
+    p90: f64,
+    max: u64,
+}
+
+#[derive(Default, Serialize)]
+struct CollisionOutcomeRecords {
+    unique: u64,
+    won: u64,
+    lost: u64,
+    tie: u64,
+}
+
+#[derive(Default, Serialize)]
 struct Audit {
     label: String,
     bam: String,
     // totals
     records: u64,
     primary: u64,
+    mapped: u64,
     unmapped: u64,
     // mapping / annotation (primary mapped only)
     unique_nh1: u64,
@@ -223,6 +256,7 @@ struct Audit {
     intronic: u64,
     intergenic: u64,
     gene_called: u64,
+    unique_gene_called: u64,
     multi_gene: u64,
     /// Compatibility degree histograms: buckets 0, 1, 2, 3, and 4+.
     gene_degree: [u64; 5],
@@ -245,6 +279,23 @@ struct Audit {
     // molecules
     reads_with_cb_umi: u64,
     molecules: u64, // xf bit-8 representatives (Cell Ranger's counted molecules)
+    /// Exact Cell Ranger/sbxpress xf values most relevant to molecule counting.
+    xf_17_eligible: u64,
+    xf_25_representative: u64,
+    /// Individual xf bit counts (a record may contribute to several fields).
+    xf_confident_transcriptome: u64,
+    xf_discarded_feature: u64,
+    xf_discordant_genes: u64,
+    xf_representative: u64,
+    xf_single_feature: u64,
+    xf_targeted_filtered: u64,
+    umi_corrected_records: u64,
+    raw_umi_nodes_sampled: u64,
+    raw_umi_nodes_est: u64,
+    collision_outcome_records: CollisionOutcomeRecords,
+    genes_detected: u64,
+    cells_detected: u64,
+    molecules_per_cell: MoleculesPerCell,
     molecules_emitted: u64,
     /// Subsample rate used for both the dump and the distinct-molecule estimate.
     molecule_sample: u64,
@@ -359,6 +410,9 @@ fn main() -> Result<()> {
     };
     // Per-molecule evidence for the subsample. Bounded: ~distinct_molecules / sample.
     let mut sampled: FxHashMap<u64, MolAccum> = FxHashMap::default();
+    let mut counted_per_cell: FxHashMap<String, u64> = FxHashMap::default();
+    let mut detected_genes: FxHashSet<String> = FxHashSet::default();
+    let mut sampled_raw_umi_nodes: FxHashSet<u64> = FxHashSet::default();
 
     let mut rec = bam::Record::new();
     while let Some(r) = reader.read(&mut rec) {
@@ -372,6 +426,7 @@ fn main() -> Result<()> {
             a.unmapped += 1;
             continue;
         }
+        a.mapped += 1;
 
         // --- read-orientation sequence + cigar (BAM stores both reference-oriented) ---
         let mut seq = rec.seq().as_bytes();
@@ -451,6 +506,8 @@ fn main() -> Result<()> {
             if gx.contains(';') {
                 a.multi_gene += 1;
                 b.multi_gene += 1;
+            } else {
+                a.unique_gene_called += 1;
             }
         }
         let gx_degree = if gx.is_empty() {
@@ -490,10 +547,45 @@ fn main() -> Result<()> {
         // --- molecules ---
         let cb = aux_str(&rec, b"CB").map(|s| s.split('-').next().unwrap_or(s));
         let ub = aux_str(&rec, b"UB");
+        let ur = aux_str(&rec, b"UR");
+        if ur.zip(ub).is_some_and(|(raw, corrected)| raw != corrected) {
+            a.umi_corrected_records += 1;
+        }
+        if xf == 17 {
+            a.xf_17_eligible += 1;
+        }
+        if xf == 25 {
+            a.xf_25_representative += 1;
+        }
+        a.xf_confident_transcriptome += ((xf & 1) != 0) as u64;
+        a.xf_discarded_feature += ((xf & 2) != 0) as u64;
+        a.xf_discordant_genes += ((xf & 4) != 0) as u64;
+        a.xf_representative += ((xf & 8) != 0) as u64;
+        a.xf_single_feature += ((xf & 16) != 0) as u64;
+        a.xf_targeted_filtered += ((xf & 32) != 0) as u64;
+        match aux_char(&rec, b"XW") {
+            Some(b'U') => a.collision_outcome_records.unique += 1,
+            Some(b'W') => a.collision_outcome_records.won += 1,
+            Some(b'L') => a.collision_outcome_records.lost += 1,
+            Some(b'T') => a.collision_outcome_records.tie += 1,
+            _ => {}
+        }
+        if let (Some(cbs), Some(raw_umi)) = (cb, ur) {
+            if !gx.is_empty() {
+                let key = stable_hash(&[cbs.as_bytes(), raw_umi.as_bytes(), gx.as_bytes()]);
+                if cli.molecule_sample <= 1 || splitmix64(key) % cli.molecule_sample == 0 {
+                    sampled_raw_umi_nodes.insert(key);
+                }
+            }
+        }
         if let (Some(cbs), Some(ubs)) = (cb, ub) {
             a.reads_with_cb_umi += 1;
             if xf & 8 != 0 {
                 a.molecules += 1;
+                *counted_per_cell.entry(cbs.to_string()).or_default() += 1;
+                for gene in gx.split(';').filter(|gene| !gene.is_empty()) {
+                    detected_genes.insert(gene.to_string());
+                }
             }
             // Consistent hash-subsample keyed on (CB,UMI) only: the SAME molecules are
             // selected in every BAM (dumps join), and every read of a sampled molecule
@@ -562,6 +654,25 @@ fn main() -> Result<()> {
         w.finish()?.flush()?;
     }
     a.sampled_molecules = sampled.len() as u64;
+    a.raw_umi_nodes_sampled = sampled_raw_umi_nodes.len() as u64;
+    a.raw_umi_nodes_est = a.raw_umi_nodes_sampled * a.molecule_sample;
+    a.genes_detected = detected_genes.len() as u64;
+    a.cells_detected = counted_per_cell.len() as u64;
+    let mut cell_counts: Vec<u64> = counted_per_cell.into_values().collect();
+    cell_counts.sort_unstable();
+    if !cell_counts.is_empty() {
+        let quantile = |fraction: f64| -> f64 {
+            let index = ((cell_counts.len() - 1) as f64 * fraction).round() as usize;
+            cell_counts[index] as f64
+        };
+        a.molecules_per_cell = MoleculesPerCell {
+            mean: a.molecules as f64 / cell_counts.len() as f64,
+            median: quantile(0.5),
+            p10: quantile(0.1),
+            p90: quantile(0.9),
+            max: *cell_counts.last().unwrap_or(&0),
+        };
+    }
     a.distinct_molecules_est = a.sampled_molecules * a.molecule_sample;
     a.reads_per_molecule = if a.sampled_molecules > 0 {
         a.sampled_reads_with_cb_umi as f64 / a.sampled_molecules as f64
@@ -580,7 +691,7 @@ fn main() -> Result<()> {
     std::fs::write(&cli.output, json)
         .with_context(|| format!("cannot write {}", cli.output.display()))?;
 
-    let mapped = a.primary - a.unmapped;
+    let mapped = a.mapped;
     let pct = |x: u64, d: u64| {
         if d > 0 {
             100.0 * x as f64 / d as f64
@@ -596,7 +707,8 @@ fn main() -> Result<()> {
          exonic {:.2}%  intronic {:.2}%  intergenic {:.2}%\n  \
          softclip {:.2}% of read bases   heavily-clipped {:.2}%   nM/100bp {:.3}\n  \
          contamination (% of mapped reads):  adapter {:.3}%  TSO {:.3}%  polyA(3') {:.3}%  polyT(5') {:.3}%\n  \
-         counted molecules {}  reads/molecule {:.2}  UMIs/read {:.4}\n  \
+         counted molecules {}  genes {}  cells {}  median molecules/cell {:.1}\n  \
+         reads/molecule {:.2}  UMIs/read {:.4}  UMI-corrected records {}\n  \
          subsample 1/{}  distinct molecules ~{}  dumped {}\n  \
          {:.1}s  {} rec/s  -> {}",
         a.label, a.records, a.primary, a.unmapped, pct(a.unmapped, a.primary),
@@ -608,8 +720,10 @@ fn main() -> Result<()> {
         pct(a.clip5.tso + a.clip3.tso, mapped),
         pct(a.clip3.poly_a, mapped),
         pct(a.clip5.poly_t, mapped),
-        a.molecules, a.reads_per_molecule,
+        a.molecules, a.genes_detected, a.cells_detected, a.molecules_per_cell.median,
+        a.reads_per_molecule,
         if mapped > 0 { a.molecules as f64 / mapped as f64 } else { 0.0 },
+        a.umi_corrected_records,
         a.molecule_sample, a.distinct_molecules_est, a.molecules_emitted,
         a.elapsed_secs, a.records_per_sec, cli.output.display()
     );

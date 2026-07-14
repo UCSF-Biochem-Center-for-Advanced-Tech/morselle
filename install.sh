@@ -115,6 +115,7 @@ fi
 [[ -x target/release/bam-audit ]] || die "build did not produce target/release/bam-audit"
 [[ -x target/release/cr-bam-to-mtx ]] || die "build did not produce target/release/cr-bam-to-mtx"
 [[ -x target/release/sbxpress ]] || die "build did not produce target/release/sbxpress"
+[[ -x target/release/sbxpress-illumina ]] || die "build did not produce target/release/sbxpress-illumina"
 
 # 4. Install public CLI and private engines ------------------------------------
 BIN_DIR="$PREFIX/bin"
@@ -123,7 +124,7 @@ log "installing public command -> $BIN_DIR/sbxpress"
 $SUDO install -d "$BIN_DIR"
 $SUDO install -m 0755 target/release/sbxpress "$BIN_DIR/sbxpress"
 $SUDO install -d "$LIBEXEC_DIR"
-for helper in sbx10x sbx10x-annotate sbx10x-molecules bam-audit cr-bam-to-mtx; do
+for helper in sbx10x sbxpress-illumina sbx10x-annotate sbx10x-molecules bam-audit cr-bam-to-mtx; do
   log "installing private engine -> $LIBEXEC_DIR/$helper"
   $SUDO install -m 0755 "target/release/$helper" "$LIBEXEC_DIR/$helper"
 done
