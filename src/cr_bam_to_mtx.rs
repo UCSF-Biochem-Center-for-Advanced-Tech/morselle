@@ -57,20 +57,20 @@ pub struct Cli {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-struct Feature {
-    id: String,
-    name: String,
+pub(crate) struct Feature {
+    pub(crate) id: String,
+    pub(crate) name: String,
 }
 
 #[derive(Debug, Default)]
-struct Matrix {
-    features: Vec<Feature>,
-    barcodes: Vec<String>,
+pub(crate) struct Matrix {
+    pub(crate) features: Vec<Feature>,
+    pub(crate) barcodes: Vec<String>,
     /// (barcode index, feature index) -> molecule count. Keeping the barcode
     /// first makes Matrix Market output match Cell Ranger's column-major order.
-    counts: BTreeMap<(usize, usize), u64>,
-    records: u64,
-    molecules: u64,
+    pub(crate) counts: BTreeMap<(usize, usize), u64>,
+    pub(crate) records: u64,
+    pub(crate) molecules: u64,
 }
 
 /// Machine-readable run accounting, following the main `sbx10x` app.
@@ -321,7 +321,7 @@ fn writer(path: &Path, gzip: bool) -> Result<Box<dyn Write>> {
     }
 }
 
-fn write_matrix(matrix: &Matrix, output: &Path, gzip: bool) -> Result<()> {
+pub(crate) fn write_matrix(matrix: &Matrix, output: &Path, gzip: bool) -> Result<()> {
     fs::create_dir_all(output).with_context(|| format!("creating {}", output.display()))?;
     let suffix = if gzip { ".gz" } else { "" };
     let mut features = writer(&output.join(format!("features.tsv{suffix}")), gzip)?;
@@ -363,7 +363,7 @@ fn ascii(value: &str, field: &str) -> Result<VarLenAscii> {
 
 /// Write the standard 10x CSC HDF5 feature-barcode matrix alongside the MEX
 /// directory. The barcode-major BTreeMap is already in CSC traversal order.
-fn write_h5(matrix: &Matrix, path: &Path, genome: &str) -> Result<()> {
+pub(crate) fn write_h5(matrix: &Matrix, path: &Path, genome: &str) -> Result<()> {
     let file = hdf5::File::create(path).with_context(|| format!("creating {}", path.display()))?;
     let group = file.create_group("matrix")?;
     let features = group.create_group("features")?;

@@ -116,6 +116,22 @@ The H5 file stores the same matrix in 10x CSC format. `--genome` supplies its
 feature genome label because that value cannot be recovered reliably from a BAM.
 Every run also prints an stderr `RUN SUMMARY`.
 
+Call cells from the raw HDF5 matrix and create Cell Ranger-style filtered
+matrices with the two-stage 10x GEX procedure (OrdMag followed by multinomial
+EmptyDrops):
+
+```bash
+sbxpress cells outs/raw_feature_bc_matrix.h5 --output outs
+```
+
+For NextGEM/5′ chemistry, defaults follow Cell Ranger: ambient barcode ranks
+45,000–90,000, at least 500 UMIs (raised above the ambient maximum), 100,000
+Monte Carlo simulations, and 0.001 Benjamini-Hochberg FDR. Use
+`--expect-cells N` when recovery is known, or `--force-cells N` to select exactly
+the top N nonzero barcodes without EmptyDrops. Outputs include
+`filtered_feature_bc_matrix/`, `filtered_feature_bc_matrix.h5`,
+`filtered_barcodes.csv`, `cell_calls.csv`, and `cell_calling_metrics.json`.
+
 The installed `sbxpress annotate` stage assigns alignments against a GENCODE-style
 GTF and adds Cell Ranger-compatible `GX`, `GN`, `TX`, `AN`, and `RE` tags:
 
@@ -316,21 +332,28 @@ R2-only minimap2 handoff used by `sbxpress extract --minimap2`. R1 supplies the
 already in mapping orientation. Exact and uniquely resolvable Hamming-1 cell
 barcodes are retained, while invalid, absent, and ambiguous barcodes are gated.
 
-Repeat `--r1` and `--r2` in matching order for multiple lanes or shards:
+Repeat `--r1` and `--r2` in matching order for multiple lanes or shards. File
+pairs are converted concurrently (`--threads` limits the lane workers) and a
+separate numbered output shard is created for each pair:
 
 ```bash
 sbxpress illumina \
   --r1 sample_L001_R1_001.fastq.gz --r2 sample_L001_R2_001.fastq.gz \
   --r1 sample_L002_R1_001.fastq.gz --r2 sample_L002_R2_001.fastq.gz \
   --whitelist resources/cellranger_barcodes/3M-february-2018.txt.gz \
-  --output sample.illumina.minimap.fastq.gz
+  --output sample.illumina.minimap.fastq.gz \
+  --threads 2
 
 sbxpress minimap -a -x splice:sr --secondary=no -y reference.mmi \
-  sample.illumina.minimap.fastq.gz | sbxpress annotate - --gtf genes.gtf --output -
+  sample.illumina.minimap.shard-*.fastq.gz \
+  | sbxpress annotate - --gtf genes.gtf --output -
 ```
 
-The output comments carry `CR`, `CB`, `UR`, `UB`, `CY`, and `UY`. A JSON report
-is written to `<output>.metrics.json` unless `--metrics` specifies another path.
+For one input pair, the requested output filename is retained. For multiple
+pairs, outputs are named `*.shard-001.fastq.gz`, `*.shard-002.fastq.gz`, and so
+on. Their comments carry `CR`, `CB`, `UR`, `UB`, `CY`, and `UY`. A combined JSON
+report lists every shard and is written to `<output>.metrics.json` unless
+`--metrics` specifies another path.
 
 ---
 

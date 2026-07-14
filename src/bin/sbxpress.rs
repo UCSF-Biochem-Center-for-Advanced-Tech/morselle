@@ -17,7 +17,8 @@ Commands:\n\
   annotate   Add gene, transcript, region, and collision annotations to BAM\n\
   molecules  Correct UMIs, resolve gene collisions, and mark representatives\n\
   audit      Audit mapping, annotation, trimming, and molecule metrics\n\
-  matrix     Create Cell Ranger-compatible raw feature-barcode matrices\n\n\
+  matrix     Create Cell Ranger-compatible raw feature-barcode matrices\n\
+  cells      Call cells and create filtered feature-barcode matrices\n\n\
 Run 'sbxpress <COMMAND> --help' for command-specific options.\n";
 
 fn helper_dir(executable: &Path) -> Option<PathBuf> {
@@ -43,6 +44,7 @@ fn engine(command: &str) -> Option<&'static str> {
         "molecules" => Some("sbx10x-molecules"),
         "audit" => Some("bam-audit"),
         "matrix" => Some("cr-bam-to-mtx"),
+        "cells" => Some("sbxpress-cells"),
         _ => None,
     }
 }
@@ -113,6 +115,7 @@ mod tests {
         assert_eq!(engine("molecules"), Some("sbx10x-molecules"));
         assert_eq!(engine("audit"), Some("bam-audit"));
         assert_eq!(engine("matrix"), Some("cr-bam-to-mtx"));
+        assert_eq!(engine("cells"), Some("sbxpress-cells"));
         assert_eq!(engine("minimap"), None);
     }
 }

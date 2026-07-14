@@ -1,6 +1,6 @@
 [package]
 name = "sbxpress"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2021"
 description = "Convert raw Roche SBX reads into per-sample 10x R1/R2 FASTQs for Cell Ranger"
 
@@ -28,6 +28,10 @@ path = "src/bin/sbxpress.rs"
 name = "sbxpress-illumina"
 path = "src/bin/sbxpress-illumina.rs"
 
+[[bin]]
+name = "sbxpress-cells"
+path = "src/bin/sbxpress-cells.rs"
+
 [dependencies]
 needletail = "0.5"
 flate2 = { version = "1.0", features = ["zlib"] }
@@ -46,6 +50,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rust-htslib = { version = "0.49", default-features = false, features = ["bzip2", "lzma"] }
 hdf5 = "0.8.1"
 hdf5-sys = { version = "0.8.1", features = ["static", "zlib"] }
+rand = "0.8"
+rand_chacha = "0.3"
+statrs = "0.18"
 
 [dev-dependencies]
 tempfile = "3"

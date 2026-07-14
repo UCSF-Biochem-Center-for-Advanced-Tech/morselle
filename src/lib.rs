@@ -8,6 +8,7 @@ pub mod accounting;
 pub mod anchors;
 pub mod annotate_bam;
 pub mod barcode;
+pub mod cell_calling;
 pub mod config;
 pub mod cr_bam_to_mtx;
 pub mod demux;
@@ -538,17 +539,16 @@ fn process_one(
         // A unique Hamming-1 match is a correction, not merely a classification:
         // emit the canonical whitelist sequence in R1 so downstream CB tags and
         // fixed barcode templates refer to the same cell identifier.
-        let mut corrected_r1: Option<(Vec<u8>, Vec<u8>)> =
-            match (sh.whitelist, e.r1, cb_status) {
-                (Some(w), Some((r1s, r1e)), Some(CbStatus::Within1)) => {
-                    w.correct_within1(&o.seq[r1s..r1s + sh.cb_len]).map(|cb| {
-                        let mut s = cb.to_vec();
-                        s.extend_from_slice(&o.seq[r1s + sh.cb_len..r1e]);
-                        (s, o.qual[r1s..r1e].to_vec())
-                    })
-                }
-                _ => None,
-            };
+        let mut corrected_r1: Option<(Vec<u8>, Vec<u8>)> = match (sh.whitelist, e.r1, cb_status) {
+            (Some(w), Some((r1s, r1e)), Some(CbStatus::Within1)) => {
+                w.correct_within1(&o.seq[r1s..r1s + sh.cb_len]).map(|cb| {
+                    let mut s = cb.to_vec();
+                    s.extend_from_slice(&o.seq[r1s + sh.cb_len..r1e]);
+                    (s, o.qual[r1s..r1e].to_vec())
+                })
+            }
+            _ => None,
+        };
         // XB: how the emitted barcode passed or was rescued. Values 0/1 are
         // whitelist exact/within-1; 2/3/4 are indel/reframe/Hamming-2 rescue;
         // 5 means no whitelist and 6 means an unrescued miss emitted with gating off.

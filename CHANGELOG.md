@@ -6,6 +6,22 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.3] — 2026-07-14
+
+### Added
+- `sbxpress cells` implements Cell Ranger-style GEX cell calling with bootstrapped
+  OrdMag, Simple Good-Turing ambient profiling, multinomial EmptyDrops Monte Carlo
+  testing, BH FDR correction, and filtered MEX/HDF5 outputs.
+- `sbxpress illumina` converts multiple R1/R2 lanes concurrently into numbered
+  minimap2 FASTQ shards instead of serializing every lane through one
+  gzip stream.
+
+### Fixed
+- `sbxpress annotate --output -` sends diagnostics to stderr so logging cannot
+  corrupt the streamed BAM consumed by `samtools`.
+- `sbxpress illumina` removes Illumina mate/control/index comments and `/1` or
+  `/2` suffixes before appending minimap2-compatible SAM tags to read names.
+
 ## [0.3.2] — 2026-07-13
 
 ### Added
@@ -149,8 +165,9 @@ R1/R2 FASTQs for Cell Ranger ARC.
 - End-of-run RUN SUMMARY report: timing, throughput, and lost breakdown.
 - Ubuntu install script (`install.sh`) and installation manual (`INSTALL.md`).
 
-[Unreleased]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbx10x/compare/v0.3.2...HEAD
-[0.3.2]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbx10x/compare/v0.3.1...v0.3.2
-[0.3.1]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbx10x/compare/v0.3.0...v0.3.1
-[0.3.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbx10x/releases/tag/v0.3.0
-[0.2.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbx10x/releases/tag/v0.2.0
+[Unreleased]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbxpress/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbxpress/compare/v0.3.2...v0.3.3
+[0.3.2]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbxpress/compare/v0.3.1...v0.3.2
+[0.3.1]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbxpress/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbxpress/releases/tag/v0.3.0
+[0.2.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbxpress/releases/tag/v0.2.0
