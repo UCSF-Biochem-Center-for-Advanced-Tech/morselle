@@ -32,15 +32,24 @@ impl Rng {
 
 fn main() -> anyhow::Result<()> {
     let mut a = std::env::args().skip(1);
-    let wlp = a.next().expect("usage: lenient_precision <whitelist> [samples]");
+    let wlp = a
+        .next()
+        .expect("usage: lenient_precision <whitelist> [samples]");
     let n: usize = a.next().map(|s| s.parse().unwrap()).unwrap_or(300_000);
     let wl = Whitelist::load(std::path::Path::new(&wlp))?;
     let codes = wl.codes_sorted();
     let bases = b"ACGT";
     let mut rng = Rng(0xC0FFEE_1234_5678);
 
-    println!("whitelist {} barcodes; {} samples per error level\n", codes.len(), n);
-    println!("{:>7} {:>10} {:>10} {:>10}   interpretation", "N errs", "correct%", "wrong%", "abstain%");
+    println!(
+        "whitelist {} barcodes; {} samples per error level\n",
+        codes.len(),
+        n
+    );
+    println!(
+        "{:>7} {:>10} {:>10} {:>10}   interpretation",
+        "N errs", "correct%", "wrong%", "abstain%"
+    );
     println!("{}", "-".repeat(70));
     let mut wrong_by_n = [0f64; 6];
     let mut correct_by_n = [0f64; 6];
@@ -53,12 +62,17 @@ fn main() -> anyhow::Result<()> {
             let mut applied = 0;
             while applied < nerr {
                 let p = rng.upto(16);
-                if used[p] { continue; }
+                if used[p] {
+                    continue;
+                }
                 used[p] = true;
                 let cur = cb[p];
                 loop {
                     let b = bases[rng.upto(4)];
-                    if b != cur { cb[p] = b; break; }
+                    if b != cur {
+                        cb[p] = b;
+                        break;
+                    }
                 }
                 applied += 1;
             }
@@ -75,7 +89,11 @@ fn main() -> anyhow::Result<()> {
         };
         println!(
             "{:>7} {:>9.2}% {:>9.2}% {:>9.2}%   {}",
-            nerr, 100.0 * correct as f64 / tot, 100.0 * wrong as f64 / tot, 100.0 * abstain as f64 / tot, note
+            nerr,
+            100.0 * correct as f64 / tot,
+            100.0 * wrong as f64 / tot,
+            100.0 * abstain as f64 / tot,
+            note
         );
         wrong_by_n[nerr] = wrong as f64 / tot;
         correct_by_n[nerr] = correct as f64 / tot;
@@ -96,9 +114,21 @@ fn main() -> anyhow::Result<()> {
         good += f * correct_by_n[n];
         bad += f * wrong_by_n[n];
     }
-    println!("\nApplied to run_5p confident CB-fails (lenient fires on d>=2 = {:.1}% of confident CBs):", 100.0 * eligible);
-    println!("  correct assignments (recall)   = {:.3}% of confident CBs", 100.0 * good);
-    println!("  WRONG assignments  (leak)      = {:.3}% of confident CBs", 100.0 * bad);
-    println!("  => rescue precision correct/(correct+wrong) ~ {:.1}%", 100.0 * good / (good + bad).max(1e-9));
+    println!(
+        "\nApplied to run_5p confident CB-fails (lenient fires on d>=2 = {:.1}% of confident CBs):",
+        100.0 * eligible
+    );
+    println!(
+        "  correct assignments (recall)   = {:.3}% of confident CBs",
+        100.0 * good
+    );
+    println!(
+        "  WRONG assignments  (leak)      = {:.3}% of confident CBs",
+        100.0 * bad
+    );
+    println!(
+        "  => rescue precision correct/(correct+wrong) ~ {:.1}%",
+        100.0 * good / (good + bad).max(1e-9)
+    );
     Ok(())
 }

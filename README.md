@@ -1,10 +1,10 @@
-# sbx10x
+# sbxpress
 
 **Convert raw Roche SBX long reads into per-sample 10x R1/R2 FASTQs for Cell Ranger.**
 
 Roche SBX sequences each library molecule end-to-end as one long read (P5→P7),
 so a 10x Single Cell Multiome **GEX** library comes off the instrument as full
-molecules rather than the paired short reads Cell Ranger expects. `sbx10x` parses
+molecules rather than the paired short reads Cell Ranger expects. `sbxpress` parses
 each molecule, recovers the cell barcode / UMI / cDNA, demultiplexes by sample
 index, and writes standard 10x-style **R1** (barcode+UMI) and **R2** (cDNA) FASTQ
 pairs that feed directly into `cellranger-arc count`.
@@ -23,7 +23,7 @@ Each SBX read holds a complete library molecule:
 leader – P5 – i5 – R1primer – CB(16) – UMI(12) – polyT – cDNA – adapter – i7 – rc(P7)
 ```
 
-For every read, `sbx10x`:
+For every read, `sbxpress`:
 
 1. **Orients** it to a canonical P5→P7 frame (auto-detecting per file; each SBX run
    is orientation-pure but the two runs of a library are opposite strands).
@@ -49,10 +49,11 @@ From the source directory on Ubuntu/Debian or macOS:
 ./install.sh
 ```
 
-This installs build prerequisites, `minimap2`, `samtools`, and the Rust toolchain
-(via rustup if absent), builds the optimized binaries, and installs them under
-`/usr/local/bin`. Linux uses `apt-get`; macOS uses Homebrew. User-local install
-without sudo:
+This installs build prerequisites, `minimap2`, `samtools`, and the `k8`/
+`paftools.js` sbxpress minimap companions, plus the Rust toolchain (via rustup if absent).
+It downloads the official `k8` runtime, builds the optimized binaries, and installs
+them under `/usr/local/bin`. Linux uses `apt-get`; macOS uses Homebrew. User-local
+install without sudo:
 
 ```bash
 ./install.sh --prefix "$HOME/.local"
@@ -61,20 +62,37 @@ without sudo:
 Verify:
 
 ```bash
-sbx10x --version
-sbx10x --help
-cr-bam-to-mtx --version
-cr-bam-to-mtx --help
+sbxpress --version
+sbxpress --help
+sbxpress extract --help
+sbxpress minimap --version
+sbxpress annotate --version
+sbxpress annotate --help
+sbxpress molecules --help
+sbxpress audit --help
+sbxpress matrix --version
+sbxpress matrix --help
 ```
 
-The repository also installs `cr-bam-to-mtx`, which reconstructs a Cell Ranger
+Uninstall using the same prefix supplied at installation:
+
+```bash
+./uninstall.sh
+./uninstall.sh --prefix "$HOME/.local"
+```
+
+The uninstaller preserves the potentially shared `k8` and `paftools.js` tools by
+default. Pass `--remove-companions` to remove them, `--keep-data` to retain the
+installed whitelist, or `--dry-run` to preview all actions.
+
+The repository also installs `sbxpress matrix`, which reconstructs a Cell Ranger
 raw gene-expression matrix from the corrected molecule annotations in a complete
 Cell Ranger BAM:
 
 ```bash
-cr-bam-to-mtx possorted_genome_bam.bam \
+sbxpress matrix possorted_genome_bam.bam \
   --features raw_feature_bc_matrix/features.tsv.gz \
-  --barcodes raw_feature_bc_matrix/barcodes.tsv.gz \
+  --cell-barcodes resources/cellranger_barcodes/737K-arc-v1.txt.gz \
   --genome GRCh38 \
   --output outs
 ```
@@ -98,6 +116,52 @@ The H5 file stores the same matrix in 10x CSC format. `--genome` supplies its
 feature genome label because that value cannot be recovered reliably from a BAM.
 Every run also prints an stderr `RUN SUMMARY`.
 
+The installed `sbxpress annotate` stage assigns alignments against a GENCODE-style
+GTF and adds Cell Ranger-compatible `GX`, `GN`, `TX`, `AN`, and `RE` tags:
+
+```bash
+sbxpress annotate sample.coordinate.bam \
+  --gtf gencode.v50.primary_assembly.annotation.gtf.gz \
+  --output sample.annotated.bam \
+  --three-prime \
+  --threads 8
+samtools index -@ 8 sample.annotated.bam
+```
+
+For a single-sort streaming workflow, use `-` for annotator stdin/stdout and
+provide an explicit metrics path:
+
+```bash
+sbxpress minimap ... \
+| sbxpress annotate - --gtf genes.gtf.gz --output - \
+    --metrics sample.annotation.metrics.json --three-prime \
+| samtools sort -@ 8 -o sample.annotated.coordinate.bam -
+```
+
+It preserves coordinate order and existing barcode/UMI tags. UMI correction,
+molecule selection, and `xf` tagging remain a separate downstream stage.
+By default it recreates the 10x GENCODE gene/transcript-biotype,
+readthrough-transcript, PAR, and Ensembl ID-version rules while loading the GTF.
+The standard tags retain all compatible calls. Local-use `XC`/`XT` tags always
+record gene/transcript collision degree. With the explicit `--three-prime` assay
+flag, `ZG`/`ZT` and `XP` additionally record the subset supported by a
+strand-aware terminal exon. These preference tags never remove an alignment or
+rewrite `GX`/`TX`, and are absent unless the flag is given.
+
+Run the molecule stage after annotation. It corrects UMIs within each `(CB, GX)`
+group, resolves the same corrected `(CB, UB)` landing on multiple genes by total
+read support, and marks exactly one counted representative per resolved molecule:
+
+```bash
+sbxpress molecules sample.annotated.coordinate.bam \
+  --output sample.molecules.coordinate.bam --threads 8
+samtools index -@ 8 sample.molecules.coordinate.bam
+```
+
+Eligible reads receive `xf=17`; the selected representative receives `xf=25`
+(Cell Ranger bit 8). `XV` records the molecule-level gene collision degree and
+`XW` records `U`nique, `W`inner, `L`oser, or unresolved `T`ie. Ties are not counted.
+
 The three coordinate-sliced Cell Ranger fixtures can be checked with:
 
 ```bash
@@ -112,8 +176,8 @@ troubleshooting.
 
 This is **Single Cell Multiome (ATAC + GEX)** data, GEX side, so the cell barcodes come
 from the **ARC** gel-bead list **`737K-arc-v1.txt.gz`** (736,320 barcodes). It is 10x
-reference data and is **not committed** to this repo. Obtain it from a Cell Ranger ARC
-distribution:
+reference data staged under the gitignored `resources/cellranger_barcodes/`
+directory. Obtain it from a Cell Ranger ARC distribution:
 
 ```
 cellranger-arc-<version>/lib/python/cellranger/barcodes/737K-arc-v1.txt.gz
@@ -122,17 +186,25 @@ cellranger-arc-<version>/lib/python/cellranger/barcodes/737K-arc-v1.txt.gz
 and pass it with `--whitelist` (or place it in `resources/cellranger_barcodes/` before
 running `install.sh`).
 
+For stable feature rows across samples, build one canonical `genes.mtx` from the
+reference GTF with `sbxpress annotate --genes-mtx`, then pass that same file to
+every `sbxpress matrix --features` invocation. Existing manifests are verified
+against the filtered annotation rather than overwritten.
+
 ---
 
 ## Usage
 
+For the end-to-end genomic sbxpress minimap reference and counting workflow, see
+[Preparing a sbxpress minimap reference for SBX 3′ GEX counting](REFERENCE_PREPARATION.md).
+
 Single directory of run files, all cores, ready for Cell Ranger:
 
 ```bash
-sbx10x \
+sbxpress extract \
   --fastqs   /data/CAT02/raw_fastqs_run1/device_0/out \
   --sample-sheet /data/CE15204_bclconvert_input.csv \
-  --whitelist    /usr/local/share/sbx10x/737K-arc-v1.txt.gz \
+  --whitelist    /usr/local/share/sbxpress/737K-arc-v1.txt.gz \
   --out-dir  /data/out/run1 \
   --threads  0 \
   --cellranger
@@ -141,7 +213,7 @@ sbx10x \
 Explicit files across multiple devices:
 
 ```bash
-sbx10x --fastqs /data/.../device_{0,1,2,3}/out/PrimaryAnalysis_*.fastq.gz \
+sbxpress extract --fastqs /data/.../device_{0,1,2,3}/out/PrimaryAnalysis_*.fastq.gz \
   --sample-sheet sheet.csv --whitelist 737K-arc-v1.txt.gz -o /data/out/run1 --cellranger
 ```
 
@@ -155,9 +227,11 @@ orientations; orientation is auto-detected and enforced per file).
 | `--fastqs` | (required) | Input SBX FASTQs: a directory of `PrimaryAnalysis_*.fastq.gz`, or explicit files. |
 | `--sample-sheet` | — | BCL Convert v2 CSV (primary) or a flat `sample,i7,i5` CSV. |
 | `--whitelist` | — | 10x cell-barcode whitelist (`737K-arc-v1.txt.gz`). |
-| `--out-dir` / `-o` | `sbx10x_out` | Output directory. |
+| `--out-dir` / `-o` | `sbxpress_out` | Output directory. |
 | `--threads` | 0 (all cores) | Worker pool size. |
 | `--cellranger` | off | **Cell Ranger compatibility preset** — applies its required settings (currently `--max-r2-len 649`). Use this for Cell Ranger input. |
+| `--minimap2` | off | Emit only R2 FASTQs. Adds Cell Ranger barcode/UMI SAM tags to each FASTQ comment; align with sbxpress minimap `-y`. Cannot be combined with `--cellranger`. |
+| `--processing-tags` | off | Add SBX processing-provenance tags (`XO`, `XB`, `XI`, `XA`, `XL`) to R2 comments. Implied by `--minimap2`. |
 | `--orientation` | auto | Force `p5-led` / `p7-led` if auto-detect is wrong. |
 | `--cb-gate` | on | Drop pairs whose CB is neither on-whitelist nor within Hamming-1. |
 | `--cb-reframe` | on | Rescue homopolymer-indel frame-shifted barcodes. |
@@ -171,7 +245,7 @@ orientations; orientation is auto-detected and enforced per file).
 | `--split` | 1 | Split each sample across N gzip files (`_001`..`_00N`) so N threads compress one sample in parallel. |
 | `--reader-threads` | 0 (auto) | I/O parallelism. Auto uses every core even for a single input file (see below); `N>0` forces the pipelined path with N readers. |
 
-Run `sbx10x --help` for the complete list. Set `RUST_LOG=debug` for verbose logging.
+Run `sbxpress extract --help` for extraction options. Set `RUST_LOG=debug` for verbose logging.
 
 ### Cell Ranger compatibility
 
@@ -185,6 +259,40 @@ Two quirks of Cell Ranger are handled for you:
   boundaries, so each FASTQ is written as a single gzip member (compressed once,
   during processing).
 
+### Minimap2-ready output
+
+Use `--minimap2` when R2 will be aligned directly with minimap2. It emits only
+`*_R2_*.fastq.gz`; there is deliberately no R1 file. Each R2 FASTQ comment contains
+the following SAM-style tags, which sbxpress minimap preserves when invoked with `-y`:
+
+- `CR` / `UR`: raw cell barcode / raw UMI.
+- `CB`: whitelist-corrected cell barcode, with the Cell Ranger `-1` gem-group suffix.
+- `UB`: provisional corrected UMI (the extracted UMI before gene-aware UMI correction).
+- `CY` / `UY`: raw barcode and UMI Phred qualities.
+- `XO`: original SBX read orientation (`5` = P5-led, `7` = P7-led).
+- `XB`: barcode route: 0 exact, 1 Hamming-1, 2 indel realignment, 3 reframe,
+  4 Hamming-2, 5 no whitelist, 6 unrescued miss emitted with gating disabled.
+- `XI`: index route: 0 dual, 1 i5-only, 2 i7-only, 3 conflict, 4 no usable
+  index, 5 demultiplexing not requested.
+- `XA`: anchor bitmask: 1 R1-primer tail, 2 poly-T, 4 cDNA adapter trimmed,
+  8 file-level expected/detected orientation applied.
+- `XL`: extracted cDNA length before `--max-r2-len` capping.
+
+The five SBX tags are also available in paired-FASTQ mode with
+`--processing-tags`; they are placed on R2, the record that is aligned.
+
+For example:
+
+```bash
+sbxpress extract --fastqs /data/sbx --whitelist 737K-arc-v1.txt.gz -o /data/out --minimap2
+sbxpress minimap -a -x splice -uf -k14 --secondary=no -y reference.mmi /data/out/*_R2_*.fastq.gz \
+  | samtools sort -o aligned.bam
+```
+
+Do not create a combined barcode+UMI tag at this stage. Group records by `(CB, UR)`
+for UMI correction, then by `(CB, UB, gene)` after gene assignment; an `MI` tag, if
+needed, should be generated only at that downstream molecule-calling step.
+
 ---
 
 ## Outputs
@@ -193,6 +301,8 @@ In `--out-dir`:
 
 - `<sample>_S<n>_L001_R1_001.fastq.gz` / `_R2_001.fastq.gz` — per-sample pairs
   (R1 = 28 bp CB+UMI, R2 = cDNA).
+- With `--minimap2`, only `<sample>_S<n>_L001_R2_001.fastq.gz` is produced; its
+  FASTQ comments carry the barcode/UMI SAM tags described above.
 - `Undetermined_S0_L001_R{1,2}_001.fastq.gz` — pairs with no matchable index.
 - `metrics_summary.json` — full run accounting: totals, timing, read classes,
   CB-gate stats, demux breakdown, per-sample counts.

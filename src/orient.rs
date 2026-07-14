@@ -207,7 +207,11 @@ fn orient_fixed<'a>(
     leader_present: bool,
 ) -> Oriented<'a> {
     let bracket = cfg.bracket();
-    let orientation = if flip { Orientation::P7Led } else { Orientation::P5Led };
+    let orientation = if flip {
+        Orientation::P7Led
+    } else {
+        Orientation::P5Led
+    };
     let (canon_seq, canon_qual): (Cow<[u8]>, Cow<[u8]>) = if flip {
         let mut q = qual.to_vec();
         q.reverse();
@@ -223,22 +227,49 @@ fn orient_fixed<'a>(
     if let Some(t) = t_run {
         if let Some(approx) = t.start.checked_sub(bracket) {
             if let Some(cb_start) = lock_bracket(&canon_seq, approx, cfg.r1_tail_max_mm) {
-                return make(canon_seq, canon_qual, orientation, OrientMethod::Homopolymer,
-                    leader_present, cb_start, Some(t.start), true, bracket);
+                return make(
+                    canon_seq,
+                    canon_qual,
+                    orientation,
+                    OrientMethod::Homopolymer,
+                    leader_present,
+                    cb_start,
+                    Some(t.start),
+                    true,
+                    bracket,
+                );
             }
         }
     }
     // 2) Re-anchor: the chosen homopolymer didn't confirm (likely a cDNA poly-T).
     //    Search the 5' window directly for the R1-tail.
     if let Some(cb_start) = tail_in_prefix(&canon_seq, TAIL_SEARCH_WINDOW, cfg.r1_tail_max_mm) {
-        return make(canon_seq, canon_qual, orientation, OrientMethod::TailFallback,
-            leader_present, cb_start, None, true, bracket);
+        return make(
+            canon_seq,
+            canon_qual,
+            orientation,
+            OrientMethod::TailFallback,
+            leader_present,
+            cb_start,
+            None,
+            true,
+            bracket,
+        );
     }
     // 3) Best-effort unconfirmed homopolymer (dT present but R1-tail degraded).
     if let Some(t) = t_run {
         if let Some(cb_start) = t.start.checked_sub(bracket) {
-            return make(canon_seq, canon_qual, orientation, OrientMethod::Homopolymer,
-                leader_present, cb_start, Some(t.start), false, bracket);
+            return make(
+                canon_seq,
+                canon_qual,
+                orientation,
+                OrientMethod::Homopolymer,
+                leader_present,
+                cb_start,
+                Some(t.start),
+                false,
+                bracket,
+            );
         }
     }
     // 4) Nothing locatable — orientation known but no barcode bracket.

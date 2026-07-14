@@ -22,3 +22,7 @@ target
 
 # macOS
 .DS_Store
+
+# Python helper-script bytecode
+__pycache__/
+*.py[cod]

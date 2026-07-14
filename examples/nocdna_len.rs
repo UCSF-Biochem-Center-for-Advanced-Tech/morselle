@@ -32,10 +32,25 @@ fn main() -> anyhow::Result<()> {
     let orient_arg = a.next().unwrap();
     let max: usize = a.next().map(|s| s.parse().unwrap()).unwrap_or(usize::MAX);
 
-    let expected = if orient_arg == "p7-led" { Orientation::P7Led } else { Orientation::P5Led };
-    let ocfg = OrientCfg { cb_len: 16, umi_len: 12, min_homopolymer: 12, r1_tail_max_mm: 2,
-        anchor_max_edits: 6, fallback: FallbackMode::HammingTail, expected: Some(expected) };
-    let ecfg = ExtractCfg { min_cdna_len: 50, adapter_max_mm: 2, max_r2_len: 0 };
+    let expected = if orient_arg == "p7-led" {
+        Orientation::P7Led
+    } else {
+        Orientation::P5Led
+    };
+    let ocfg = OrientCfg {
+        cb_len: 16,
+        umi_len: 12,
+        min_homopolymer: 12,
+        r1_tail_max_mm: 2,
+        anchor_max_edits: 6,
+        fallback: FallbackMode::HammingTail,
+        expected: Some(expected),
+    };
+    let ecfg = ExtractCfg {
+        min_cdna_len: 50,
+        adapter_max_mm: 2,
+        max_r2_len: 0,
+    };
 
     let mut all: Vec<u64> = Vec::new();
     let mut r1ok_r2ok: Vec<u64> = Vec::new();
@@ -47,7 +62,9 @@ fn main() -> anyhow::Result<()> {
     let mut reader = parse_fastx_file(&fq)?;
     let mut n = 0usize;
     while let Some(rec) = reader.next() {
-        if n >= max { break; }
+        if n >= max {
+            break;
+        }
         n += 1;
         let rec = rec?;
         let qual = rec.qual().unwrap_or(&[]).to_vec();

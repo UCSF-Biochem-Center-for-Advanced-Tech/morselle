@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 #
-# sbx10x installer for Ubuntu/Debian and macOS.
+# sbxpress installer for Ubuntu/Debian and macOS.
 #
-# Installs build prerequisites, the Rust toolchain (if missing), builds the
-# release binaries, and installs them (plus the ARC whitelist, if available) under
-# a prefix. Idempotent and safe to re-run.
+# Installs build prerequisites, minimap2 companions, the Rust toolchain (if
+# missing), builds the release binaries, and installs them (plus the ARC
+# whitelist, if available) under a prefix. Idempotent and safe to re-run.
 #
 # Usage:
 #   ./install.sh [--prefix DIR] [--whitelist PATH] [--skip-packages] [--skip-rust]
 #
 # Options:
 #   --prefix DIR      install root (default: /usr/local). Binary -> DIR/bin,
-#                     whitelist -> DIR/share/sbx10x.
+#                     whitelist -> DIR/share/sbxpress. Also installs k8 and
+#                     paftools.js into DIR/bin.
 #   --whitelist PATH  path to 737K-arc-v1.txt.gz to install. If omitted, the
 #                     copy bundled in resources/cellranger_barcodes/ is used
 #                     when present.
@@ -27,9 +28,9 @@ WHITELIST=""
 SKIP_PACKAGES=0
 SKIP_RUST=0
 
-log()  { printf '\033[1;36m[sbx10x]\033[0m %s\n' "$*"; }
-warn() { printf '\033[1;33m[sbx10x] WARN:\033[0m %s\n' "$*" >&2; }
-die()  { printf '\033[1;31m[sbx10x] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
+log()  { printf '\033[1;36m[sbxpress]\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[sbxpress] WARN:\033[0m %s\n' "$*" >&2; }
+die()  { printf '\033[1;31m[sbxpress] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -45,7 +46,7 @@ done
 # Repo root = directory of this script, so it can be run from anywhere.
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO_DIR"
-[[ -f Cargo.toml ]] || die "Cargo.toml not found in $REPO_DIR — run this from the sbx10x source tree."
+[[ -f Cargo.toml ]] || die "Cargo.toml not found in $REPO_DIR — run this from the sbxpress source tree."
 
 # Pick sudo only when the install prefix is not writable.
 writable_prefix() {
@@ -109,18 +110,61 @@ else
   cargo build --release
 fi
 [[ -x target/release/sbx10x ]] || die "build did not produce target/release/sbx10x"
+[[ -x target/release/sbx10x-annotate ]] || die "build did not produce target/release/sbx10x-annotate"
+[[ -x target/release/sbx10x-molecules ]] || die "build did not produce target/release/sbx10x-molecules"
+[[ -x target/release/bam-audit ]] || die "build did not produce target/release/bam-audit"
 [[ -x target/release/cr-bam-to-mtx ]] || die "build did not produce target/release/cr-bam-to-mtx"
+[[ -x target/release/sbxpress ]] || die "build did not produce target/release/sbxpress"
 
-# 4. Install binary -------------------------------------------------------------
+# 4. Install public CLI and private engines ------------------------------------
 BIN_DIR="$PREFIX/bin"
-log "installing binary -> $BIN_DIR/sbx10x"
+LIBEXEC_DIR="$PREFIX/libexec/sbxpress"
+log "installing public command -> $BIN_DIR/sbxpress"
 $SUDO install -d "$BIN_DIR"
-$SUDO install -m 0755 target/release/sbx10x "$BIN_DIR/sbx10x"
-log "installing binary -> $BIN_DIR/cr-bam-to-mtx"
-$SUDO install -m 0755 target/release/cr-bam-to-mtx "$BIN_DIR/cr-bam-to-mtx"
+$SUDO install -m 0755 target/release/sbxpress "$BIN_DIR/sbxpress"
+$SUDO install -d "$LIBEXEC_DIR"
+for helper in sbx10x sbx10x-annotate sbx10x-molecules bam-audit cr-bam-to-mtx; do
+  log "installing private engine -> $LIBEXEC_DIR/$helper"
+  $SUDO install -m 0755 "target/release/$helper" "$LIBEXEC_DIR/$helper"
+done
 
-# 5. Install whitelist (optional) ----------------------------------------------
-SHARE_DIR="$PREFIX/share/sbx10x"
+# 5. Install minimap2 companion tools -------------------------------------------
+# Package-manager minimap2 distributions generally install only minimap2 itself.
+# paftools.js requires k8 (not Node), so install the official small upstream
+# runtime and the paftools script matching the installed minimap2 release.
+K8_VERSION="0.2.4"
+K8_TMP="$(mktemp -d)"
+trap 'rm -rf "$K8_TMP"' EXIT
+K8_OS="$(uname -s)"
+case "$K8_OS" in
+  Linux|Darwin) ;;
+  *) die "no official k8 binary is available for $K8_OS" ;;
+esac
+log "installing k8 $K8_VERSION for paftools.js..."
+curl --fail --location --silent --show-error \
+  "https://github.com/attractivechaos/k8/releases/download/v${K8_VERSION}/k8-${K8_VERSION}.tar.bz2" \
+  | tar -xj -C "$K8_TMP"
+K8_BIN="$K8_TMP/k8-${K8_VERSION}/k8-${K8_OS}"
+[[ -x "$K8_BIN" ]] || die "k8 archive did not contain k8-${K8_OS}"
+$SUDO install -m 0755 "$K8_BIN" "$BIN_DIR/k8"
+
+MM2_VERSION="$(minimap2 --version 2>&1 | sed -E 's/^v?([0-9]+\.[0-9]+).*/\1/')"
+[[ "$MM2_VERSION" =~ ^[0-9]+\.[0-9]+$ ]] || die "could not determine minimap2 version"
+PAFTOOLS_URL="https://raw.githubusercontent.com/lh3/minimap2/v${MM2_VERSION}/misc/paftools.js"
+log "installing paftools.js for minimap2 $MM2_VERSION..."
+curl --fail --location --silent --show-error "$PAFTOOLS_URL" > "$K8_TMP/paftools.js"
+[[ -s "$K8_TMP/paftools.js" ]] || die "downloaded paftools.js is empty"
+$SUDO install -m 0755 "$K8_TMP/paftools.js" "$BIN_DIR/paftools.js"
+# paftools intentionally exits nonzero when invoked without a command after
+# printing its help. Capture that expected status explicitly: with `pipefail`,
+# piping the invocation directly to grep incorrectly reports verification failure.
+PAFTOOLS_HELP="$("$BIN_DIR/k8" "$BIN_DIR/paftools.js" 2>&1 || true)"
+grep -qi '^Usage:' <<< "$PAFTOOLS_HELP" || die "paftools.js verification failed"
+log "using k8 $K8_VERSION and paftools.js (minimap2 $MM2_VERSION)"
+
+# 6. Install whitelist (optional) ----------------------------------------------
+SHARE_DIR="$PREFIX/share/sbxpress"
+BARCODE_SHARE_DIR="$SHARE_DIR/barcodes"
 BUNDLED_WL="resources/cellranger_barcodes/737K-arc-v1.txt.gz"
 WL_SRC=""
 if [[ -n "$WHITELIST" ]]; then
@@ -139,22 +183,33 @@ else
   warn "and pass it at runtime with --whitelist, or re-run with --whitelist PATH."
 fi
 
-# 6. Verify + smoke test --------------------------------------------------------
-log "installed: $("$BIN_DIR/sbx10x" --version 2>/dev/null || echo '(version check failed)')"
-log "installed: $("$BIN_DIR/cr-bam-to-mtx" --version 2>/dev/null || echo '(version check failed)')"
+# Install the complete curated barcode resource collection. The top-level ARC
+# copy above remains for backward-compatible command examples.
+if compgen -G "resources/cellranger_barcodes/*" >/dev/null; then
+  log "installing 10x barcode resources -> $BARCODE_SHARE_DIR/"
+  $SUDO install -d "$BARCODE_SHARE_DIR"
+  for barcode in resources/cellranger_barcodes/*; do
+    [[ -f "$barcode" ]] || continue
+    $SUDO install -m 0644 "$barcode" "$BARCODE_SHARE_DIR/$(basename "$barcode")"
+  done
+fi
+
+# 7. Verify + smoke test --------------------------------------------------------
+log "installed: $("$BIN_DIR/sbxpress" --version 2>/dev/null || echo '(version check failed)')"
+log "installed: $(sed -n '1p' <<< "$PAFTOOLS_HELP")"
 SMOKE_FQ="tests/fixtures/smoke.fastq.gz"
 SMOKE_SS="tests/fixtures/CE15204_bclconvert_input.csv"
 if [[ -f "$SMOKE_FQ" && -f "$SMOKE_SS" ]]; then
   SMOKE_OUT="$(mktemp -d)"
   log "running smoke test on $SMOKE_FQ ..."
-  if "$BIN_DIR/sbx10x" --fastqs "$SMOKE_FQ" -o "$SMOKE_OUT" --sample-sheet "$SMOKE_SS" \
+  if "$BIN_DIR/sbxpress" extract --fastqs "$SMOKE_FQ" -o "$SMOKE_OUT" --sample-sheet "$SMOKE_SS" \
        ${WL_SRC:+--whitelist "$WL_SRC"} >/dev/null 2>&1 \
      && [[ -f "$SMOKE_OUT/metrics_summary.json" ]]; then
     log "smoke test OK (metrics_summary.json written)."
   else
-    warn "smoke test did not complete cleanly — check 'sbx10x --help' manually."
+    warn "smoke test did not complete cleanly — check 'sbxpress extract --help' manually."
   fi
   rm -rf "$SMOKE_OUT"
 fi
 
-log "done. Ensure $BIN_DIR is on your PATH, then run: sbx10x --help or cr-bam-to-mtx --help"
+log "done. Ensure $BIN_DIR is on your PATH, then run: sbxpress --help"

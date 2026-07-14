@@ -25,7 +25,10 @@ use sbx10x::pipeline::{CbStatus, Orientation};
 type GzW = GzEncoder<BufWriter<File>>;
 
 fn writer(path: &str) -> GzW {
-    GzEncoder::new(BufWriter::new(File::create(path).unwrap()), Compression::default())
+    GzEncoder::new(
+        BufWriter::new(File::create(path).unwrap()),
+        Compression::default(),
+    )
 }
 
 fn write_rec(w: &mut GzW, id: &[u8], seq: &[u8], qual: &[u8]) {
@@ -49,10 +52,25 @@ fn main() -> anyhow::Result<()> {
     let max: usize = a.next().map(|s| s.parse().unwrap()).unwrap_or(usize::MAX);
 
     let (cb_len, umi_len) = (16usize, 12usize);
-    let expected = if orient_arg == "p7-led" { Orientation::P7Led } else { Orientation::P5Led };
-    let ocfg = OrientCfg { cb_len, umi_len, min_homopolymer: 12, r1_tail_max_mm: 2,
-        anchor_max_edits: 6, fallback: FallbackMode::HammingTail, expected: Some(expected) };
-    let ecfg = ExtractCfg { min_cdna_len: 50, adapter_max_mm: 2, max_r2_len: 0 };
+    let expected = if orient_arg == "p7-led" {
+        Orientation::P7Led
+    } else {
+        Orientation::P5Led
+    };
+    let ocfg = OrientCfg {
+        cb_len,
+        umi_len,
+        min_homopolymer: 12,
+        r1_tail_max_mm: 2,
+        anchor_max_edits: 6,
+        fallback: FallbackMode::HammingTail,
+        expected: Some(expected),
+    };
+    let ecfg = ExtractCfg {
+        min_cdna_len: 50,
+        adapter_max_mm: 2,
+        max_r2_len: 0,
+    };
 
     let mut w_unp = writer(&out_unp);
     let mut w_cbf = writer(&out_cbf);
@@ -60,7 +78,9 @@ fn main() -> anyhow::Result<()> {
 
     let mut reader = parse_fastx_file(&fq)?;
     while let Some(rec) = reader.next() {
-        if n >= max { break; }
+        if n >= max {
+            break;
+        }
         n += 1;
         let rec = rec?;
         let id = rec.id().to_vec();
@@ -86,7 +106,9 @@ fn main() -> anyhow::Result<()> {
         if !cb_ok {
             if let Some(pts) = o.polyt_start {
                 let delta = (pts as i64 - r1s as i64) - (cb_len + umi_len) as i64;
-                if (delta == 1 || delta == -1) && pts >= umi_len && pts <= o.seq.len()
+                if (delta == 1 || delta == -1)
+                    && pts >= umi_len
+                    && pts <= o.seq.len()
                     && wl.realign_cb(&o.seq[r1s..], delta as i32).is_some()
                 {
                     cb_ok = true;

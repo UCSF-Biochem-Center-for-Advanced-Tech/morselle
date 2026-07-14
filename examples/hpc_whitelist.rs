@@ -78,8 +78,12 @@ fn main() -> anyhow::Result<()> {
             maxrun = maxrun.max(r);
         }
         max_run_hist[maxrun.min(16)] += 1;
-        if maxrun >= 3 { any_run3 += 1; }
-        if maxrun >= 4 { any_run4 += 1; }
+        if maxrun >= 3 {
+            any_run3 += 1;
+        }
+        if maxrun >= 4 {
+            any_run4 += 1;
+        }
         full.push(rle_full(&cb));
         bucket.push(rle_bucketed(&cb));
     }
@@ -90,15 +94,22 @@ fn main() -> anyhow::Result<()> {
             println!("  run {len:2}: {c:8} ({:.1}%)", 100.0 * c as f64 / n as f64);
         }
     }
-    println!("  barcodes with a run >=3: {any_run3} ({:.1}%)  ·  run >=4: {any_run4} ({:.2}%)",
-        100.0 * any_run3 as f64 / n as f64, 100.0 * any_run4 as f64 / n as f64);
+    println!(
+        "  barcodes with a run >=3: {any_run3} ({:.1}%)  ·  run >=4: {any_run4} ({:.2}%)",
+        100.0 * any_run3 as f64 / n as f64,
+        100.0 * any_run4 as f64 / n as f64
+    );
 
     let (df, cf) = collisions(&full);
     let (db, cb_) = collisions(&bucket);
     println!("\nCOLLAPSE FEASIBILITY (lower colliding = more assignable):");
-    println!("  full RLE:      distinct forms {df:8} / {n}   colliding barcodes {cf} ({:.2}%)",
-        100.0 * cf as f64 / n as f64);
-    println!("  bucketed RLE:  distinct forms {db:8} / {n}   colliding barcodes {cb_} ({:.2}%)",
-        100.0 * cb_ as f64 / n as f64);
+    println!(
+        "  full RLE:      distinct forms {df:8} / {n}   colliding barcodes {cf} ({:.2}%)",
+        100.0 * cf as f64 / n as f64
+    );
+    println!(
+        "  bucketed RLE:  distinct forms {db:8} / {n}   colliding barcodes {cb_} ({:.2}%)",
+        100.0 * cb_ as f64 / n as f64
+    );
     Ok(())
 }

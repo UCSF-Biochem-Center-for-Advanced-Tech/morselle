@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches, Parser};
 use tracing_subscriber::EnvFilter;
 
 use sbx10x::cr_bam_to_mtx::{self, Cli};
@@ -11,5 +11,10 @@ fn main() -> Result<()> {
         )
         .with_target(false)
         .init();
-    cr_bam_to_mtx::run(&Cli::parse())
+    let cli = if std::env::var_os("SBXPRESS_DISPATCH").is_some() {
+        Cli::from_arg_matches(&Cli::command().bin_name("sbxpress matrix").get_matches())?
+    } else {
+        Cli::parse()
+    };
+    cr_bam_to_mtx::run(&cli)
 }

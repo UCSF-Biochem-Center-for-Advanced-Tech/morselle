@@ -1,6 +1,6 @@
 [package]
-name = "sbx10x"
-version = "0.3.0"
+name = "sbxpress"
+version = "0.3.1"
 edition = "2021"
 description = "Convert raw Roche SBX reads into per-sample 10x R1/R2 FASTQs for Cell Ranger"
 
@@ -11,6 +11,18 @@ path = "src/lib.rs"
 [[bin]]
 name = "sbx10x"
 path = "src/main.rs"
+
+[[bin]]
+name = "sbx10x-annotate"
+path = "src/bin/sbx10x-annotate.rs"
+
+[[bin]]
+name = "sbx10x-molecules"
+path = "src/bin/sbx10x-molecules.rs"
+
+[[bin]]
+name = "sbxpress"
+path = "src/bin/sbxpress.rs"
 
 [dependencies]
 needletail = "0.5"

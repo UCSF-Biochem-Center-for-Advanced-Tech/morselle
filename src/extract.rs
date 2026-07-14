@@ -103,7 +103,9 @@ fn find_adapter(seq: &[u8], from: usize, max_mm: u32) -> Option<usize> {
             }
             // Indel path: anchor on the indel-safe 3 bp prefix (no homopolymer),
             // then verify a single-indel alignment.
-            if seq[i] == a[0] && seq[i + 1] == a[1] && seq[i + 2] == a[2]
+            if seq[i] == a[0]
+                && seq[i + 1] == a[1]
+                && seq[i + 2] == a[2]
                 && adapter_single_indel(&seq[i..], a, max_mm)
             {
                 return Some(i);
@@ -241,7 +243,7 @@ mod tests {
         let mut s = cdna.to_vec();
         let astart = s.len();
         s.extend_from_slice(b"AGATCGGAAAGAGCACACGTCTGAACTCC"); // indel adapter
-        // pure-Hamming (no indel handling) would miss this; find_adapter catches it
+                                                               // pure-Hamming (no indel handling) would miss this; find_adapter catches it
         assert_eq!(find_adapter(&s, 0, 2), Some(astart));
     }
 

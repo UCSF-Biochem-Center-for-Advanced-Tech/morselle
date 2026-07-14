@@ -20,13 +20,17 @@ impl Rng {
         z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
         z ^ (z >> 31)
     }
-    fn upto(&mut self, n: usize) -> usize { (self.next() % n as u64) as usize }
+    fn upto(&mut self, n: usize) -> usize {
+        (self.next() % n as u64) as usize
+    }
 }
 const BASES: [u8; 4] = [b'A', b'C', b'G', b'T'];
 
 fn main() -> anyhow::Result<()> {
     let mut a = std::env::args().skip(1);
-    let wlp = a.next().expect("usage: realign_precision <whitelist> [samples]");
+    let wlp = a
+        .next()
+        .expect("usage: realign_precision <whitelist> [samples]");
     let n: usize = a.next().map(|s| s.parse().unwrap()).unwrap_or(300_000);
     let wl = Whitelist::load(std::path::Path::new(&wlp))?;
     let codes = wl.codes_sorted();
@@ -34,8 +38,15 @@ fn main() -> anyhow::Result<()> {
 
     let umi = |rng: &mut Rng| -> Vec<u8> { (0..12).map(|_| BASES[rng.upto(4)]).collect() };
 
-    println!("whitelist {} barcodes; {} samples per scenario\n", codes.len(), n);
-    println!("{:<34} {:>9} {:>9} {:>9}", "scenario (delta passed)", "correct%", "wrong%", "abstain%");
+    println!(
+        "whitelist {} barcodes; {} samples per scenario\n",
+        codes.len(),
+        n
+    );
+    println!(
+        "{:<34} {:>9} {:>9} {:>9}",
+        "scenario (delta passed)", "correct%", "wrong%", "abstain%"
+    );
     println!("{}", "-".repeat(64));
 
     let mut run = |label: &str, delta: i32, mutate: &dyn Fn(&mut Rng, &[u8; 16]) -> Vec<u8>| {
@@ -51,8 +62,13 @@ fn main() -> anyhow::Result<()> {
             }
         }
         let t = n as f64;
-        println!("{:<34} {:>8.2}% {:>8.2}% {:>8.2}%", label,
-            100.0 * correct as f64 / t, 100.0 * wrong as f64 / t, 100.0 * abstain as f64 / t);
+        println!(
+            "{:<34} {:>8.2}% {:>8.2}% {:>8.2}%",
+            label,
+            100.0 * correct as f64 / t,
+            100.0 * wrong as f64 / t,
+            100.0 * abstain as f64 / t
+        );
     };
 
     // 1 insertion (delta +1): insert a random base at a random position → 17 bp CB.
@@ -64,7 +80,8 @@ fn main() -> anyhow::Result<()> {
         // rebuild cleanly: insert into full 16
         let mut out = truth.to_vec();
         out.insert(rng.upto(17).min(16), BASES[rng.upto(4)]);
-        let _ = v; out
+        let _ = v;
+        out
     });
     // 1 deletion (delta -1): drop one base → 15 bp CB.
     run("1 deletion             (Δ=-1)", -1, &|rng, truth| {
@@ -77,7 +94,13 @@ fn main() -> anyhow::Result<()> {
         let mut out = truth.to_vec();
         let sp = rng.upto(16);
         let cur = out[sp];
-        loop { let b = BASES[rng.upto(4)]; if b != cur { out[sp] = b; break; } }
+        loop {
+            let b = BASES[rng.upto(4)];
+            if b != cur {
+                out[sp] = b;
+                break;
+            }
+        }
         out.insert(rng.upto(17).min(16), BASES[rng.upto(4)]);
         out
     });
@@ -86,7 +109,13 @@ fn main() -> anyhow::Result<()> {
         let mut out = truth.to_vec();
         let sp = rng.upto(16);
         let cur = out[sp];
-        loop { let b = BASES[rng.upto(4)]; if b != cur { out[sp] = b; break; } }
+        loop {
+            let b = BASES[rng.upto(4)];
+            if b != cur {
+                out[sp] = b;
+                break;
+            }
+        }
         out.remove(rng.upto(15));
         out
     });

@@ -22,7 +22,9 @@ enum Tier {
 
 fn main() -> anyhow::Result<()> {
     let mut a = env::args().skip(1);
-    let fq = a.next().expect("usage: tier_by_length <fastq> <whitelist> <p5-led|p7-led> [max]");
+    let fq = a
+        .next()
+        .expect("usage: tier_by_length <fastq> <whitelist> <p5-led|p7-led> [max]");
     let wlp = a.next().expect("whitelist");
     let orient_arg = a.next().unwrap_or_else(|| "p5-led".into());
     let max: usize = a.next().map(|s| s.parse().unwrap()).unwrap_or(usize::MAX);
@@ -34,10 +36,19 @@ fn main() -> anyhow::Result<()> {
     };
     let (cb_len, umi_len) = (16usize, 12usize);
     let ocfg = OrientCfg {
-        cb_len, umi_len, min_homopolymer: 12, r1_tail_max_mm: 2,
-        anchor_max_edits: 6, fallback: FallbackMode::HammingTail, expected: Some(expected),
+        cb_len,
+        umi_len,
+        min_homopolymer: 12,
+        r1_tail_max_mm: 2,
+        anchor_max_edits: 6,
+        fallback: FallbackMode::HammingTail,
+        expected: Some(expected),
     };
-    let ecfg = ExtractCfg { min_cdna_len: 50, adapter_max_mm: 2, max_r2_len: 0 };
+    let ecfg = ExtractCfg {
+        min_cdna_len: 50,
+        adapter_max_mm: 2,
+        max_r2_len: 0,
+    };
 
     const NB: usize = 64; // 25bp bins, 0..1600
     const W: usize = 25;
@@ -50,7 +61,9 @@ fn main() -> anyhow::Result<()> {
 
     let mut reader = parse_fastx_file(&fq)?;
     while let Some(rec) = reader.next() {
-        if total as usize >= max { break; }
+        if total as usize >= max {
+            break;
+        }
         let rec = rec?;
         let seq = rec.seq();
         let qual = rec.qual().unwrap_or(&[]);
@@ -76,31 +89,69 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    let pc = |x: u64, d: u64| if d > 0 { 100.0 * x as f64 / d as f64 } else { 0.0 };
+    let pc = |x: u64, d: u64| {
+        if d > 0 {
+            100.0 * x as f64 / d as f64
+        } else {
+            0.0
+        }
+    };
     println!("reads scanned: {total}\n");
     println!("OVERALL TIERS");
-    let tnames = ["Unparseable (truncated/no barcode)", "NoCdna (barcode ok, empty/short insert)",
-                  "CbFail (barcode degraded)", "ValidPair (recoverable)"];
+    let tnames = [
+        "Unparseable (truncated/no barcode)",
+        "NoCdna (barcode ok, empty/short insert)",
+        "CbFail (barcode degraded)",
+        "ValidPair (recoverable)",
+    ];
     for t in 0..4 {
-        println!("  {:<42} {:>12}  {:>5.1}%", tnames[t], tot[t], pc(tot[t], total));
+        println!(
+            "  {:<42} {:>12}  {:>5.1}%",
+            tnames[t],
+            tot[t],
+            pc(tot[t], total)
+        );
     }
 
     println!("\nTIER MIX BY RAW READ LENGTH (row % across tiers)");
-    println!("{:>9}  {:>9}  {:>7} {:>7} {:>7} {:>7}", "len_bin", "reads", "Unpars", "NoCdna", "CbFail", "Valid");
+    println!(
+        "{:>9}  {:>9}  {:>7} {:>7} {:>7} {:>7}",
+        "len_bin", "reads", "Unpars", "NoCdna", "CbFail", "Valid"
+    );
     for b in 1..NB {
         let rb: u64 = (0..4).map(|t| grid[b][t]).sum();
-        if rb < 200 { continue; }
+        if rb < 200 {
+            continue;
+        }
         let lo = b * W;
-        println!("{:>4}-{:<4} {:>9}  {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}%",
-            lo, lo + W - 1, rb, pc(grid[b][0], rb), pc(grid[b][1], rb), pc(grid[b][2], rb), pc(grid[b][3], rb));
+        println!(
+            "{:>4}-{:<4} {:>9}  {:>6.1}% {:>6.1}% {:>6.1}% {:>6.1}%",
+            lo,
+            lo + W - 1,
+            rb,
+            pc(grid[b][0], rb),
+            pc(grid[b][1], rb),
+            pc(grid[b][2], rb),
+            pc(grid[b][3], rb)
+        );
     }
 
     println!("\nTRUE cDNA INSERT LENGTH (reads with located barcode; n={insert_with_bc})");
     for b in 0..NB {
-        if insert_hist[b] == 0 { continue; }
+        if insert_hist[b] == 0 {
+            continue;
+        }
         let lo = b * W;
-        if lo > 900 { break; }
-        println!("  {:>4}-{:<4} {:>10}  {:>5.1}%", lo, lo + W - 1, insert_hist[b], pc(insert_hist[b], insert_with_bc));
+        if lo > 900 {
+            break;
+        }
+        println!(
+            "  {:>4}-{:<4} {:>10}  {:>5.1}%",
+            lo,
+            lo + W - 1,
+            insert_hist[b],
+            pc(insert_hist[b], insert_with_bc)
+        );
     }
     Ok(())
 }
@@ -112,7 +163,9 @@ fn classify(
     cb_len: usize,
     umi_len: usize,
 ) -> Tier {
-    let Some((r1s, _)) = e.r1 else { return Tier::Unparseable };
+    let Some((r1s, _)) = e.r1 else {
+        return Tier::Unparseable;
+    };
     if e.r2.is_none() {
         return Tier::NoCdna;
     }
@@ -123,7 +176,9 @@ fn classify(
     if !cb_ok {
         if let Some(pts) = o.polyt_start {
             let delta = (pts as i64 - r1s as i64) - (cb_len + umi_len) as i64;
-            if (delta == 1 || delta == -1) && pts >= umi_len && pts <= o.seq.len()
+            if (delta == 1 || delta == -1)
+                && pts >= umi_len
+                && pts <= o.seq.len()
                 && wl.realign_cb(&o.seq[r1s..], delta as i32).is_some()
             {
                 cb_ok = true;
@@ -136,5 +191,9 @@ fn classify(
             cb_ok = true;
         }
     }
-    if cb_ok { Tier::ValidPair } else { Tier::CbFail }
+    if cb_ok {
+        Tier::ValidPair
+    } else {
+        Tier::CbFail
+    }
 }

@@ -134,23 +134,37 @@ pub struct PairShardWriter {
 }
 
 struct Pair {
-    r1: GzEncoder<BufWriter<File>>,
+    r1: Option<GzEncoder<BufWriter<File>>>,
     r2: GzEncoder<BufWriter<File>>,
 }
 
 impl PairShardWriter {
     /// `chunk` is the 1-based file-set number in the Cell Ranger name (`_001`…).
-    pub fn create(dir: &Path, prefix: &str, s_num: usize, chunk: usize, level: u32) -> Result<Self> {
-        fs::create_dir_all(dir)
-            .with_context(|| format!("cannot create dir {}", dir.display()))?;
+    pub fn create(
+        dir: &Path,
+        prefix: &str,
+        s_num: usize,
+        chunk: usize,
+        level: u32,
+        emit_r1: bool,
+    ) -> Result<Self> {
+        fs::create_dir_all(dir).with_context(|| format!("cannot create dir {}", dir.display()))?;
         let enc = |read: u8| -> Result<GzEncoder<BufWriter<File>>> {
-            let path = dir.join(format!("{prefix}_S{s_num}_L001_R{read}_{chunk:03}.fastq.gz"));
+            let path = dir.join(format!(
+                "{prefix}_S{s_num}_L001_R{read}_{chunk:03}.fastq.gz"
+            ));
             let file = File::create(&path)
                 .with_context(|| format!("cannot create output {}", path.display()))?;
-            Ok(GzEncoder::new(BufWriter::new(file), Compression::new(level)))
+            Ok(GzEncoder::new(
+                BufWriter::new(file),
+                Compression::new(level),
+            ))
         };
         Ok(PairShardWriter {
-            inner: Mutex::new(Pair { r1: enc(1)?, r2: enc(2)? }),
+            inner: Mutex::new(Pair {
+                r1: emit_r1.then(|| enc(1)).transpose()?,
+                r2: enc(2)?,
+            }),
         })
     }
 
@@ -161,7 +175,9 @@ impl PairShardWriter {
             return Ok(());
         }
         let mut p = self.inner.lock().expect("pair writer lock poisoned");
-        p.r1.write_all(r1_raw)?;
+        if let Some(r1) = &mut p.r1 {
+            r1.write_all(r1_raw)?;
+        }
         p.r2.write_all(r2_raw)?;
         Ok(())
     }
@@ -169,8 +185,10 @@ impl PairShardWriter {
     /// Finish both gzip members (write the final deflate block + trailer) and flush.
     pub fn finish(&self) -> Result<()> {
         let mut p = self.inner.lock().expect("pair writer lock poisoned");
-        p.r1.try_finish().context("gzip finish R1")?;
-        p.r1.get_mut().flush().context("flush R1")?;
+        if let Some(r1) = &mut p.r1 {
+            r1.try_finish().context("gzip finish R1")?;
+            r1.get_mut().flush().context("flush R1")?;
+        }
         p.r2.try_finish().context("gzip finish R2")?;
         p.r2.get_mut().flush().context("flush R2")?;
         Ok(())

@@ -16,17 +16,28 @@ fn main() -> anyhow::Result<()> {
     let max: usize = args.next().map(|s| s.parse().unwrap()).unwrap_or(40000);
 
     let ocfg = OrientCfg {
-        cb_len: 16, umi_len: 12, min_homopolymer: 12, r1_tail_max_mm: 2,
-        anchor_max_edits: 6, fallback: FallbackMode::HammingTail, expected: None,
+        cb_len: 16,
+        umi_len: 12,
+        min_homopolymer: 12,
+        r1_tail_max_mm: 2,
+        anchor_max_edits: 6,
+        fallback: FallbackMode::HammingTail,
+        expected: None,
     };
-    let ecfg = ExtractCfg { min_cdna_len: 20, adapter_max_mm: 2, max_r2_len: 0 };
+    let ecfg = ExtractCfg {
+        min_cdna_len: 20,
+        adapter_max_mm: 2,
+        max_r2_len: 0,
+    };
 
     // [confident?][orientation: 0=P5led,1=P7led,2=unknown]
     let mut tab = [[0u64; 3]; 2];
     let mut reader = parse_fastx_file(&fq)?;
     let mut n = 0;
     while let Some(rec) = reader.next() {
-        if n >= max { break; }
+        if n >= max {
+            break;
+        }
         let rec = rec?;
         let seq = rec.seq();
         let qual = rec.qual().unwrap_or(&[]);

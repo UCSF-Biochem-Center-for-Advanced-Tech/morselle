@@ -17,7 +17,7 @@ pub struct Cli {
     pub fastqs: Vec<PathBuf>,
 
     /// Output directory for per-sample FASTQs and metrics.
-    #[arg(long, short = 'o', default_value = "sbx10x_out")]
+    #[arg(long, short = 'o', default_value = "sbxpress_out")]
     pub out_dir: PathBuf,
 
     /// Sample sheet CSV with columns: sample,i7,i5. (Used from M3 onward.)
@@ -167,6 +167,17 @@ pub struct Params {
     /// length"). Explicit flags override the preset. More presets may be added.
     #[arg(long, default_value_t = false)]
     pub cellranger: bool,
+
+    /// Minimap2-ready output preset: emit R2 only and put CB/UMI SAM tags in the
+    /// FASTQ comment. Align with minimap2 `-y` to preserve those tags in SAM/BAM.
+    #[arg(long, default_value_t = false)]
+    pub minimap2: bool,
+
+    /// Add SBX processing-provenance SAM tags to each R2 FASTQ comment. These
+    /// tags are copied into SAM/BAM by minimap2 `-y`. Enabled automatically by
+    /// `--minimap2`.
+    #[arg(long, default_value_t = false)]
+    pub processing_tags: bool,
 }
 
 /// R2 length cap Cell Ranger tolerates — it hard-fails at 650 bp.
@@ -184,6 +195,9 @@ impl Params {
     /// A preset only fills in values the user left at their default, so an
     /// explicit flag always wins. Call once, right after parsing.
     pub fn apply_presets(&mut self) {
+        if self.minimap2 {
+            self.processing_tags = true;
+        }
         if self.cellranger {
             // Cell Ranger hard-caps reads at 649 bp (fails at 650). Only set it
             // if the user hasn't already chosen a cap.
@@ -247,6 +261,22 @@ mod tests {
 
     #[test]
     fn explicit_max_r2_len_overrides_preset() {
-        assert_eq!(parse(&["--cellranger", "--max-r2-len", "90"]).max_r2_len, 90);
+        assert_eq!(
+            parse(&["--cellranger", "--max-r2-len", "90"]).max_r2_len,
+            90
+        );
+    }
+
+    #[test]
+    fn minimap2_preset_leaves_r2_uncapped() {
+        let p = parse(&["--minimap2"]);
+        assert_eq!(p.max_r2_len, 0);
+        assert!(p.processing_tags);
+    }
+
+    #[test]
+    fn processing_tags_are_opt_in_without_minimap2() {
+        assert!(!parse(&[]).processing_tags);
+        assert!(parse(&["--processing-tags"]).processing_tags);
     }
 }

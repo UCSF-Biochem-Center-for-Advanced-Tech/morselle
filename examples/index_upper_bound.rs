@@ -21,23 +21,40 @@ use sbx10x::sample_sheet::SampleSheet;
 /// Independent i7: find the 3' adapter anywhere, i7 = +rc(R2 primer) (34 bp).
 fn indep_i7<'a>(seq: &'a [u8], ilen: usize) -> Option<&'a [u8]> {
     let m = ILLUMINA_3P_ADAPTER.len();
-    if seq.len() < m { return None; }
+    if seq.len() < m {
+        return None;
+    }
     let mut best: Option<(u32, usize)> = None;
     for i in 0..=seq.len() - m {
         let d = hamming(&seq[i..i + m], ILLUMINA_3P_ADAPTER);
-        if d <= 2 && best.map_or(true, |(b, _)| d < b) { best = Some((d, i)); if d == 0 { break; } }
+        if d <= 2 && best.map_or(true, |(b, _)| d < b) {
+            best = Some((d, i));
+            if d == 0 {
+                break;
+            }
+        }
     }
-    best.and_then(|(_, i)| { let s = i + 34; (s + ilen <= seq.len()).then(|| &seq[s..s + ilen]) })
+    best.and_then(|(_, i)| {
+        let s = i + 34;
+        (s + ilen <= seq.len()).then(|| &seq[s..s + ilen])
+    })
 }
 
 fn cb_ok(o: &sbx10x::orient::Oriented, e: &sbx10x::extract::Extracted, wl: &Whitelist) -> bool {
     let Some((r1s, _)) = e.r1 else { return false };
     let cb = &o.seq[r1s..r1s + 16];
-    if !matches!(wl.classify(cb), CbStatus::Fail) { return true; }
+    if !matches!(wl.classify(cb), CbStatus::Fail) {
+        return true;
+    }
     if let Some(pts) = o.polyt_start {
         let delta = (pts as i64 - r1s as i64) - 28;
-        if (delta == 1 || delta == -1) && pts >= 12 && pts <= o.seq.len()
-            && wl.realign_cb(&o.seq[r1s..], delta as i32).is_some() { return true; }
+        if (delta == 1 || delta == -1)
+            && pts >= 12
+            && pts <= o.seq.len()
+            && wl.realign_cb(&o.seq[r1s..], delta as i32).is_some()
+        {
+            return true;
+        }
     }
     let confident = o.r1_tail_confirmed && e.polyt_run_len >= 10;
     confident && wl.correct_within2(cb).is_some()
@@ -45,20 +62,41 @@ fn cb_ok(o: &sbx10x::orient::Oriented, e: &sbx10x::extract::Extracted, wl: &Whit
 
 fn main() -> anyhow::Result<()> {
     let mut a = env::args().skip(1);
-    let fq = a.next().expect("usage: index_upper_bound <fastq> <wl> <sheet> <orient> [max]");
+    let fq = a
+        .next()
+        .expect("usage: index_upper_bound <fastq> <wl> <sheet> <orient> [max]");
     let wl = Whitelist::load(std::path::Path::new(&a.next().expect("wl")))?;
     let sheet = SampleSheet::load(std::path::Path::new(&a.next().expect("sheet")))?;
     let orient_arg = a.next().expect("orient");
     let max: usize = a.next().map(|s| s.parse().unwrap()).unwrap_or(usize::MAX);
 
-    let demux = Demuxer::new(&sheet, DemuxCfg { index_max_mm: 1, allow_single_index: true });
+    let demux = Demuxer::new(
+        &sheet,
+        DemuxCfg {
+            index_max_mm: 1,
+            allow_single_index: true,
+        },
+    );
     let ilen = demux.index_len();
-    let expected = if orient_arg == "p7-led" { Orientation::P7Led } else { Orientation::P5Led };
-    let ocfg = OrientCfg {
-        cb_len: 16, umi_len: 12, min_homopolymer: 12, r1_tail_max_mm: 2,
-        anchor_max_edits: 6, fallback: FallbackMode::HammingTail, expected: Some(expected),
+    let expected = if orient_arg == "p7-led" {
+        Orientation::P7Led
+    } else {
+        Orientation::P5Led
     };
-    let ecfg = ExtractCfg { min_cdna_len: 50, adapter_max_mm: 2, max_r2_len: 0 };
+    let ocfg = OrientCfg {
+        cb_len: 16,
+        umi_len: 12,
+        min_homopolymer: 12,
+        r1_tail_max_mm: 2,
+        anchor_max_edits: 6,
+        fallback: FallbackMode::HammingTail,
+        expected: Some(expected),
+    };
+    let ecfg = ExtractCfg {
+        min_cdna_len: 50,
+        adapter_max_mm: 2,
+        max_r2_len: 0,
+    };
 
     let mut total = 0u64;
     let (mut located, mut has_i5, mut has_i7) = (0u64, 0u64, 0u64);
@@ -67,7 +105,9 @@ fn main() -> anyhow::Result<()> {
 
     let mut reader = parse_fastx_file(&fq)?;
     while let Some(rec) = reader.next() {
-        if total as usize >= max { break; }
+        if total as usize >= max {
+            break;
+        }
         let rec = rec?;
         let qual = rec.qual().unwrap_or(&[]);
         total += 1;
@@ -78,27 +118,50 @@ fn main() -> anyhow::Result<()> {
         let Some((r1s, _)) = e.r1 else {
             unlocated += 1;
             if let Some(i7) = indep_i7(&o.seq, ilen) {
-                if demux.assign(None, Some(i7)).sample.is_some() { unloc_i7_id += 1; }
+                if demux.assign(None, Some(i7)).sample.is_some() {
+                    unloc_i7_id += 1;
+                }
             }
             continue;
         };
         located += 1;
         let (i5, i7) = index_regions(&o.seq, r1s, e.adapter_pos, ilen);
-        if i5.is_some() { has_i5 += 1; }
-        if i7.is_some() { has_i7 += 1; }
+        if i5.is_some() {
+            has_i5 += 1;
+        }
+        if i7.is_some() {
+            has_i7 += 1;
+        }
         if demux.assign(i5, i7).sample.is_some() {
             assignable += 1;
-            if cb_ok(&o, &e, &wl) { a_cb_ok += 1; } else { a_cb_lost += 1; }
+            if cb_ok(&o, &e, &wl) {
+                a_cb_ok += 1;
+            } else {
+                a_cb_lost += 1;
+            }
         }
     }
 
     let pc = |x: u64| 100.0 * x as f64 / total as f64;
     println!("reads {total}");
-    println!("\nStructurally located (CB bracket found): {located} ({:.1}%)", pc(located));
-    println!("  i5 present {has_i5} ({:.1}%) · i7 present {has_i7} ({:.1}%)", pc(has_i5), pc(has_i7));
-    println!("\nSAMPLE-ASSIGNABLE regardless of CB gate: {assignable} ({:.1}%)  <- upper bound", pc(assignable));
+    println!(
+        "\nStructurally located (CB bracket found): {located} ({:.1}%)",
+        pc(located)
+    );
+    println!(
+        "  i5 present {has_i5} ({:.1}%) · i7 present {has_i7} ({:.1}%)",
+        pc(has_i5),
+        pc(has_i7)
+    );
+    println!(
+        "\nSAMPLE-ASSIGNABLE regardless of CB gate: {assignable} ({:.1}%)  <- upper bound",
+        pc(assignable)
+    );
     let d = assignable.max(1);
-    println!("  CB also recovered                {a_cb_ok:>8}  {:.1}% of assignable", 100.0 * a_cb_ok as f64 / d as f64);
+    println!(
+        "  CB also recovered                {a_cb_ok:>8}  {:.1}% of assignable",
+        100.0 * a_cb_ok as f64 / d as f64
+    );
     println!("  CB LOST despite known sample     {a_cb_lost:>8}  {:.1}% of assignable  (= {:.1}% of all reads)  <- ACTIONABLE GAP",
         100.0 * a_cb_lost as f64 / d as f64, pc(a_cb_lost));
     println!("\nUnlocated reads {unlocated} ({:.1}%); of these, distal i7 alone still IDs the sample: {unloc_i7_id} ({:.1}% of all reads extra headroom)",

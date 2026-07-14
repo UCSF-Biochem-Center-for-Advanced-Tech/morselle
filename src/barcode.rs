@@ -81,8 +81,7 @@ impl Whitelist {
             Box::new(BufReader::new(file))
         };
 
-        let mut codes =
-            FxHashSet::with_capacity_and_hasher(1 << 20, rustc_hash::FxBuildHasher);
+        let mut codes = FxHashSet::with_capacity_and_hasher(1 << 20, rustc_hash::FxBuildHasher);
         for line in reader.lines() {
             let line = line?;
             let bc = line.trim().as_bytes();
@@ -138,20 +137,11 @@ impl Whitelist {
         if self.contains_code(code) {
             return CbStatus::OnWhitelist;
         }
-        // 16 positions × 3 alternative 2-bit values = 48 neighbor probes.
-        for pos in 0..16 {
-            let shift = pos * 2;
-            let cur = (code >> shift) & 0b11;
-            for alt in 0u32..4 {
-                if alt != cur {
-                    let neighbor = (code & !(0b11 << shift)) | (alt << shift);
-                    if self.contains_code(neighbor) {
-                        return CbStatus::Within1;
-                    }
-                }
-            }
+        if self.correct_within1(cb).is_some() {
+            CbStatus::Within1
+        } else {
+            CbStatus::Fail
         }
-        CbStatus::Fail
     }
 
     /// Lenient correction: return the unique whitelist barcode within Hamming-2
@@ -235,7 +225,12 @@ impl Whitelist {
     /// corrected CB and the winning offset from the first frame that yields a
     /// UNIQUE within-1 whitelist hit. Caller should gate on confident location so
     /// the shift reflects a real indel, not a mis-anchor.
-    pub fn reframe_cb(&self, seq: &[u8], cb_start: usize, window: usize) -> Option<([u8; 16], i64)> {
+    pub fn reframe_cb(
+        &self,
+        seq: &[u8],
+        cb_start: usize,
+        window: usize,
+    ) -> Option<([u8; 16], i64)> {
         for mag in 1..=window as i64 {
             for k in [mag, -mag] {
                 let s = cb_start as i64 + k;
@@ -350,7 +345,11 @@ mod tests {
 
     #[test]
     fn decode_roundtrip() {
-        for bc in [b"AAACCCAAGAAACACT", b"ACGTACGTACGTACGT", b"TTTTTTTTTTTTTTTT"] {
+        for bc in [
+            b"AAACCCAAGAAACACT",
+            b"ACGTACGTACGTACGT",
+            b"TTTTTTTTTTTTTTTT",
+        ] {
             assert_eq!(&decode16(encode16(bc).unwrap()), bc);
         }
     }
@@ -400,9 +399,10 @@ mod tests {
         assert_eq!(w.correct_within1(truth), Some(*truth)); // exact
         assert_eq!(w.correct_within1(b"AAACCCAAGAAACACA"), Some(*truth)); // 1 mm
         assert_eq!(w.correct_within1(b"AAACCCAAGAAACAGG"), None); // 2 mm -> none
-        // ambiguous: 1 mm from two whitelist members
+                                                                  // ambiguous: 1 mm from two whitelist members
         let w2 = wl(&[b"AAAAAAAAAAAAAAAA", b"AAAAAAAAAAAAAAAC"]);
         assert_eq!(w2.correct_within1(b"AAAAAAAAAAAAAAAG"), None);
+        assert_eq!(w2.classify(b"AAAAAAAAAAAAAAAG"), CbStatus::Fail);
     }
 
     #[test]

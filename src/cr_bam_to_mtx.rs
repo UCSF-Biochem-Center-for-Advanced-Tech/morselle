@@ -39,8 +39,17 @@ pub struct Cli {
     pub features: Option<PathBuf>,
 
     /// Optional Cell Ranger barcodes.tsv[.gz] template, including absent columns.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "cell_barcodes")]
     pub barcodes: Option<PathBuf>,
+
+    /// Cell Ranger barcode whitelist (plain or .gz). Preserves whitelist order,
+    /// adds the gem-group suffix, and emits zero-count columns for absent cells.
+    #[arg(long, value_name = "WHITELIST", conflicts_with = "barcodes")]
+    pub cell_barcodes: Option<PathBuf>,
+
+    /// Gem-group suffix added to entries read via --cell-barcodes.
+    #[arg(long, default_value_t = 1)]
+    pub gem_group: u32,
 
     /// Write plain .tsv/.mtx instead of gzip-compressed files.
     #[arg(long)]
@@ -80,12 +89,23 @@ struct Metrics {
     nonzero_entries: usize,
     used_feature_template: bool,
     used_barcode_template: bool,
+    used_cell_barcode_whitelist: bool,
+    gem_group: Option<u32>,
 }
 
 /// Run the BAM-to-matrix application.
 pub fn run(cli: &Cli) -> Result<()> {
     let started = Instant::now();
-    let matrix = read_matrix(&cli.bam, cli.features.as_deref(), cli.barcodes.as_deref())?;
+    if cli.gem_group == 0 {
+        bail!("--gem-group must be greater than zero");
+    }
+    let matrix = read_matrix(
+        &cli.bam,
+        cli.features.as_deref(),
+        cli.barcodes.as_deref(),
+        cli.cell_barcodes.as_deref(),
+        cli.gem_group,
+    )?;
     fs::create_dir_all(&cli.output)
         .with_context(|| format!("creating {}", cli.output.display()))?;
     let mex_dir = cli.output.join("raw_feature_bc_matrix");
@@ -112,6 +132,8 @@ pub fn run(cli: &Cli) -> Result<()> {
         nonzero_entries: matrix.counts.len(),
         used_feature_template: cli.features.is_some(),
         used_barcode_template: cli.barcodes.is_some(),
+        used_cell_barcode_whitelist: cli.cell_barcodes.is_some(),
+        gem_group: cli.cell_barcodes.as_ref().map(|_| cli.gem_group),
     };
     let metrics_path = cli.output.join("metrics_summary.json");
     fs::write(&metrics_path, serde_json::to_string_pretty(&metrics)?)
@@ -182,13 +204,41 @@ fn read_barcodes(path: &Path) -> Result<Vec<String>> {
         .collect::<std::io::Result<Vec<_>>>()?)
 }
 
+fn read_cell_barcodes(path: &Path, gem_group: u32) -> Result<Vec<String>> {
+    text_reader(path)?
+        .lines()
+        .enumerate()
+        .map(|(index, line)| {
+            let barcode = line?;
+            let barcode = barcode.trim();
+            if barcode.is_empty() {
+                bail!("empty barcode at {}:{}", path.display(), index + 1);
+            }
+            if !barcode
+                .bytes()
+                .all(|base| matches!(base, b'A' | b'C' | b'G' | b'T'))
+            {
+                bail!(
+                    "invalid Cell Ranger barcode at {}:{}: {barcode}",
+                    path.display(),
+                    index + 1
+                );
+            }
+            Ok(format!("{barcode}-{gem_group}"))
+        })
+        .collect()
+}
+
 fn read_matrix(
     path: &Path,
     feature_template: Option<&Path>,
     barcode_template: Option<&Path>,
+    cell_barcode_whitelist: Option<&Path>,
+    gem_group: u32,
 ) -> Result<Matrix> {
     let mut reader =
         bam::Reader::from_path(path).with_context(|| format!("opening BAM {}", path.display()))?;
+    let strict_features = feature_template.is_some();
     let mut feature_order = feature_template
         .map(read_features)
         .transpose()?
@@ -219,6 +269,8 @@ fn read_matrix(
         }
         let feature_index = if let Some(&index) = feature_indexes.get(&gx) {
             index
+        } else if strict_features {
+            bail!("counted gene {gx} is absent from the canonical feature template")
         } else {
             let index = feature_order.len();
             feature_indexes.insert(gx.clone(), index);
@@ -230,6 +282,8 @@ fn read_matrix(
 
     let barcodes = if let Some(path) = barcode_template {
         read_barcodes(path)?
+    } else if let Some(path) = cell_barcode_whitelist {
+        read_cell_barcodes(path, gem_group)?
     } else {
         let mut values: Vec<String> = molecule_keys.iter().map(|(_, cb)| cb.clone()).collect();
         values.sort_unstable();
@@ -423,6 +477,17 @@ fn write_h5(matrix: &Matrix, path: &Path, genome: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cellranger_whitelist_gets_gem_group_suffix() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("barcodes.txt");
+        fs::write(&path, "AACCGGTT\nTTGGCCAA\n").unwrap();
+        assert_eq!(
+            read_cell_barcodes(&path, 2).unwrap(),
+            ["AACCGGTT-2", "TTGGCCAA-2"]
+        );
+    }
 
     #[test]
     fn writes_one_based_sparse_matrix() {

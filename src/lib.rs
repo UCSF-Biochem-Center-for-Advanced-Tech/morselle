@@ -6,6 +6,7 @@
 
 pub mod accounting;
 pub mod anchors;
+pub mod annotate_bam;
 pub mod barcode;
 pub mod config;
 pub mod cr_bam_to_mtx;
@@ -86,7 +87,10 @@ struct Stats {
 impl Stats {
     /// A zeroed `Stats` sized for `n_samples` per-sample counters.
     fn new(n_samples: usize) -> Self {
-        Stats { per_sample: vec![0; n_samples], ..Default::default() }
+        Stats {
+            per_sample: vec![0; n_samples],
+            ..Default::default()
+        }
     }
 
     /// Accumulate a per-file `Stats` into this total.
@@ -156,14 +160,22 @@ struct Shared<'a> {
     /// Output chunks per logical target (`--split`). Physical writer for logical
     /// target `t`, chunk `c` is `targets[t * split + c]`.
     split: usize,
+    /// Emit only R2 FASTQs with Cell Ranger-style barcode/UMI SAM tags in the
+    /// FASTQ comment, for minimap2 `-y` pass-through.
+    minimap2: bool,
+    /// Add SBX processing provenance tags to R2 FASTQ comments.
+    processing_tags: bool,
     targets: &'a [PairShardWriter],
 }
 
 /// Entry point invoked by the binary. Orients each read to canonical P5→P7,
 /// extracts R1 (CB+UMI) and R2 (cDNA), and — when a sample sheet is given —
 /// demultiplexes by i5/i7 into per-sample FASTQs (plus `Undetermined`). Without a
-/// sheet it writes a single combined `sbx10x_S1_*` pair.
+/// sheet it writes a single combined `sbxpress_S1_*` pair.
 pub fn run(cli: &Cli) -> Result<()> {
+    if cli.params.cellranger && cli.params.minimap2 {
+        anyhow::bail!("--cellranger and --minimap2 are mutually exclusive output presets");
+    }
     let t_start = Instant::now();
     let sheet = match &cli.sample_sheet {
         Some(path) => {
@@ -217,7 +229,14 @@ pub fn run(cli: &Cli) -> Result<()> {
     // [target0 chunk0..N-1][target1 chunk0..N-1]...; physical = t*split + c.
     let mk = |prefix: &str, s_num: usize, out: &mut Vec<PairShardWriter>| -> Result<()> {
         for c in 0..split {
-            out.push(PairShardWriter::create(&cli.out_dir, prefix, s_num, c + 1, glevel)?);
+            out.push(PairShardWriter::create(
+                &cli.out_dir,
+                prefix,
+                s_num,
+                c + 1,
+                glevel,
+                !cli.params.minimap2,
+            )?);
         }
         Ok(())
     };
@@ -232,7 +251,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         }
         None => {
             let mut v = Vec::with_capacity(split);
-            mk("sbx10x", 1, &mut v)?;
+            mk("sbxpress", 1, &mut v)?;
             v
         }
     };
@@ -255,6 +274,8 @@ pub fn run(cli: &Cli) -> Result<()> {
         index_window: cli.params.index_window,
         n_samples,
         split,
+        minimap2: cli.params.minimap2,
+        processing_tags: cli.params.processing_tags,
         targets: &targets,
     };
 
@@ -319,9 +340,21 @@ pub fn run(cli: &Cli) -> Result<()> {
 
     let elapsed = t_start.elapsed().as_secs_f64();
     let threads = rayon::current_num_threads();
-    let timing = Timing { elapsed, load_secs, process_secs, threads };
+    let timing = Timing {
+        elapsed,
+        load_secs,
+        process_secs,
+        threads,
+    };
     report(&stats, demuxer.as_ref(), &timing);
-    let metrics = build_metrics(&stats, whitelist.as_ref(), demuxer.as_ref(), &timing);
+    let metrics = build_metrics(
+        &stats,
+        whitelist.as_ref(),
+        demuxer.as_ref(),
+        &timing,
+        cli.params.minimap2,
+        cli.params.processing_tags,
+    );
     let metrics_path = cli.out_dir.join("metrics_summary.json");
     metrics.write_json(&metrics_path)?;
     info!(out = %metrics_path.display(), "wrote metrics summary");
@@ -370,6 +403,58 @@ fn push_fastq_r2_rc(
     }
     buf.push(b'\n');
     out
+}
+
+/// Build a FASTQ comment that minimap2 `-y` copies verbatim to SAM/BAM as
+/// auxiliary tags. UB is a pre-alignment (provisional) UMI; downstream UMI
+/// correction after gene assignment may replace it.
+fn minimap2_header(
+    id: &[u8],
+    cr: &[u8],
+    cb: &[u8],
+    ur: &[u8],
+    ub: &[u8],
+    cy: &[u8],
+    uy: &[u8],
+) -> Vec<u8> {
+    let mut header = Vec::with_capacity(id.len() + 6 * 32 + 16);
+    header.extend_from_slice(id);
+    for (tag, value) in [
+        (b"\tCR:Z:".as_slice(), cr),
+        (b"\tCB:Z:".as_slice(), cb),
+        (b"\tUR:Z:".as_slice(), ur),
+        (b"\tUB:Z:".as_slice(), ub),
+        (b"\tCY:Z:".as_slice(), cy),
+        (b"\tUY:Z:".as_slice(), uy),
+    ] {
+        header.extend_from_slice(tag);
+        header.extend_from_slice(value);
+    }
+    header
+}
+
+/// Compact, versioned SBX provenance carried from extraction into the alignment.
+#[derive(Debug, Clone, Copy)]
+struct ProcessingTags {
+    orientation: u8,
+    barcode_route: u8,
+    index_route: u8,
+    anchor_bits: u8,
+    extracted_cdna_len: usize,
+}
+
+fn append_processing_tags(header: &mut Vec<u8>, tags: ProcessingTags) {
+    header.extend_from_slice(b"\tXO:A:");
+    header.push(tags.orientation);
+    for (name, value) in [
+        ("\tXB:i:", tags.barcode_route as usize),
+        ("\tXI:i:", tags.index_route as usize),
+        ("\tXA:i:", tags.anchor_bits as usize),
+        ("\tXL:i:", tags.extracted_cdna_len),
+    ] {
+        header.extend_from_slice(name.as_bytes());
+        header.extend_from_slice(value.to_string().as_bytes());
+    }
 }
 
 /// Allocate the per-LOGICAL-target raw FASTQ buffers `(R1 bytes, R2 bytes, count)`.
@@ -450,7 +535,29 @@ fn process_one(
         // CB rescue (synthesizes a corrected R1). M5 indel realign (--realign);
         // then CB reframe (--cb-reframe); then lenient Hamming-2 (--lenient).
         // Reframe and lenient are gated on confident location.
-        let mut corrected_r1: Option<(Vec<u8>, Vec<u8>)> = None;
+        // A unique Hamming-1 match is a correction, not merely a classification:
+        // emit the canonical whitelist sequence in R1 so downstream CB tags and
+        // fixed barcode templates refer to the same cell identifier.
+        let mut corrected_r1: Option<(Vec<u8>, Vec<u8>)> =
+            match (sh.whitelist, e.r1, cb_status) {
+                (Some(w), Some((r1s, r1e)), Some(CbStatus::Within1)) => {
+                    w.correct_within1(&o.seq[r1s..r1s + sh.cb_len]).map(|cb| {
+                        let mut s = cb.to_vec();
+                        s.extend_from_slice(&o.seq[r1s + sh.cb_len..r1e]);
+                        (s, o.qual[r1s..r1e].to_vec())
+                    })
+                }
+                _ => None,
+            };
+        // XB: how the emitted barcode passed or was rescued. Values 0/1 are
+        // whitelist exact/within-1; 2/3/4 are indel/reframe/Hamming-2 rescue;
+        // 5 means no whitelist and 6 means an unrescued miss emitted with gating off.
+        let mut barcode_route = match cb_status {
+            Some(CbStatus::OnWhitelist) => 0,
+            Some(CbStatus::Within1) => 1,
+            Some(CbStatus::Fail) => 6,
+            _ => 5,
+        };
         if cb_status == Some(CbStatus::Fail) {
             if let (Some(w), Some((r1s, r1e))) = (sh.whitelist, e.r1) {
                 if sh.realign {
@@ -465,6 +572,7 @@ fn process_one(
                                 q.resize(sh.cb_len, b'I');
                                 q.extend_from_slice(&o.qual[pts - sh.umi_len..pts]);
                                 corrected_r1 = Some((s, q));
+                                barcode_route = 2;
                                 stats.realigned += 1;
                             }
                         }
@@ -477,18 +585,16 @@ fn process_one(
                 if corrected_r1.is_none() && sh.cb_reframe && located_confident {
                     if let Some(pts) = o.polyt_start {
                         if pts >= sh.umi_len {
-                            if let Some((cb, off)) =
-                                w.reframe_cb(&o.seq, r1s, sh.reframe_window)
-                            {
+                            if let Some((cb, off)) = w.reframe_cb(&o.seq, r1s, sh.reframe_window) {
                                 let cb_s = (r1s as i64 + off).max(0) as usize;
                                 let mut s = cb.to_vec();
                                 s.extend_from_slice(&o.seq[pts - sh.umi_len..pts]);
-                                let mut q = o.qual
-                                    [cb_s..(cb_s + sh.cb_len).min(o.qual.len())]
-                                    .to_vec();
+                                let mut q =
+                                    o.qual[cb_s..(cb_s + sh.cb_len).min(o.qual.len())].to_vec();
                                 q.resize(sh.cb_len, b'I');
                                 q.extend_from_slice(&o.qual[pts - sh.umi_len..pts]);
                                 corrected_r1 = Some((s, q));
+                                barcode_route = 3;
                                 stats.reframed += 1;
                             }
                         }
@@ -502,6 +608,7 @@ fn process_one(
                         let mut s = cb2.to_vec();
                         s.extend_from_slice(&o.seq[r1s + sh.cb_len..r1e]);
                         corrected_r1 = Some((s, o.qual[r1s..r1e].to_vec()));
+                        barcode_route = 4;
                         stats.corrected2 += 1;
                     }
                 }
@@ -537,9 +644,17 @@ fn process_one(
         }
 
         // Route to a target index: sample, Undetermined (= n_samples), or combined.
+        let mut index_route = 5; // XI=5: demultiplexing was not requested.
         let target_idx = if let Some(d) = sh.demuxer {
             let (i5s, i7s) = index_anchor_starts(r1s, e.adapter_pos, sh.index_len);
             let outcome = d.assign_windowed(&o.seq, i5s, i7s, sh.index_window);
+            index_route = match outcome.via {
+                DemuxVia::Dual => 0,
+                DemuxVia::I5Only => 1,
+                DemuxVia::I7Only => 2,
+                DemuxVia::Conflict => 3,
+                DemuxVia::None => 4,
+            };
             match outcome.via {
                 DemuxVia::Dual => stats.via_dual += 1,
                 DemuxVia::I5Only => stats.via_i5 += 1,
@@ -572,11 +687,63 @@ fn process_one(
         // mirrors a sequencer stopping after N cycles. `push_fastq_r2_rc` writes the
         // revcomp straight into the buffer, touching only the emitted (≤N) bases.
         let buf = &mut bufs[target_idx];
-        push_fastq(&mut buf.0, id, r1_seq, r1_qual);
-        let emitted_r2 =
-            push_fastq_r2_rc(&mut buf.1, id, &o.seq, &o.qual, r2s, r2e, sh.extract_cfg.max_r2_len);
+        if !sh.minimap2 {
+            push_fastq(&mut buf.0, id, r1_seq, r1_qual);
+        }
+        let raw_cb = &o.seq[r1s..r1s + sh.cb_len];
+        let raw_umi = &o.seq[r1s + sh.cb_len..r1e];
+        let raw_cb_qual = &o.qual[r1s..r1s + sh.cb_len];
+        let mut header;
+        let processing = ProcessingTags {
+            orientation: match o.orientation {
+                Orientation::P5Led => b'5',
+                Orientation::P7Led => b'7',
+                Orientation::Unknown => b'?',
+            },
+            barcode_route,
+            index_route,
+            // XA bits: 1=R1-primer tail, 2=poly-T anchor, 4=cDNA adapter
+            // trimmed, 8=file-level expected/detected orientation applied.
+            anchor_bits: (o.r1_tail_confirmed as u8)
+                | (((e.polyt_run_len >= MIN_POLYT_FLANK) as u8) << 1)
+                | ((e.adapter_trimmed as u8) << 2)
+                | ((orient_cfg.expected.is_some() as u8) << 3),
+            extracted_cdna_len: r2e - r2s,
+        };
+        let r2_id = if sh.minimap2 {
+            let mut corrected_cb = r1_seq[..sh.cb_len].to_vec();
+            corrected_cb.extend_from_slice(b"-1");
+            header = minimap2_header(
+                id,
+                raw_cb,
+                &corrected_cb,
+                raw_umi,
+                &r1_seq[sh.cb_len..],
+                raw_cb_qual,
+                &r1_qual[sh.cb_len..],
+            );
+            if sh.processing_tags {
+                append_processing_tags(&mut header, processing);
+            }
+            &header
+        } else if sh.processing_tags {
+            header = id.to_vec();
+            append_processing_tags(&mut header, processing);
+            &header
+        } else {
+            id
+        };
+        let emitted_r2 = push_fastq_r2_rc(
+            &mut buf.1,
+            r2_id,
+            &o.seq,
+            &o.qual,
+            r2s,
+            r2e,
+            sh.extract_cfg.max_r2_len,
+        );
         buf.2 += 1;
-        if buf.0.len() >= FLUSH_BYTES {
+        if buf.0.len().max(buf.1.len()) >= FLUSH_BYTES {
             sh.targets[target_idx * sh.split + chunk].append(&buf.0, &buf.1, buf.2)?;
             buf.0.clear();
             buf.1.clear();
@@ -612,7 +779,10 @@ fn file_orientation(input: &Path, sh: &Shared) -> Result<Option<Orientation>> {
 fn process_file(input: &Path, sh: &Shared) -> Result<Stats> {
     let mut stats = Stats::new(sh.n_samples);
     let expected = file_orientation(input, sh)?;
-    let orient_cfg = OrientCfg { expected, ..sh.orient_cfg };
+    let orient_cfg = OrientCfg {
+        expected,
+        ..sh.orient_cfg
+    };
 
     // This worker writes to one chunk per logical target (so each chunk file is
     // touched by few threads — parallel per-sample compression). The rayon worker
@@ -720,7 +890,10 @@ fn worker_loop(worker_id: usize, sh: &Shared, rx: Receiver<Batch>) -> Result<Sta
     let mut stats = Stats::new(sh.n_samples);
 
     while let Ok(batch) = rx.recv() {
-        let orient_cfg = OrientCfg { expected: batch.orientation, ..sh.orient_cfg };
+        let orient_cfg = OrientCfg {
+            expected: batch.orientation,
+            ..sh.orient_cfg
+        };
         let (mut io, mut so) = (0usize, 0usize);
         for &(id_len, seq_len) in &batch.lens {
             let (id_len, seq_len) = (id_len as usize, seq_len as usize);
@@ -788,7 +961,10 @@ fn detect_orientation(
     extract_cfg: &ExtractCfg,
 ) -> Result<Option<Orientation>> {
     const SCAN: usize = 2000;
-    let cfg = OrientCfg { expected: None, ..*base_cfg };
+    let cfg = OrientCfg {
+        expected: None,
+        ..*base_cfg
+    };
     let mut reader = parse_fastx_file(input)?;
     let (mut p5, mut p7) = (0u64, 0u64);
     let mut seen = 0;
@@ -843,6 +1019,8 @@ fn build_metrics(
     whitelist: Option<&Whitelist>,
     demuxer: Option<&Demuxer>,
     t: &Timing,
+    minimap2: bool,
+    processing_tags: bool,
 ) -> Metrics {
     let r2_len_mean = if stats.pairs_emitted > 0 {
         stats.r2_len_sum / stats.pairs_emitted
@@ -855,6 +1033,13 @@ fn build_metrics(
         0
     };
     Metrics {
+        output_mode: if minimap2 {
+            "minimap2_r2_only"
+        } else {
+            "paired_fastq"
+        }
+        .into(),
+        processing_tags,
         total_reads: stats.reads,
         elapsed_secs: t.elapsed,
         load_secs: t.load_secs,
@@ -938,7 +1123,8 @@ fn report(stats: &Stats, demuxer: Option<&Demuxer>, t: &Timing) {
             fail = stats.cb_fail,
             hit_rate = format!(
                 "{:.1}",
-                100.0 * (stats.cb_on_whitelist + stats.cb_within1) as f64 / classified.max(1) as f64
+                100.0 * (stats.cb_on_whitelist + stats.cb_within1) as f64
+                    / classified.max(1) as f64
             ),
             located_confident_pct = format!(
                 "{:.1}",
@@ -982,10 +1168,18 @@ fn report(stats: &Stats, demuxer: Option<&Demuxer>, t: &Timing) {
     } else {
         stats.pairs_emitted
     };
-    let final_ok = if has_demux { assigned } else { stats.pairs_emitted };
+    let final_ok = if has_demux {
+        assigned
+    } else {
+        stats.pairs_emitted
+    };
     let lost = stats.reads.saturating_sub(final_ok);
     let no_cdna = stats.class_partial.saturating_sub(stats.gated_out);
-    let rps = if t.elapsed > 0.0 { (stats.reads as f64 / t.elapsed) as u64 } else { 0 };
+    let rps = if t.elapsed > 0.0 {
+        (stats.reads as f64 / t.elapsed) as u64
+    } else {
+        0
+    };
     info!(
         elapsed = format!("{:.1}s ({:.1} min)", t.elapsed, t.elapsed / 60.0),
         load_secs = format!("{:.1}", t.load_secs),
@@ -1015,7 +1209,14 @@ mod tests {
 
     /// The optimized R2 emitter must produce byte-identical output to the original
     /// `revcomp(seq[start..end])` + reversed-qual + truncate approach it replaced.
-    fn reference_r2(id: &[u8], seq: &[u8], qual: &[u8], start: usize, end: usize, cap: usize) -> Vec<u8> {
+    fn reference_r2(
+        id: &[u8],
+        seq: &[u8],
+        qual: &[u8],
+        start: usize,
+        end: usize,
+        cap: usize,
+    ) -> Vec<u8> {
         let mut r2_seq = revcomp(&seq[start..end]);
         let mut r2_qual = qual[start..end].to_vec();
         r2_qual.reverse();
@@ -1041,10 +1242,50 @@ mod tests {
                     let out = push_fastq_r2_rc(&mut got, id, seq, &qual, start, end, cap);
                     let want = reference_r2(id, seq, &qual, start, end, cap);
                     assert_eq!(got, want, "start={start} end={end} cap={cap}");
-                    let expected_len = if cap > 0 { (end - start).min(cap) } else { end - start };
+                    let expected_len = if cap > 0 {
+                        (end - start).min(cap)
+                    } else {
+                        end - start
+                    };
                     assert_eq!(out, expected_len);
                 }
             }
         }
+    }
+
+    #[test]
+    fn minimap2_header_uses_cell_ranger_tags() {
+        let got = minimap2_header(
+            b"read_id_001",
+            b"AACCGGTT",
+            b"AACCGGTT-1",
+            b"ACTG",
+            b"ACTG",
+            b"IIIIIIII",
+            b"JJJJ",
+        );
+        assert_eq!(
+            got,
+            b"read_id_001\tCR:Z:AACCGGTT\tCB:Z:AACCGGTT-1\tUR:Z:ACTG\tUB:Z:ACTG\tCY:Z:IIIIIIII\tUY:Z:JJJJ"
+        );
+    }
+
+    #[test]
+    fn processing_tags_are_valid_sam_style_fastq_comments() {
+        let mut got = b"read_id_001".to_vec();
+        append_processing_tags(
+            &mut got,
+            ProcessingTags {
+                orientation: b'5',
+                barcode_route: 3,
+                index_route: 1,
+                anchor_bits: 15,
+                extracted_cdna_len: 427,
+            },
+        );
+        assert_eq!(
+            got,
+            b"read_id_001\tXO:A:5\tXB:i:3\tXI:i:1\tXA:i:15\tXL:i:427"
+        );
     }
 }

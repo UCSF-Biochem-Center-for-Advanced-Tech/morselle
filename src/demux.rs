@@ -102,15 +102,26 @@ impl Demuxer {
     /// Combine per-index sample matches into an outcome.
     fn combine(&self, a5: Option<usize>, a7: Option<usize>) -> Outcome {
         match (a5, a7) {
-            (Some(x), Some(y)) if x == y => Outcome { sample: Some(x), via: DemuxVia::Dual },
-            (Some(_), Some(_)) => Outcome { sample: None, via: DemuxVia::Conflict },
-            (Some(x), None) if self.cfg.allow_single_index => {
-                Outcome { sample: Some(x), via: DemuxVia::I5Only }
-            }
-            (None, Some(y)) if self.cfg.allow_single_index => {
-                Outcome { sample: Some(y), via: DemuxVia::I7Only }
-            }
-            _ => Outcome { sample: None, via: DemuxVia::None },
+            (Some(x), Some(y)) if x == y => Outcome {
+                sample: Some(x),
+                via: DemuxVia::Dual,
+            },
+            (Some(_), Some(_)) => Outcome {
+                sample: None,
+                via: DemuxVia::Conflict,
+            },
+            (Some(x), None) if self.cfg.allow_single_index => Outcome {
+                sample: Some(x),
+                via: DemuxVia::I5Only,
+            },
+            (None, Some(y)) if self.cfg.allow_single_index => Outcome {
+                sample: Some(y),
+                via: DemuxVia::I7Only,
+            },
+            _ => Outcome {
+                sample: None,
+                via: DemuxVia::None,
+            },
         }
     }
 
@@ -251,7 +262,10 @@ mod tests {
     }
 
     fn cfg() -> DemuxCfg {
-        DemuxCfg { index_max_mm: 1, allow_single_index: true }
+        DemuxCfg {
+            index_max_mm: 1,
+            allow_single_index: true,
+        }
     }
 
     #[test]

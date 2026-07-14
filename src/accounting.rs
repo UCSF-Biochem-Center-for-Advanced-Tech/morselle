@@ -30,6 +30,10 @@ pub struct DemuxMetrics {
 /// Top-level run metrics, serialized to `metrics_summary.json`.
 #[derive(Serialize)]
 pub struct Metrics {
+    /// FASTQ layout selected for this run.
+    pub output_mode: String,
+    /// Whether SBX per-read processing provenance tags were emitted.
+    pub processing_tags: bool,
     pub total_reads: u64,
     /// Wall-clock seconds for the whole run (load + process).
     pub elapsed_secs: f64,

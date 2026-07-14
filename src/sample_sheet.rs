@@ -154,15 +154,18 @@ impl SampleSheet {
             }
             for (label, bc) in [("i7", &s.i7), ("i5", &s.i5)] {
                 if bc.is_empty() || !bc.iter().all(|b| matches!(b, b'A' | b'C' | b'G' | b'T')) {
-                    bail!("sample '{}' has invalid {label} index '{}'", s.id, String::from_utf8_lossy(bc));
+                    bail!(
+                        "sample '{}' has invalid {label} index '{}'",
+                        s.id,
+                        String::from_utf8_lossy(bc)
+                    );
                 }
             }
-            if let Some(other) =
-                seen_idx.insert((s.i7.clone(), s.i5.clone()), s.id.clone())
-            {
+            if let Some(other) = seen_idx.insert((s.i7.clone(), s.i5.clone()), s.id.clone()) {
                 bail!(
                     "samples '{}' and '{}' share the same i7/i5 pair",
-                    other, s.id
+                    other,
+                    s.id
                 );
             }
         }
@@ -172,13 +175,17 @@ impl SampleSheet {
                 if s.i7.len() != chem.index1_cycles {
                     bail!(
                         "sample '{}' i7 len {} != Index1Cycles {}",
-                        s.id, s.i7.len(), chem.index1_cycles
+                        s.id,
+                        s.i7.len(),
+                        chem.index1_cycles
                     );
                 }
                 if s.i5.len() != chem.index2_cycles {
                     bail!(
                         "sample '{}' i5 len {} != Index2Cycles {}",
-                        s.id, s.i5.len(), chem.index2_cycles
+                        s.id,
+                        s.i5.len(),
+                        chem.index2_cycles
                     );
                 }
             }
@@ -257,7 +264,8 @@ fn parse_bclconvert(text: &str) -> Result<SampleSheet> {
                 match by_key.get(&key) {
                     Some(existing) if existing.id != id => bail!(
                         "i7/i5 pair shared by samples '{}' and '{}'",
-                        existing.id, id
+                        existing.id,
+                        id
                     ),
                     Some(_) => {} // exact duplicate lane row — collapse
                     None => {
@@ -321,7 +329,10 @@ fn parse_flat(text: &str) -> Result<SampleSheet> {
         .map(|l| l.trim_end_matches('\r').trim())
         .filter(|l| !l.is_empty());
     let header = lines.next().context("empty flat sample sheet")?;
-    let cols: Vec<String> = header.split(',').map(|s| s.trim().to_ascii_lowercase()).collect();
+    let cols: Vec<String> = header
+        .split(',')
+        .map(|s| s.trim().to_ascii_lowercase())
+        .collect();
     let col = |name: &str| cols.iter().position(|c| c == name);
     let (si, i7i, i5i) = (
         col("sample").context("flat sheet missing 'sample' column")?,

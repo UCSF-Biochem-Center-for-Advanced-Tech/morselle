@@ -1,10 +1,48 @@
 # Changelog
 
-All notable changes to `sbx10x` are documented here. The format is based on
+All notable changes to `sbxpress` are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.3.1] — 2026-07-13
+
+### Fixed
+- Unique Hamming-1 cell barcodes are corrected to the canonical whitelist
+  sequence before minimap2/Cell Ranger `CB` emission; ambiguous Hamming-1
+  matches are rejected rather than assigned arbitrarily.
+
+### Added
+- `sbxpress matrix --cell-barcodes` reads a plain/gzipped Cell Ranger whitelist,
+  applies a configurable gem-group suffix, and retains every zero-count cell column.
+- `sbxpress annotate --genes-mtx` creates or verifies a canonical filtered gene
+  manifest; `sbxpress matrix --features` now enforces it strictly for stable rows.
+- Formal `resources/cellranger_barcodes/` staging and installation of the full
+  available 10x barcode-resource collection under `share/sbxpress/barcodes/`.
+- Idempotent `uninstall.sh` with custom-prefix, dry-run, data-preservation, and
+  optional minimap2-companion removal controls.
+- Unified `sbxpress` CLI with `extract`, `minimap`, `annotate`, `molecules`,
+  `audit`, and `matrix` subcommands. `minimap` transparently wraps minimap2;
+  processing engines are installed privately under `libexec/sbxpress`.
+- `sbx10x-molecules`: two-pass, coordinate-order-preserving gene-aware UMI
+  correction, read-support collision resolution, corrected `UB`, Cell Ranger
+  `xf=17/25` eligibility/representative tagging, and `XV`/`XW` collision audit tags.
+- `--processing-tags` emits `XO`, `XB`, `XI`, `XA`, and `XL` per-read SBX
+  provenance in R2 FASTQ comments for minimap2 `-y` propagation. The
+  `--minimap2` preset enables it automatically.
+- `sbx10x-annotate`: strand-aware GTF feature assignment that preserves existing
+  barcode/UMI tags and adds Cell Ranger-compatible `GX`, `GN`, `TX`, `AN`, and
+  `RE` tags to coordinate-sorted minimap2 BAMs, with default 10x GENCODE filtering,
+  optional intron inclusion, collision-degree tags (`XC`/`XT`), non-destructive
+  terminal-exon preference tags (`ZG`/`ZT`/`XP`) behind an explicit
+  `--three-prime` assay flag, BAM/SAM stdin and BAM stdout streaming, and JSON
+  run metrics.
+- `--minimap2` R2-only output preset. It puts raw/corrected Cell Barcode and UMI
+  tags (`CR`, `CB`, `UR`, provisional `UB`, `CY`, `UY`) in FASTQ comments for
+  minimap2 `-y` propagation to SAM/BAM, and records `output_mode` in run metrics.
+- The installer now builds and installs the `k8` runtime and a version-matched
+  `paftools.js` alongside minimap2, enabling annotated-junction BED preparation.
 
 ## [0.3.0] — 2026-07-12
 
@@ -101,6 +139,7 @@ R1/R2 FASTQs for Cell Ranger ARC.
 - End-of-run RUN SUMMARY report: timing, throughput, and lost breakdown.
 - Ubuntu install script (`install.sh`) and installation manual (`INSTALL.md`).
 
-[Unreleased]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbx10x/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbx10x/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbx10x/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbx10x/releases/tag/v0.3.0
 [0.2.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbx10x/releases/tag/v0.2.0

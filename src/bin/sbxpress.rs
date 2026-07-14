@@ -1,0 +1,115 @@
+//! Unified public command for the SBX gene-expression workflow.
+//!
+//! The mature engines remain separate executables internally for now. Keeping
+//! dispatch at the process boundary preserves their streaming and memory
+//! behavior while presenting one stable user-facing CLI.
+
+use std::env;
+use std::path::{Path, PathBuf};
+use std::process::{Command, ExitCode};
+
+const HELP: &str = "sbxpress — SBX single-cell gene-expression processing\n\n\
+Usage: sbxpress <COMMAND> [ARGUMENTS]\n\n\
+Commands:\n\
+  extract    Extract and demultiplex tagged cDNA FASTQs from raw SBX reads\n\
+  minimap    Run minimap2 with transparent argument and stream forwarding\n\
+  annotate   Add gene, transcript, region, and collision annotations to BAM\n\
+  molecules  Correct UMIs, resolve gene collisions, and mark representatives\n\
+  audit      Audit mapping, annotation, trimming, and molecule metrics\n\
+  matrix     Create Cell Ranger-compatible raw feature-barcode matrices\n\n\
+Run 'sbxpress <COMMAND> --help' for command-specific options.\n";
+
+fn helper_dir(executable: &Path) -> Option<PathBuf> {
+    if let Some(value) = env::var_os("SBXPRESS_LIBEXEC") {
+        return Some(PathBuf::from(value));
+    }
+    let bin = executable.parent()?;
+    // Installed layout: <prefix>/bin/sbxpress and <prefix>/libexec/sbxpress/*.
+    let installed = bin.parent()?.join("libexec/sbxpress");
+    if installed.is_dir() {
+        Some(installed)
+    } else {
+        // Cargo layout: target/{debug,release}/ contains every binary.
+        Some(bin.to_path_buf())
+    }
+}
+
+fn engine(command: &str) -> Option<&'static str> {
+    match command {
+        "extract" => Some("sbx10x"),
+        "annotate" => Some("sbx10x-annotate"),
+        "molecules" => Some("sbx10x-molecules"),
+        "audit" => Some("bam-audit"),
+        "matrix" => Some("cr-bam-to-mtx"),
+        _ => None,
+    }
+}
+
+fn run(mut command: Command) -> ExitCode {
+    match command.status() {
+        Ok(status) => ExitCode::from(status.code().unwrap_or(1) as u8),
+        Err(error) => {
+            eprintln!("sbxpress: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn main() -> ExitCode {
+    let mut args = env::args_os();
+    let argv0 = PathBuf::from(args.next().unwrap_or_else(|| "sbxpress".into()));
+    let executable = env::current_exe().unwrap_or(argv0);
+    let Some(subcommand) = args.next() else {
+        print!("{HELP}");
+        return ExitCode::SUCCESS;
+    };
+    let subcommand_text = subcommand.to_string_lossy();
+    if matches!(subcommand_text.as_ref(), "-h" | "--help" | "help") {
+        print!("{HELP}");
+        return ExitCode::SUCCESS;
+    }
+    if matches!(subcommand_text.as_ref(), "-V" | "--version" | "version") {
+        println!("sbxpress {}", env!("CARGO_PKG_VERSION"));
+        return ExitCode::SUCCESS;
+    }
+    if subcommand_text == "minimap" {
+        let mut child = Command::new("minimap2");
+        child.args(args);
+        return run(child);
+    }
+    let Some(helper) = engine(&subcommand_text) else {
+        eprintln!("sbxpress: unknown command '{subcommand_text}'\n\n{HELP}");
+        return ExitCode::from(2);
+    };
+    let Some(directory) = helper_dir(&executable) else {
+        eprintln!("sbxpress: cannot determine helper executable directory");
+        return ExitCode::FAILURE;
+    };
+    let helper = directory.join(helper);
+    if !helper.is_file() {
+        eprintln!(
+            "sbxpress: helper not found: {} (set SBXPRESS_LIBEXEC to override)",
+            helper.display()
+        );
+        return ExitCode::FAILURE;
+    }
+    let mut child = Command::new(helper);
+    child.env("SBXPRESS_DISPATCH", "1");
+    child.args(args);
+    run(child)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_public_engine_has_a_private_helper() {
+        assert_eq!(engine("extract"), Some("sbx10x"));
+        assert_eq!(engine("annotate"), Some("sbx10x-annotate"));
+        assert_eq!(engine("molecules"), Some("sbx10x-molecules"));
+        assert_eq!(engine("audit"), Some("bam-audit"));
+        assert_eq!(engine("matrix"), Some("cr-bam-to-mtx"));
+        assert_eq!(engine("minimap"), None);
+    }
+}

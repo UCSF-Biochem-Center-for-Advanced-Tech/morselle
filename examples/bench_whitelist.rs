@@ -82,7 +82,9 @@ fn main() {
         if args.is_empty() {
             vec![96, 10_000, 736_320, 2_000_000]
         } else {
-            args.iter().map(|s| s.parse().expect("N must be an integer")).collect()
+            args.iter()
+                .map(|s| s.parse().expect("N must be an integer"))
+                .collect()
         }
     };
     const QUERIES: usize = 300_000;
@@ -105,7 +107,9 @@ fn main() {
         vec.sort_unstable();
 
         // HIT-heavy queries: sample existing members.
-        let hits: Vec<u32> = (0..QUERIES).map(|i| vec[(i * 2654435761) % vec.len()]).collect();
+        let hits: Vec<u32> = (0..QUERIES)
+            .map(|i| vec[(i * 2654435761) % vec.len()])
+            .collect();
         // FAIL-heavy queries: codes guaranteed absent from the whitelist.
         let mut fails: Vec<u32> = Vec::with_capacity(QUERIES);
         while fails.len() < QUERIES {
