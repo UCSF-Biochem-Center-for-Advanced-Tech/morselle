@@ -6,6 +6,10 @@ use sbx10x::annotate_bam::{self, Cli};
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
+        // Annotate may emit BAM on stdout. Keep all human-readable logging on
+        // stderr so the BAM stream remains byte-for-byte valid for downstream
+        // consumers such as `samtools sort`.
+        .with_writer(std::io::stderr)
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
