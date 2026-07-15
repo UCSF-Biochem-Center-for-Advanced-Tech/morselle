@@ -6,6 +6,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.4] — 2026-07-15
+
+### Added
+- `sbxpress annotate --unordered` performs feature assignment across parallel
+  record workers for pipelines that immediately coordinate-sort the BAM.
+- `scripts/sbxpress-gex-pipeline.sh` provides a restart-safe raw-SBX-to-counts
+  workflow with independent mapping, annotation, and sorting thread controls.
+- `sbxpress audit --cells` accounts for representative molecules retained in a
+  final called-cell barcode set.
+- Audit JSON now includes `NH`/MAPQ/soft-clip/score-gap ambiguity diagnostics,
+  aligned-length bins, top ambiguous genes, a raw-UMI-to-representative molecule
+  funnel, per-molecule read-support distribution, and a read-depth saturation
+  curve. The audit wrapper and local report accept and display these fields.
+
+
 ## [0.3.3] — 2026-07-14
 
 ### Added

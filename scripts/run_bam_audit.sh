@@ -5,7 +5,8 @@
 # per BAM, a small JSON summary plus a hash-subsampled molecule dump. Everything it
 # produces is small enough to copy back for analysis (see bam_audit_report.py).
 #
-#   ./run_bam_audit.sh <illumina.bam> <p5.bam> <p7.bam> [outdir] [threads] [sample]
+#   ./run_bam_audit.sh <illumina.bam> <p5.bam> <p7.bam> [outdir] [threads] [sample] \
+#       [illumina_cells.tsv.gz] [p5_cells.tsv.gz] [p7_cells.tsv.gz]
 #
 # `sample` is the molecule subsample rate (1 in N). The SAME N must be used for all
 # three BAMs — the subsample is a hash of (CB,UMI), so identical N selects identical
@@ -23,6 +24,9 @@ ILL=$1; P5=$2; P7=$3
 OUT=${4:-bam_audit_out}
 THREADS=${5:-8}
 SAMPLE=${6:-256}
+ILL_CELLS=${7:-}
+P5_CELLS=${8:-}
+P7_CELLS=${9:-}
 
 # Prefer an installed bam-audit; otherwise fall back to the release build.
 if command -v bam-audit >/dev/null 2>&1; then
@@ -37,22 +41,23 @@ echo "using: $AUDIT"
 mkdir -p "$OUT"
 
 run() {
-  local bam=$1 label=$2 tag=$3
+  local bam=$1 label=$2 tag=$3 cells=${4:-}
   [[ -f "$bam" ]] || { echo "missing BAM: $bam"; exit 1; }
   echo "=== $label : $bam ==="
-  "$AUDIT" "$bam" \
-    --label "$label" \
-    --output "$OUT/${tag}.json" \
-    --threads "$THREADS" \
-    --molecules "$OUT/${tag}.molecules.tsv.gz" \
-    --molecule-sample "$SAMPLE" \
+  local args=("$bam" --label "$label" --output "$OUT/${tag}.json" --threads "$THREADS" \
+    --molecules "$OUT/${tag}.molecules.tsv.gz" --molecule-sample "$SAMPLE")
+  if [[ -n "$cells" ]]; then
+    [[ -f "$cells" ]] || { echo "missing called-cell barcode file: $cells"; exit 1; }
+    args+=(--cells "$cells")
+  fi
+  "$AUDIT" "${args[@]}" \
     2>&1 | tee "$OUT/${tag}.log"
   echo
 }
 
-run "$ILL" "ILLUMINA" "illumina"
-run "$P5"  "SBX p5"   "p5"
-run "$P7"  "SBX p7"   "p7"
+run "$ILL" "ILLUMINA" "illumina" "$ILL_CELLS"
+run "$P5"  "SBX p5"   "p5" "$P5_CELLS"
+run "$P7"  "SBX p7"   "p7" "$P7_CELLS"
 
 echo "Wrote to $OUT:"
 ls -lh "$OUT"

@@ -31,12 +31,13 @@
 //!       --threads 8 --molecules p5_molecules.tsv.gz --molecule-sample 64
 
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::PathBuf;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
 use clap::{CommandFactory, FromArgMatches, Parser};
+use flate2::read::MultiGzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use rust_htslib::bam::{self, record::Cigar, Read};
@@ -84,6 +85,11 @@ struct Cli {
     /// Emit 1 in N molecules to `--molecules` (same N across BAMs!). 1 = all.
     #[arg(long, default_value_t = 64)]
     molecule_sample: u64,
+
+    /// Optional called-cell barcode list (Cell Ranger filtered barcodes.tsv.gz or
+    /// sbxpress matrix barcodes.tsv.gz). Enables final-matrix molecule accounting.
+    #[arg(long)]
+    cells: Option<PathBuf>,
 }
 
 fn revcomp(s: &[u8]) -> Vec<u8> {
@@ -192,7 +198,56 @@ struct MolAccum {
     region: u8, // bit2=exonic, bit1=intronic, bit0=intergenic (best kept)
     max_readlen: u32,
     counted: bool,    // any read is a counted representative (xf bit 8)
+    eligible: bool,   // any read has Cell Ranger/sbxpress xf bit 16
     rep_gene: String, // gene of the counted representative
+}
+
+#[derive(Default, Serialize)]
+struct MappingDiagnostics {
+    /// NH buckets: 1, 2, 3-5, 6-10, 11+.
+    nh_histogram: [u64; 5],
+    /// MAPQ buckets: 0, 1-2, 3-254, 255.
+    mapq_histogram: [u64; 4],
+    /// Rows are NH buckets; columns are GX degree 0, 1, 2+.
+    nh_by_gene_degree: [[u64; 3]; 5],
+    /// Reads by soft-clip fraction: 0, (0,10], (10,25], (25,50], >50%.
+    clip_fraction_histogram: [u64; 5],
+    /// AS-XS score-gap buckets: missing either score, <=5, 6-20, >20.
+    alignment_score_gap_histogram: [u64; 4],
+    /// Gene IDs most often called on NH>1 reads (top 25, after the scan).
+    top_ambiguous_genes: Vec<NamedCount>,
+}
+
+#[derive(Serialize)]
+struct NamedCount {
+    name: String,
+    reads: u64,
+}
+
+#[derive(Default, Serialize)]
+struct MappingLenBin {
+    len_lo: usize,
+    len_hi: usize,
+    reads: u64,
+    unique_nh1: u64,
+    gene_called: u64,
+}
+
+#[derive(Default, Serialize)]
+struct MoleculeFunnel {
+    reads_with_cb_umi: u64,
+    raw_umi_nodes_est: u64,
+    corrected_cb_umi_nodes_est: u64,
+    gene_assigned_candidate_nodes_est: u64,
+    eligible_nodes_est: u64,
+    representatives: u64,
+    representatives_in_called_cells: Option<u64>,
+}
+
+#[derive(Default, Serialize)]
+struct SaturationPoint {
+    read_fraction: f64,
+    estimated_cb_umi_nodes: u64,
 }
 
 #[derive(Default, Serialize)]
@@ -293,6 +348,14 @@ struct Audit {
     raw_umi_nodes_sampled: u64,
     raw_umi_nodes_est: u64,
     collision_outcome_records: CollisionOutcomeRecords,
+    mapping_diagnostics: MappingDiagnostics,
+    aligned_length_bins: Vec<MappingLenBin>,
+    molecule_funnel: MoleculeFunnel,
+    /// Sampled CB+UB read-support histogram: 1, 2, 3, 4, 5-9, 10-19, 20+ reads.
+    read_support_histogram: [u64; 7],
+    /// Expected observed CB+UB nodes after random read downsampling, estimated from
+    /// the consistent molecule hash sample.
+    saturation_curve: Vec<SaturationPoint>,
     genes_detected: u64,
     cells_detected: u64,
     molecules_per_cell: MoleculesPerCell,
@@ -371,6 +434,35 @@ fn bump(c: &mut ClipClasses, kind: &str) {
     }
 }
 
+fn load_called_cells(path: &PathBuf) -> Result<FxHashSet<String>> {
+    let file =
+        File::open(path).with_context(|| format!("cannot open cells file {}", path.display()))?;
+    let reader: Box<dyn BufRead> = if path.extension().is_some_and(|e| e == "gz") {
+        Box::new(BufReader::new(MultiGzDecoder::new(file)))
+    } else {
+        Box::new(BufReader::new(file))
+    };
+    let mut cells = FxHashSet::default();
+    for line in reader.lines() {
+        let line = line?;
+        let barcode = line.split('\t').next().unwrap_or("").trim();
+        if !barcode.is_empty() {
+            cells.insert(barcode.to_string());
+        }
+    }
+    Ok(cells)
+}
+
+fn nh_bucket(nh: i64) -> usize {
+    match nh {
+        ..=1 => 0,
+        2 => 1,
+        3..=5 => 2,
+        6..=10 => 3,
+        _ => 4,
+    }
+}
+
 fn main() -> Result<()> {
     let cli = if std::env::var_os("SBXPRESS_DISPATCH").is_some() {
         Cli::from_arg_matches(&Cli::command().bin_name("sbxpress audit").get_matches())?
@@ -380,6 +472,10 @@ fn main() -> Result<()> {
     let t0 = Instant::now();
     let adapter_k = kmers(ADAPTER);
     let tso_k = kmers(TSO);
+    let called_cells = match &cli.cells {
+        Some(path) => Some(load_called_cells(path)?),
+        None => None,
+    };
 
     let mut reader = bam::Reader::from_path(&cli.bam)
         .with_context(|| format!("cannot open BAM {}", cli.bam.display()))?;
@@ -406,6 +502,13 @@ fn main() -> Result<()> {
                 ..Default::default()
             })
             .collect(),
+        aligned_length_bins: (0..N_BINS)
+            .map(|i| MappingLenBin {
+                len_lo: i * BIN,
+                len_hi: i * BIN + BIN - 1,
+                ..Default::default()
+            })
+            .collect(),
         ..Default::default()
     };
     // Per-molecule evidence for the subsample. Bounded: ~distinct_molecules / sample.
@@ -413,6 +516,9 @@ fn main() -> Result<()> {
     let mut counted_per_cell: FxHashMap<String, u64> = FxHashMap::default();
     let mut detected_genes: FxHashSet<String> = FxHashSet::default();
     let mut sampled_raw_umi_nodes: FxHashSet<u64> = FxHashSet::default();
+    let mut sampled_gene_candidates: FxHashSet<u64> = FxHashSet::default();
+    let mut representatives_in_called_cells = 0u64;
+    let mut ambiguous_genes: FxHashMap<String, u64> = FxHashMap::default();
 
     let mut rec = bam::Record::new();
     while let Some(r) = reader.read(&mut rec) {
@@ -464,6 +570,8 @@ fn main() -> Result<()> {
 
         let bi = (rl / BIN).min(N_BINS - 1);
         let b = &mut a.bins[bi];
+        let abi = (alen / BIN).min(N_BINS - 1);
+        let ab = &mut a.aligned_length_bins[abi];
 
         a.read_bases += rl as u64;
         a.read_len_max = a.read_len_max.max(rl);
@@ -476,10 +584,12 @@ fn main() -> Result<()> {
         b.reads += 1;
         b.aligned_bases += alen as u64;
         b.mismatches += nm;
+        ab.reads += 1;
 
         if nh == 1 {
             a.unique_nh1 += 1;
             b.unique_nh1 += 1;
+            ab.unique_nh1 += 1;
         }
         if rec.mapq() == 255 {
             a.mapq255 += 1;
@@ -503,6 +613,7 @@ fn main() -> Result<()> {
         if !gx.is_empty() {
             a.gene_called += 1;
             b.gene_called += 1;
+            ab.gene_called += 1;
             if gx.contains(';') {
                 a.multi_gene += 1;
                 b.multi_gene += 1;
@@ -515,6 +626,37 @@ fn main() -> Result<()> {
         } else {
             gx.split(';').count()
         };
+        let nh_bin = nh_bucket(nh);
+        let gx_bin = gx_degree.min(2);
+        a.mapping_diagnostics.nh_histogram[nh_bin] += 1;
+        a.mapping_diagnostics.nh_by_gene_degree[nh_bin][gx_bin] += 1;
+        let mapq_bin = match rec.mapq() {
+            0 => 0,
+            1..=2 => 1,
+            3..=254 => 2,
+            _ => 3,
+        };
+        a.mapping_diagnostics.mapq_histogram[mapq_bin] += 1;
+        let clip_fraction_bin = match (c5 + c3) * 100 / rl {
+            0 => 0,
+            1..=10 => 1,
+            11..=25 => 2,
+            26..=50 => 3,
+            _ => 4,
+        };
+        a.mapping_diagnostics.clip_fraction_histogram[clip_fraction_bin] += 1;
+        let score_gap_bin = match (aux_int(&rec, b"AS"), aux_int(&rec, b"XS")) {
+            (Some(ascore), Some(xscore)) if ascore - xscore <= 5 => 1,
+            (Some(ascore), Some(xscore)) if ascore - xscore <= 20 => 2,
+            (Some(_), Some(_)) => 3,
+            _ => 0,
+        };
+        a.mapping_diagnostics.alignment_score_gap_histogram[score_gap_bin] += 1;
+        if nh > 1 && !gx.is_empty() {
+            for gene in gx.split(';').filter(|g| !g.is_empty()) {
+                *ambiguous_genes.entry(gene.to_string()).or_default() += 1;
+            }
+        }
         let tx = aux_str(&rec, b"TX").unwrap_or("");
         let tx_degree = if tx.is_empty() {
             0
@@ -545,7 +687,8 @@ fn main() -> Result<()> {
         }
 
         // --- molecules ---
-        let cb = aux_str(&rec, b"CB").map(|s| s.split('-').next().unwrap_or(s));
+        let cb_full = aux_str(&rec, b"CB");
+        let cb = cb_full.map(|s| s.split('-').next().unwrap_or(s));
         let ub = aux_str(&rec, b"UB");
         let ur = aux_str(&rec, b"UR");
         if ur.zip(ub).is_some_and(|(raw, corrected)| raw != corrected) {
@@ -571,17 +714,22 @@ fn main() -> Result<()> {
             _ => {}
         }
         if let (Some(cbs), Some(raw_umi)) = (cb, ur) {
-            if !gx.is_empty() {
-                let key = stable_hash(&[cbs.as_bytes(), raw_umi.as_bytes(), gx.as_bytes()]);
-                if cli.molecule_sample <= 1 || splitmix64(key) % cli.molecule_sample == 0 {
-                    sampled_raw_umi_nodes.insert(key);
-                }
+            let key = stable_hash(&[cbs.as_bytes(), raw_umi.as_bytes()]);
+            if cli.molecule_sample <= 1 || splitmix64(key) % cli.molecule_sample == 0 {
+                sampled_raw_umi_nodes.insert(key);
             }
         }
         if let (Some(cbs), Some(ubs)) = (cb, ub) {
             a.reads_with_cb_umi += 1;
             if xf & 8 != 0 {
                 a.molecules += 1;
+                if cb_full.is_some_and(|full| {
+                    called_cells
+                        .as_ref()
+                        .is_some_and(|cells| cells.contains(full))
+                }) {
+                    representatives_in_called_cells += 1;
+                }
                 *counted_per_cell.entry(cbs.to_string()).or_default() += 1;
                 for gene in gx.split(';').filter(|gene| !gene.is_empty()) {
                     detected_genes.insert(gene.to_string());
@@ -603,6 +751,7 @@ fn main() -> Result<()> {
                     };
                     m.max_mapq = m.max_mapq.max(rec.mapq());
                     m.max_readlen = m.max_readlen.max(rl as u32);
+                    m.eligible |= xf & 16 != 0;
                     match re {
                         b'E' => m.region |= 4,
                         b'N' => m.region |= 2,
@@ -614,6 +763,11 @@ fn main() -> Result<()> {
                         if m.rep_gene.is_empty() && !gx.is_empty() {
                             m.rep_gene = gx.to_string();
                         }
+                    }
+                    if !gx.is_empty() {
+                        let gene_key =
+                            stable_hash(&[cbs.as_bytes(), ubs.as_bytes(), gx.as_bytes()]);
+                        sampled_gene_candidates.insert(gene_key);
                     }
                 }
             }
@@ -656,6 +810,49 @@ fn main() -> Result<()> {
     a.sampled_molecules = sampled.len() as u64;
     a.raw_umi_nodes_sampled = sampled_raw_umi_nodes.len() as u64;
     a.raw_umi_nodes_est = a.raw_umi_nodes_sampled * a.molecule_sample;
+    a.molecule_funnel.reads_with_cb_umi = a.reads_with_cb_umi;
+    a.molecule_funnel.raw_umi_nodes_est = a.raw_umi_nodes_est;
+    a.molecule_funnel.corrected_cb_umi_nodes_est = a.sampled_molecules * a.molecule_sample;
+    a.molecule_funnel.gene_assigned_candidate_nodes_est =
+        sampled_gene_candidates.len() as u64 * a.molecule_sample;
+    a.molecule_funnel.eligible_nodes_est =
+        sampled.values().filter(|m| m.eligible).count() as u64 * a.molecule_sample;
+    a.molecule_funnel.representatives = a.molecules;
+    a.molecule_funnel.representatives_in_called_cells = called_cells
+        .as_ref()
+        .map(|_| representatives_in_called_cells);
+    for m in sampled.values() {
+        let bucket = match m.n_reads {
+            1 => 0,
+            2 => 1,
+            3 => 2,
+            4 => 3,
+            5..=9 => 4,
+            10..=19 => 5,
+            _ => 6,
+        };
+        a.read_support_histogram[bucket] += 1;
+    }
+    a.saturation_curve = (1..=10)
+        .map(|step| {
+            let fraction = step as f64 / 10.0;
+            let expected = sampled
+                .values()
+                .map(|m| 1.0 - (1.0 - fraction).powi(m.n_reads as i32))
+                .sum::<f64>();
+            SaturationPoint {
+                read_fraction: fraction,
+                estimated_cb_umi_nodes: (expected * a.molecule_sample as f64).round() as u64,
+            }
+        })
+        .collect();
+    let mut ambiguous_genes: Vec<_> = ambiguous_genes.into_iter().collect();
+    ambiguous_genes.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    a.mapping_diagnostics.top_ambiguous_genes = ambiguous_genes
+        .into_iter()
+        .take(25)
+        .map(|(name, reads)| NamedCount { name, reads })
+        .collect();
     a.genes_detected = detected_genes.len() as u64;
     a.cells_detected = counted_per_cell.len() as u64;
     let mut cell_counts: Vec<u64> = counted_per_cell.into_values().collect();
@@ -686,6 +883,7 @@ fn main() -> Result<()> {
         0
     };
     a.bins.retain(|b| b.reads > 0);
+    a.aligned_length_bins.retain(|b| b.reads > 0);
 
     let json = serde_json::to_string_pretty(&a)?;
     std::fs::write(&cli.output, json)

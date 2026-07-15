@@ -13,6 +13,7 @@ use std::time::Instant;
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use flate2::read::MultiGzDecoder;
+use rayon::prelude::*;
 use rust_htslib::bam::{self, record::Aux, Read};
 use serde::Serialize;
 use tracing::info;
@@ -34,7 +35,7 @@ pub struct Cli {
     #[arg(short, long, value_name = "GTF")]
     pub gtf: PathBuf,
 
-    /// Tagged BAM output, or `-` for BAM on standard output. Input order is preserved.
+    /// Tagged BAM output, or `-` for BAM on standard output.
     #[arg(short, long, value_name = "BAM")]
     pub output: PathBuf,
 
@@ -45,6 +46,15 @@ pub struct Cli {
     /// BAM decompression/compression threads.
     #[arg(short, long, default_value_t = 4)]
     pub threads: usize,
+
+    /// Annotate records in parallel and permit output reordering within batches.
+    /// Intended for pipelines that immediately coordinate-sort the output.
+    #[arg(long)]
+    pub unordered: bool,
+
+    /// Records per parallel annotation batch when --unordered is enabled.
+    #[arg(long, default_value_t = 8192)]
+    pub batch_size: usize,
 
     /// Optional JSON metrics path (default: OUTPUT.metrics.json).
     #[arg(long)]
@@ -161,6 +171,7 @@ struct Metrics {
     cellranger_filter: bool,
     strip_id_versions: bool,
     three_prime: bool,
+    unordered: bool,
     elapsed_secs: f64,
     records: u64,
     primary: u64,
@@ -746,6 +757,184 @@ fn increment_degree(
     }
 }
 
+#[derive(Debug, Default)]
+struct RecordMetrics {
+    records: u64,
+    primary: u64,
+    supplementary: u64,
+    unmapped: u64,
+    exonic: u64,
+    intronic: u64,
+    intergenic: u64,
+    gene_assigned: u64,
+    unique_gene: u64,
+    multi_gene: u64,
+    transcript_assigned: u64,
+    antisense: u64,
+    collision_records: u64,
+    gene_degree_0: u64,
+    gene_degree_1: u64,
+    gene_degree_2: u64,
+    gene_degree_3plus: u64,
+    transcript_degree_0: u64,
+    transcript_degree_1: u64,
+    transcript_degree_2: u64,
+    transcript_degree_3plus: u64,
+    terminal_resolved_gene_collision: u64,
+    terminal_unresolved_gene_collision: u64,
+    terminal_unsupported_gene_collision: u64,
+}
+
+impl Metrics {
+    fn add_record_metrics(&mut self, value: RecordMetrics) {
+        self.records += value.records;
+        self.primary += value.primary;
+        self.supplementary += value.supplementary;
+        self.unmapped += value.unmapped;
+        self.exonic += value.exonic;
+        self.intronic += value.intronic;
+        self.intergenic += value.intergenic;
+        self.gene_assigned += value.gene_assigned;
+        self.unique_gene += value.unique_gene;
+        self.multi_gene += value.multi_gene;
+        self.transcript_assigned += value.transcript_assigned;
+        self.antisense += value.antisense;
+        self.collision_records += value.collision_records;
+        self.gene_degree_0 += value.gene_degree_0;
+        self.gene_degree_1 += value.gene_degree_1;
+        self.gene_degree_2 += value.gene_degree_2;
+        self.gene_degree_3plus += value.gene_degree_3plus;
+        self.transcript_degree_0 += value.transcript_degree_0;
+        self.transcript_degree_1 += value.transcript_degree_1;
+        self.transcript_degree_2 += value.transcript_degree_2;
+        self.transcript_degree_3plus += value.transcript_degree_3plus;
+        self.terminal_resolved_gene_collision += value.terminal_resolved_gene_collision;
+        self.terminal_unresolved_gene_collision += value.terminal_unresolved_gene_collision;
+        self.terminal_unsupported_gene_collision += value.terminal_unsupported_gene_collision;
+    }
+}
+
+fn annotate_record(
+    mut record: bam::Record,
+    annotation: &Annotation,
+    contig_names: &[Vec<u8>],
+    include_introns: bool,
+    three_prime: bool,
+) -> Result<(bam::Record, RecordMetrics)> {
+    let mut metrics = RecordMetrics {
+        records: 1,
+        ..Default::default()
+    };
+    if record.is_unmapped() {
+        metrics.unmapped = 1;
+        replace_string_tag(&mut record, b"GX", None)?;
+        replace_string_tag(&mut record, b"GN", None)?;
+        replace_string_tag(&mut record, b"TX", None)?;
+        replace_string_tag(&mut record, b"AN", None)?;
+        replace_string_tag(&mut record, b"ZG", None)?;
+        replace_string_tag(&mut record, b"ZT", None)?;
+        for tag in [b"XC", b"XT", b"XP"] {
+            let _ = record.remove_aux(tag);
+        }
+        let _ = record.remove_aux(b"RE");
+        return Ok((record, metrics));
+    }
+
+    if record.is_supplementary() {
+        metrics.supplementary = 1;
+    } else {
+        metrics.primary = 1;
+    }
+    let tid = record.tid();
+    let contig = contig_names
+        .get(tid as usize)
+        .with_context(|| format!("record has invalid target id {tid}"))?;
+    let contig = std::str::from_utf8(contig)?;
+    let blocks = alignment_blocks(&record);
+    let call = annotation.call(
+        contig,
+        &blocks,
+        record.is_reverse(),
+        &record.cigar().to_string(),
+        include_introns,
+        three_prime,
+    );
+    match call.region {
+        b'E' => metrics.exonic = 1,
+        b'N' => metrics.intronic = 1,
+        _ => metrics.intergenic = 1,
+    }
+    if !call.genes.is_empty() {
+        metrics.gene_assigned = 1;
+        if call.genes.len() == 1 {
+            metrics.unique_gene = 1;
+        } else {
+            metrics.multi_gene = 1;
+        }
+    }
+    metrics.transcript_assigned = (!call.tx.is_empty()) as u64;
+    metrics.antisense = (!call.antisense.is_empty()) as u64;
+    if !record.is_supplementary() {
+        metrics.collision_records = 1;
+        increment_degree(
+            call.genes.len(),
+            &mut metrics.gene_degree_0,
+            &mut metrics.gene_degree_1,
+            &mut metrics.gene_degree_2,
+            &mut metrics.gene_degree_3plus,
+        );
+        increment_degree(
+            call.tx.len(),
+            &mut metrics.transcript_degree_0,
+            &mut metrics.transcript_degree_1,
+            &mut metrics.transcript_degree_2,
+            &mut metrics.transcript_degree_3plus,
+        );
+        if three_prime && call.genes.len() > 1 {
+            match call.terminal_genes.len() {
+                0 => metrics.terminal_unsupported_gene_collision = 1,
+                1 => metrics.terminal_resolved_gene_collision = 1,
+                _ => metrics.terminal_unresolved_gene_collision = 1,
+            }
+        }
+    }
+    tag_record(&mut record, &call, annotation, three_prime)?;
+    Ok((record, metrics))
+}
+
+fn write_unordered_batch(
+    batch: Vec<bam::Record>,
+    pool: &rayon::ThreadPool,
+    annotation: &Annotation,
+    contig_names: &[Vec<u8>],
+    include_introns: bool,
+    three_prime: bool,
+    writer: &mut bam::Writer,
+    metrics: &mut Metrics,
+) -> Result<()> {
+    let (sender, receiver) = crossbeam_channel::unbounded();
+    pool.install(|| {
+        batch
+            .into_par_iter()
+            .for_each_with(sender, |sender, record| {
+                // The receiver is alive until every worker finishes this batch.
+                let _ = sender.send(annotate_record(
+                    record,
+                    annotation,
+                    contig_names,
+                    include_introns,
+                    three_prime,
+                ));
+            });
+    });
+    for result in receiver {
+        let (record, record_metrics) = result?;
+        writer.write(&record)?;
+        metrics.add_record_metrics(record_metrics);
+    }
+    Ok(())
+}
+
 pub fn run(cli: &Cli) -> Result<()> {
     let stdin = cli.bam == Path::new("-");
     let stdout = cli.output == Path::new("-");
@@ -754,6 +943,12 @@ pub fn run(cli: &Cli) -> Result<()> {
     }
     if stdout && cli.metrics.is_none() {
         bail!("--metrics is required when --output - is used");
+    }
+    if cli.threads == 0 {
+        bail!("--threads must be greater than zero");
+    }
+    if cli.batch_size == 0 {
+        bail!("--batch-size must be greater than zero");
     }
     let started = Instant::now();
     info!(gtf = %cli.gtf.display(), "loading annotation");
@@ -775,6 +970,9 @@ pub fn run(cli: &Cli) -> Result<()> {
     };
     reader.set_threads(cli.threads)?;
     let header_view = reader.header().clone();
+    let contig_names = (0..header_view.target_count())
+        .map(|tid| header_view.tid2name(tid).to_vec())
+        .collect::<Vec<_>>();
     let header = bam::Header::from_template(&header_view);
     let mut writer = if stdout {
         bam::Writer::from_stdout(&header, bam::Format::Bam)
@@ -797,6 +995,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         cellranger_filter: cli.cellranger_filter,
         strip_id_versions: cli.strip_id_versions,
         three_prime: cli.three_prime,
+        unordered: cli.unordered,
         genes_loaded: annotation.genes.len(),
         transcripts_loaded: annotation.transcripts.len(),
         gtf_exons_seen: annotation.exons_seen,
@@ -804,84 +1003,53 @@ pub fn run(cli: &Cli) -> Result<()> {
         gtf_exons_filtered_tag: annotation.exons_filtered_tag,
         ..Default::default()
     };
-    for result in reader.records() {
-        let mut record = result.context("reading BAM record")?;
-        metrics.records += 1;
-        if record.is_unmapped() {
-            metrics.unmapped += 1;
-            replace_string_tag(&mut record, b"GX", None)?;
-            replace_string_tag(&mut record, b"GN", None)?;
-            replace_string_tag(&mut record, b"TX", None)?;
-            replace_string_tag(&mut record, b"AN", None)?;
-            replace_string_tag(&mut record, b"ZG", None)?;
-            replace_string_tag(&mut record, b"ZT", None)?;
-            for tag in [b"XC", b"XT", b"XP"] {
-                let _ = record.remove_aux(tag);
+    if cli.unordered {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(cli.threads)
+            .build()
+            .context("creating annotation worker pool")?;
+        let mut batch = Vec::with_capacity(cli.batch_size);
+        for result in reader.records() {
+            batch.push(result.context("reading BAM record")?);
+            if batch.len() == cli.batch_size {
+                write_unordered_batch(
+                    std::mem::take(&mut batch),
+                    &pool,
+                    &annotation,
+                    &contig_names,
+                    cli.include_introns,
+                    cli.three_prime,
+                    &mut writer,
+                    &mut metrics,
+                )?;
+                batch.reserve(cli.batch_size);
             }
-            let _ = record.remove_aux(b"RE");
-        } else {
-            if record.is_supplementary() {
-                metrics.supplementary += 1;
-            } else {
-                metrics.primary += 1;
-            }
-            let tid = record.tid();
-            let contig = std::str::from_utf8(header_view.tid2name(tid as u32))?;
-            let blocks = alignment_blocks(&record);
-            let call = annotation.call(
-                contig,
-                &blocks,
-                record.is_reverse(),
-                &record.cigar().to_string(),
+        }
+        if !batch.is_empty() {
+            write_unordered_batch(
+                batch,
+                &pool,
+                &annotation,
+                &contig_names,
                 cli.include_introns,
                 cli.three_prime,
-            );
-            match call.region {
-                b'E' => metrics.exonic += 1,
-                b'N' => metrics.intronic += 1,
-                _ => metrics.intergenic += 1,
-            }
-            if !call.genes.is_empty() {
-                metrics.gene_assigned += 1;
-                if call.genes.len() == 1 {
-                    metrics.unique_gene += 1;
-                } else {
-                    metrics.multi_gene += 1;
-                }
-            }
-            if !call.tx.is_empty() {
-                metrics.transcript_assigned += 1;
-            }
-            if !call.antisense.is_empty() {
-                metrics.antisense += 1;
-            }
-            if !record.is_supplementary() {
-                metrics.collision_records += 1;
-                increment_degree(
-                    call.genes.len(),
-                    &mut metrics.gene_degree_0,
-                    &mut metrics.gene_degree_1,
-                    &mut metrics.gene_degree_2,
-                    &mut metrics.gene_degree_3plus,
-                );
-                increment_degree(
-                    call.tx.len(),
-                    &mut metrics.transcript_degree_0,
-                    &mut metrics.transcript_degree_1,
-                    &mut metrics.transcript_degree_2,
-                    &mut metrics.transcript_degree_3plus,
-                );
-                if cli.three_prime && call.genes.len() > 1 {
-                    match call.terminal_genes.len() {
-                        0 => metrics.terminal_unsupported_gene_collision += 1,
-                        1 => metrics.terminal_resolved_gene_collision += 1,
-                        _ => metrics.terminal_unresolved_gene_collision += 1,
-                    }
-                }
-            }
-            tag_record(&mut record, &call, &annotation, cli.three_prime)?;
+                &mut writer,
+                &mut metrics,
+            )?;
         }
-        writer.write(&record)?;
+    } else {
+        for result in reader.records() {
+            let record = result.context("reading BAM record")?;
+            let (record, record_metrics) = annotate_record(
+                record,
+                &annotation,
+                &contig_names,
+                cli.include_introns,
+                cli.three_prime,
+            )?;
+            writer.write(&record)?;
+            metrics.add_record_metrics(record_metrics);
+        }
     }
     drop(writer);
     metrics.elapsed_secs = started.elapsed().as_secs_f64();
@@ -897,6 +1065,8 @@ pub fn run(cli: &Cli) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rust_htslib::bam::header::HeaderRecord;
+    use rust_htslib::bam::record::{Cigar, CigarString};
 
     #[test]
     fn spliced_transcript_compatibility_and_position() {
@@ -996,5 +1166,96 @@ mod tests {
             ),
             Some(30),
         );
+    }
+
+    #[test]
+    fn unordered_annotation_matches_ordered_tags_and_counts() {
+        let temp = tempfile::tempdir().unwrap();
+        let gtf = temp.path().join("genes.gtf");
+        fs::write(
+            &gtf,
+            "chr1\ttest\texon\t101\t200\t.\t+\t.\tgene_id \"ENSG000001.1\"; transcript_id \"ENST000001.1\"; gene_name \"GENE1\"; gene_type \"protein_coding\"; transcript_type \"protein_coding\";\n",
+        )
+        .unwrap();
+
+        let input = temp.path().join("input.bam");
+        let mut header = bam::Header::new();
+        header.push_record(
+            HeaderRecord::new(b"SQ")
+                .push_tag(b"SN", "chr1")
+                .push_tag(b"LN", 1000),
+        );
+        let mut writer = bam::Writer::from_path(&input, &header, bam::Format::Bam).unwrap();
+        let cigar = CigarString(vec![Cigar::Match(20)]);
+        for index in 0..128 {
+            let mut record = bam::Record::new();
+            let name = format!("read-{index:03}");
+            record.set(
+                name.as_bytes(),
+                Some(&cigar),
+                b"ACGTACGTACGTACGTACGT",
+                &[30; 20],
+            );
+            record.set_tid(0);
+            record.set_pos(if index % 2 == 0 { 110 } else { 300 });
+            writer.write(&record).unwrap();
+        }
+        drop(writer);
+
+        let run_mode = |unordered: bool, stem: &str| {
+            let output = temp.path().join(format!("{stem}.bam"));
+            let metrics = temp.path().join(format!("{stem}.json"));
+            run(&Cli {
+                bam: input.clone(),
+                gtf: gtf.clone(),
+                output: output.clone(),
+                include_introns: true,
+                threads: 4,
+                unordered,
+                batch_size: 17,
+                metrics: Some(metrics.clone()),
+                genes_mtx: None,
+                cellranger_filter: true,
+                strip_id_versions: true,
+                three_prime: true,
+            })
+            .unwrap();
+            let mut reader = bam::Reader::from_path(output).unwrap();
+            let mut tags = reader
+                .records()
+                .map(|record| {
+                    let record = record.unwrap();
+                    let gx = match record.aux(b"GX").ok() {
+                        Some(Aux::String(value)) => value.to_owned(),
+                        _ => String::new(),
+                    };
+                    let re = match record.aux(b"RE").ok() {
+                        Some(Aux::Char(value)) => value,
+                        _ => b'.',
+                    };
+                    (record.qname().to_vec(), gx, re)
+                })
+                .collect::<Vec<_>>();
+            tags.sort_unstable();
+            let metrics: serde_json::Value =
+                serde_json::from_slice(&fs::read(metrics).unwrap()).unwrap();
+            (tags, metrics)
+        };
+
+        let (ordered_tags, ordered_metrics) = run_mode(false, "ordered");
+        let (unordered_tags, unordered_metrics) = run_mode(true, "unordered");
+        assert_eq!(ordered_tags, unordered_tags);
+        for field in [
+            "records",
+            "primary",
+            "exonic",
+            "intergenic",
+            "gene_assigned",
+            "unique_gene",
+            "collision_records",
+        ] {
+            assert_eq!(ordered_metrics[field], unordered_metrics[field], "{field}");
+        }
+        assert_eq!(unordered_metrics["unordered"], true);
     }
 }

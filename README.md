@@ -132,6 +132,30 @@ the top N nonzero barcodes without EmptyDrops. Outputs include
 `filtered_feature_bc_matrix/`, `filtered_feature_bc_matrix.h5`,
 `filtered_barcodes.csv`, `cell_calls.csv`, and `cell_calling_metrics.json`.
 
+### Raw SBX to counts pipeline
+
+`scripts/sbxpress-gex-pipeline.sh` is the restart-safe production wrapper for
+one demultiplexed sample. It performs extraction once for all supplied device
+outputs, then maps, annotates in unordered parallel mode, coordinate-sorts,
+resolves molecules, writes raw counts, and calls cells. The comparison audit is
+optional so normal count generation does not make an additional full-BAM pass.
+
+```bash
+scripts/sbxpress-gex-pipeline.sh \
+  --fastqs raw/device_0/out raw/device_1/out raw/device_2/out raw/device_3/out \
+  --sample-sheet samples.csv --sample M2_GEX \
+  --whitelist 737K-arc-v1.txt.gz \
+  --mmi GRCh38.splice-sr.mmi \
+  --gtf gencode.v44.primary_assembly.basic.annotation.gtf.gz \
+  --junctions gencode.v44.primary_assembly.junctions.bed \
+  --out-dir results/sbx_p5 \
+  --map-threads 32 --annotate-threads 8 --sort-threads 8
+```
+
+Use separate thread values for concurrent runs; the defaults are intentionally
+conservative. The script writes its canonical `genes.mtx` to
+`OUT/reference/genes.mtx` unless `--genes-mtx` is supplied.
+
 The installed `sbxpress annotate` stage assigns alignments against a GENCODE-style
 GTF and adds Cell Ranger-compatible `GX`, `GN`, `TX`, `AN`, and `RE` tags:
 
@@ -150,11 +174,14 @@ provide an explicit metrics path:
 ```bash
 sbxpress minimap ... \
 | sbxpress annotate - --gtf genes.gtf.gz --output - \
-    --metrics sample.annotation.metrics.json --three-prime \
+    --metrics sample.annotation.metrics.json --three-prime --unordered \
 | samtools sort -@ 8 -o sample.annotated.coordinate.bam -
 ```
 
-It preserves coordinate order and existing barcode/UMI tags. UMI correction,
+By default annotation preserves input order. `--unordered` annotates record
+batches across `--threads` workers and emits records as workers finish; use it
+when a downstream `samtools sort` will establish coordinate order. Existing
+barcode/UMI tags are preserved in either mode. UMI correction,
 molecule selection, and `xf` tagging remain a separate downstream stage.
 By default it recreates the 10x GENCODE gene/transcript-biotype,
 readthrough-transcript, PAR, and Ensembl ID-version rules while loading the GTF.
@@ -184,14 +211,19 @@ and sensitivity metrics:
 ```bash
 sbxpress audit sample.molecules.coordinate.bam \
   --label SBX --output sample.audit.json \
-  --molecules sample.molecules.tsv.gz --molecule-sample 64
+  --molecules sample.molecules.tsv.gz --molecule-sample 64 \
+  --cells filtered_feature_bc_matrix/barcodes.tsv.gz
 ```
 
-The JSON includes mapping and region counts, gene/transcript compatibility
-degrees, exact `xf` bit/value counts, UMI-corrected records, SBX `XW` outcome
-record counts, detected genes/cells, and the mean/median/P10/P90/max molecules per
-cell. Consistent molecule subsamples support platform-only molecule estimates,
-gene agreement, and per-cell/per-gene concordance in `scripts/bam_audit_report.py`.
+The JSON includes mapping and region counts, `NH`/MAPQ/soft-clip ambiguity
+diagnostics, gene/transcript compatibility degrees, exact `xf` bit/value counts,
+UMI-corrected records, SBX `XW` outcome record counts, and a sampled molecule
+funnel (raw and corrected UMI nodes, gene candidates, eligible nodes, and
+representatives). It also reports the read-support histogram and a read-depth
+saturation curve. With `--cells`, representatives are additionally split into
+all barcodes versus final called cells. Consistent molecule subsamples support
+platform-only molecule estimates, gene agreement, and per-cell/per-gene
+concordance in `scripts/bam_audit_report.py`.
 
 The three coordinate-sliced Cell Ranger fixtures can be checked with:
 

@@ -160,10 +160,80 @@ def mapping(js):
                   f"{pct(b['gene_called'], n):>8.2f}% {pct(b['multi_gene'], n):>7.3f}% "
                   f"{pct(b['mismatches'], b['aligned_bases']):>8.3f}")
 
+    print("\n  --- mapping ambiguity diagnostics (mapped primary reads) ---")
+    print(f"  {'':<26}" + "".join(f"{lab:>16}" for tag, lab in ORDER if js.get(tag)))
+    for label, key, index in [
+        ("NH = 1", "nh_histogram", 0), ("NH = 2", "nh_histogram", 1),
+        ("NH = 3-5", "nh_histogram", 2), ("NH = 6-10", "nh_histogram", 3),
+        ("NH = 11+", "nh_histogram", 4), ("MAPQ = 0", "mapq_histogram", 0),
+        ("MAPQ = 1-2", "mapq_histogram", 1), ("MAPQ = 3-254", "mapq_histogram", 2),
+        ("MAPQ = 255", "mapq_histogram", 3),
+        ("AS/XS missing", "alignment_score_gap_histogram", 0),
+        ("AS-XS <= 5", "alignment_score_gap_histogram", 1),
+        ("AS-XS 6-20", "alignment_score_gap_histogram", 2),
+        ("AS-XS > 20", "alignment_score_gap_histogram", 3),
+    ]:
+        line = f"  {label:<24}"
+        for tag, _ in ORDER:
+            a = js.get(tag)
+            if a:
+                d = a.get("mapping_diagnostics", {})
+                line += f"{pct(d.get(key, [0] * 5)[index], a['mapped']):>15.2f}%"
+        print(line)
+    for tag, lab in ORDER:
+        a = js.get(tag)
+        if not a:
+            continue
+        top = a.get("mapping_diagnostics", {}).get("top_ambiguous_genes", [])[:10]
+        if top:
+            print(f"\n  {lab}: top GX calls among NH>1 reads")
+            print("    " + ", ".join(f"{x['name']} ({x['reads']:,})" for x in top))
+
+
+def molecule_yield(js):
+    print("\n" + "=" * 78)
+    print("3. MOLECULE FUNNEL & SEQUENCING SATURATION")
+    print("=" * 78)
+    print(f"{'':<32}" + "".join(f"{lab:>16}" for tag, lab in ORDER if js.get(tag)))
+    rows = [
+        ("CB+UMI read records", "reads_with_cb_umi"),
+        ("raw CB+UMI nodes (est.)", "raw_umi_nodes_est"),
+        ("corrected CB+UB nodes (est.)", "corrected_cb_umi_nodes_est"),
+        ("gene-assigned candidates (est.)", "gene_assigned_candidate_nodes_est"),
+        ("xf eligible nodes (est.)", "eligible_nodes_est"),
+        ("xf representatives", "representatives"),
+        ("representatives in called cells", "representatives_in_called_cells"),
+    ]
+    for label, key in rows:
+        line = f"{label:<32}"
+        for tag, _ in ORDER:
+            a = js.get(tag)
+            if a:
+                value = a.get("molecule_funnel", {}).get(key)
+                line += f"{(f'{value:,}' if value is not None else 'n/a'):>16}"
+        print(line)
+    print("\n  sampled CB+UB read support")
+    print(f"  {'':<26}" + "".join(f"{lab:>16}" for tag, lab in ORDER if js.get(tag)))
+    for label, i in [("1 read", 0), ("2 reads", 1), ("3 reads", 2), ("4 reads", 3), ("5-9 reads", 4), ("10-19 reads", 5), ("20+ reads", 6)]:
+        line = f"  {label:<24}"
+        for tag, _ in ORDER:
+            a = js.get(tag)
+            if a:
+                h = a.get("read_support_histogram", [0] * 7)
+                line += f"{pct(h[i], sum(h)):>15.2f}%"
+        print(line)
+    print("\n  expected observed CB+UB nodes after read downsampling (est.)")
+    for tag, lab in ORDER:
+        a = js.get(tag)
+        if a and a.get("saturation_curve"):
+            curve = a["saturation_curve"]
+            vals = ", ".join(f"{int(p['read_fraction']*100)}%: {p['estimated_cb_umi_nodes']:,}" for p in curve)
+            print(f"  {lab:<10} {vals}")
+
 
 def concordance(mols, sample_rate):
     print("\n" + "=" * 78)
-    print("3. MOLECULE CONCORDANCE   (same CB+UMI, counted representative: same gene?)")
+    print("4. MOLECULE CONCORDANCE   (same CB+UMI, counted representative: same gene?)")
     print("=" * 78)
     pairs = [("illumina", "p5"), ("illumina", "p7"), ("p5", "p7")]
     names = dict(ORDER)
@@ -199,7 +269,7 @@ def advantage(mols):
     platform is Illumina; 'LONG' is the SBX run. A positive asymmetry (LONG-only >>
     SHORT-only) is the long-read advantage."""
     print("\n" + "=" * 78)
-    print("4. LONG-READ ADVANTAGE   (same molecule, which platform mapped it better?)")
+    print("5. LONG-READ ADVANTAGE   (same molecule, which platform mapped it better?)")
     print("=" * 78)
     names = dict(ORDER)
     for short, long_ in [("illumina", "p5"), ("illumina", "p7")]:
@@ -261,6 +331,7 @@ def main():
     mols = {tag: load_molecules(d, tag) for tag, _ in ORDER}
     contamination(js)
     mapping(js)
+    molecule_yield(js)
     concordance(mols, next(iter(samples)))
     advantage(mols)
 
