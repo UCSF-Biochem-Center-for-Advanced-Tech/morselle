@@ -40,6 +40,7 @@ Options:
   --tmp-dir DIR            Sort temporary directory; default OUT/tmp.
   --expect-cells N         Expected recovered cells; passed to sbxpress cells.
   --no-three-prime         Disable terminal-exon preference tags.
+  --multimap-tags          Retain up to ten secondary hits and add NH/HI/mm tags.
   --audit                  Also emit comparison audit JSON and molecule sample.
   --audit-label TEXT       Audit label; default SBX_SAMPLE.
   --molecule-sample N      Audit 1-in-N molecule sample; default 64.
@@ -74,6 +75,7 @@ SORT_MEM=1G
 TMP_DIR=
 EXPECT_CELLS=
 THREE_PRIME=1
+MULTIMAP_TAGS=0
 AUDIT=0
 AUDIT_LABEL=
 MOLECULE_SAMPLE=64
@@ -100,6 +102,7 @@ while (( $# > 0 )); do
         --tmp-dir) TMP_DIR=${2:?missing value for --tmp-dir}; shift 2 ;;
         --expect-cells) EXPECT_CELLS=${2:?missing value for --expect-cells}; shift 2 ;;
         --no-three-prime) THREE_PRIME=0; shift ;;
+        --multimap-tags) MULTIMAP_TAGS=1; shift ;;
         --audit) AUDIT=1; shift ;;
         --audit-label) AUDIT_LABEL=${2:?missing value for --audit-label}; shift 2 ;;
         --molecule-sample) MOLECULE_SAMPLE=${2:?missing value for --molecule-sample}; shift 2 ;;
@@ -164,11 +167,20 @@ CDNA_FASTQS=("$EXTRACT_DIR/${SAMPLE}_S"*_R2_*.fastq.gz)
 (( ${#CDNA_FASTQS[@]} > 0 )) || die "no extracted R2 FASTQs found for $SAMPLE"
 
 if [[ ! -s "$ANNOTATED_BAM.bai" ]]; then
-    echo "[2/5] mapping, unordered annotation, and one coordinate sort"
-    ANNOTATE_ARGS=(--gtf "$GTF" --output - --metrics "$ANNOTATION_DIR/$SAMPLE.annotation.metrics.json" --genes-mtx "$GENES_MTX" --unordered --threads "$ANNOTATE_THREADS")
+    echo "[2/5] mapping, annotation, and one coordinate sort"
+    ANNOTATE_ARGS=(--gtf "$GTF" --output - --metrics "$ANNOTATION_DIR/$SAMPLE.annotation.metrics.json" --genes-mtx "$GENES_MTX" --threads "$ANNOTATE_THREADS")
+    if (( MULTIMAP_TAGS )); then
+        ANNOTATE_ARGS+=(--multimap-tags)
+        # Primary + ten secondary alignments gives NH values 1..11, matching
+        # the audit's final top-coded NH=11+ ambiguity bucket.
+        MAP_MULTIMAP_ARGS=(-N 10)
+    else
+        ANNOTATE_ARGS+=(--unordered)
+        MAP_MULTIMAP_ARGS=(--secondary=no)
+    fi
     (( THREE_PRIME == 0 )) || ANNOTATE_ARGS+=(--three-prime)
     sbxpress minimap \
-        -a -x splice:sr --junc-bed "$JUNCTIONS" --secondary=no -y \
+        -a -x splice:sr --junc-bed "$JUNCTIONS" "${MAP_MULTIMAP_ARGS[@]}" -y \
         -t "$MAP_THREADS" "$MMI" "${CDNA_FASTQS[@]}" \
         2> "$LOG_DIR/minimap2.log" \
     | sbxpress annotate - "${ANNOTATE_ARGS[@]}" \

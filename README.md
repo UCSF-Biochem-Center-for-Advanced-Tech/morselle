@@ -185,6 +185,17 @@ barcode/UMI tags are preserved in either mode. UMI correction,
 molecule selection, and `xf` tagging remain a separate downstream stage.
 By default it recreates the 10x GENCODE gene/transcript-biotype,
 readthrough-transcript, PAR, and Ensembl ID-version rules while loading the GTF.
+
+For mapper-ambiguity diagnostics, use `--multimap-tags` with minimap2 secondary
+alignments retained (the production wrapper enables `-N 10`, plus the primary,
+to match the audit's top-coded `NH=11+` bucket). It
+streams query-grouped SAM directly through annotation and writes `NH` as the
+number of **reported** primary/secondary hits, `HI` as the hit index, and `mm:i:1`
+when multiple reported hits resolve to exactly one compatible gene. It preserves
+minimap2's native MAPQ rather than applying Cell Ranger's MAPQ=255 promotion, so
+the `mm` tag records the equivalent gene-rescue condition rather than an identical
+STAR/Cell Ranger mapping action. This mode is intentionally sequential and cannot
+use `--unordered`; it avoids a name-sorted intermediate BAM.
 The standard tags retain all compatible calls. Local-use `XC`/`XT` tags always
 record gene/transcript collision degree. With the explicit `--three-prime` assay
 flag, `ZG`/`ZT` and `XP` additionally record the subset supported by a

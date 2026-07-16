@@ -56,6 +56,12 @@ pub struct Cli {
     #[arg(long, default_value_t = 8192)]
     pub batch_size: usize,
 
+    /// Input is query-grouped primary/secondary minimap2 output. Add `NH` (reported
+    /// hit count), `HI`, and an `mm`-like single-gene multimap rescue tag per group.
+    /// Incompatible with --unordered because all alignments for a query stay together.
+    #[arg(long)]
+    pub multimap_tags: bool,
+
     /// Optional JSON metrics path (default: OUTPUT.metrics.json).
     #[arg(long)]
     pub metrics: Option<PathBuf>,
@@ -172,6 +178,7 @@ struct Metrics {
     strip_id_versions: bool,
     three_prime: bool,
     unordered: bool,
+    multimap_tags: bool,
     elapsed_secs: f64,
     records: u64,
     primary: u64,
@@ -685,6 +692,14 @@ fn replace_string_tag(record: &mut bam::Record, tag: &[u8; 2], value: Option<&st
     Ok(())
 }
 
+fn replace_i32_tag(record: &mut bam::Record, tag: &[u8; 2], value: Option<i32>) -> Result<()> {
+    let _ = record.remove_aux(tag);
+    if let Some(value) = value {
+        record.push_aux(tag, Aux::I32(value))?;
+    }
+    Ok(())
+}
+
 fn tag_record(
     record: &mut bam::Record,
     call: &Call,
@@ -935,6 +950,63 @@ fn write_unordered_batch(
     Ok(())
 }
 
+/// Annotate one consecutive minimap2 query group and add mapper/annotation
+/// ambiguity tags without a name sort or an intermediate BAM. `NH` is the number
+/// of *reported* primary+secondary hits, bounded by minimap2's `-N` setting.
+fn write_multimap_group(
+    group: Vec<bam::Record>,
+    annotation: &Annotation,
+    contig_names: &[Vec<u8>],
+    include_introns: bool,
+    three_prime: bool,
+    writer: &mut bam::Writer,
+    metrics: &mut Metrics,
+) -> Result<()> {
+    let mut records = Vec::with_capacity(group.len());
+    for record in group {
+        let (record, record_metrics) = annotate_record(
+            record,
+            annotation,
+            contig_names,
+            include_introns,
+            three_prime,
+        )?;
+        metrics.add_record_metrics(record_metrics);
+        records.push(record);
+    }
+    let hits = records
+        .iter()
+        .enumerate()
+        .filter_map(|(index, record)| {
+            (!record.is_unmapped() && !record.is_supplementary()).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let nh = hits.len() as i32;
+    let mut genes = HashSet::new();
+    for &index in &hits {
+        if let Ok(Aux::String(gx)) = records[index].aux(b"GX") {
+            genes.extend(
+                gx.split(';')
+                    .filter(|gene| !gene.is_empty())
+                    .map(str::to_owned),
+            );
+        }
+    }
+    // Cell Ranger `mm` additionally records a MAPQ promotion. We deliberately
+    // retain minimap2's native MAPQ; here `mm=1` means the compatible-gene rescue
+    // condition alone: multiple reported hits and exactly one compatible gene.
+    let rescued = nh > 1 && genes.len() == 1;
+    for (hi, &index) in hits.iter().enumerate() {
+        replace_i32_tag(&mut records[index], b"NH", Some(nh))?;
+        replace_i32_tag(&mut records[index], b"HI", Some((hi + 1) as i32))?;
+        replace_i32_tag(&mut records[index], b"mm", rescued.then_some(1))?;
+    }
+    for record in records {
+        writer.write(&record)?;
+    }
+    Ok(())
+}
+
 pub fn run(cli: &Cli) -> Result<()> {
     let stdin = cli.bam == Path::new("-");
     let stdout = cli.output == Path::new("-");
@@ -949,6 +1021,9 @@ pub fn run(cli: &Cli) -> Result<()> {
     }
     if cli.batch_size == 0 {
         bail!("--batch-size must be greater than zero");
+    }
+    if cli.unordered && cli.multimap_tags {
+        bail!("--multimap-tags is incompatible with --unordered");
     }
     let started = Instant::now();
     info!(gtf = %cli.gtf.display(), "loading annotation");
@@ -996,6 +1071,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         strip_id_versions: cli.strip_id_versions,
         three_prime: cli.three_prime,
         unordered: cli.unordered,
+        multimap_tags: cli.multimap_tags,
         genes_loaded: annotation.genes.len(),
         transcripts_loaded: annotation.transcripts.len(),
         gtf_exons_seen: annotation.exons_seen,
@@ -1003,7 +1079,39 @@ pub fn run(cli: &Cli) -> Result<()> {
         gtf_exons_filtered_tag: annotation.exons_filtered_tag,
         ..Default::default()
     };
-    if cli.unordered {
+    if cli.multimap_tags {
+        let mut group = Vec::new();
+        let mut qname = Vec::new();
+        for result in reader.records() {
+            let record = result.context("reading BAM record")?;
+            if !group.is_empty() && record.qname() != qname.as_slice() {
+                write_multimap_group(
+                    std::mem::take(&mut group),
+                    &annotation,
+                    &contig_names,
+                    cli.include_introns,
+                    cli.three_prime,
+                    &mut writer,
+                    &mut metrics,
+                )?;
+            }
+            if group.is_empty() {
+                qname = record.qname().to_vec();
+            }
+            group.push(record);
+        }
+        if !group.is_empty() {
+            write_multimap_group(
+                group,
+                &annotation,
+                &contig_names,
+                cli.include_introns,
+                cli.three_prime,
+                &mut writer,
+                &mut metrics,
+            )?;
+        }
+    } else if cli.unordered {
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(cli.threads)
             .build()
@@ -1213,6 +1321,7 @@ mod tests {
                 threads: 4,
                 unordered,
                 batch_size: 17,
+                multimap_tags: false,
                 metrics: Some(metrics.clone()),
                 genes_mtx: None,
                 cellranger_filter: true,

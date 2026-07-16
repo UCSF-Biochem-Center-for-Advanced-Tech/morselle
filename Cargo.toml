@@ -1,6 +1,6 @@
 [package]
 name = "sbxpress"
-version = "0.3.4"
+version = "0.3.5"
 edition = "2021"
 description = "Convert raw Roche SBX reads into per-sample 10x R1/R2 FASTQs for Cell Ranger"
 

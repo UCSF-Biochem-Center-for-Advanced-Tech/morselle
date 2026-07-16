@@ -6,6 +6,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.5] — 2026-07-16
+
+### Added
+- `sbxpress annotate --multimap-tags` processes query-grouped minimap2 primary
+  and secondary alignments in one stream, adding reported-hit `NH`, hit-index
+  `HI`, and an `mm:i:1` single-compatible-gene multimap-rescue signal while
+  retaining minimap2's native MAPQ.
+- `scripts/sbxpress-gex-pipeline.sh --multimap-tags` retains up to ten minimap2
+  secondary hits (`-N 10`), yielding top-coded `NH=11` values that match the
+  audit's `NH=11+` ambiguity bucket without an intermediate name-sorted BAM.
+
 ## [0.3.4] — 2026-07-15
 
 ### Added
