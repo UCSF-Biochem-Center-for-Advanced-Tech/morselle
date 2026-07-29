@@ -10,7 +10,7 @@ Reads the per-BAM JSON summaries and the hash-subsampled molecule dumps and prin
      gene-call rate, multi-gene ambiguity, mismatches. Then the same by read-length
      bin, which isolates the long-read effect.
   3. MOLECULE CONCORDANCE — for the SAME molecule (CB+UMI) seen in two platforms, do
-     they call the same gene? Uses Cell Ranger's counted representative (xf bit 8),
+     they call the same gene? Uses 10x reference's counted representative (xf bit 8),
      one gene call per molecule.
 
      WARNING (learned the hard way): do NOT union GX across all reads of a molecule.
@@ -310,7 +310,7 @@ def advantage(mols):
     print("\n  'uniquely mapped' = one platform placed the molecule at a single locus (NH==1)")
     print("  while the other multi-mapped it (this is conservative for SBX, which has")
     print("  FEWER reads/molecule and thus fewer chances at a unique hit, yet still wins).")
-    print("  'in a gene' = exonic or intronic vs intergenic. 'counted' = Cell Ranger")
+    print("  'in a gene' = exonic or intronic vs intergenic. 'counted' = 10x reference")
     print("  confidently assigned a gene on one platform only. A large LONG-better")
     print("  asymmetry is the long-read mapping advantage.")
 

@@ -1,16 +1,16 @@
-# Cell Ranger barcode whitelists
+# 10x reference barcode whitelists
 
-10x Genomics barcode whitelists / translation tables used by `sbx10x` for the
+10x Genomics barcode whitelists / translation tables used by `sbxpress` for the
 cell-barcode validate-gate (plan §4 step 5, M4). **These files are not committed**
-— they are external reference data shipped with Cell Ranger. Populate this folder
+— they are external reference data shipped with 10x reference. Populate this folder
 locally before running with `--whitelist`.
 
 ## Where to get them
 
-Bundled in the Cell Ranger distribution under:
+Bundled in the 10x reference distribution under:
 
 ```
-cellranger-<version>/lib/python/cellranger/barcodes/
+$TENX_INSTALL/lib/python/barcodes/
 ```
 
 (plus the `translation/` subfolder for the 2-column `_NXT` files). Copy the files
@@ -40,8 +40,8 @@ barcodes, single column) — NOT any 3' GEX list. M4 loads this via `--whitelist
 
 Verified 2026-06-24 against Roche's own known-good CBs: `737K-arc-v1` = **73.3%
 as-is** (0% reverse-complemented), vs <2% for every 3' GEX list (`3M-february-2018`
-v3, `3M-3pgex-may-2023`). Get it from the **Cell Ranger ARC** distribution:
-`cellranger-arc-<version>/lib/python/cellranger/barcodes/737K-arc-v1.txt.gz`.
+v3, `3M-3pgex-may-2023`). Get it from the **10x reference ARC** distribution:
+`$TENX_INSTALL/lib/python/barcodes/737K-arc-v1.txt.gz`.
 Match orientation is **as-is** (the ATAC barcode is the reverse complement).
 
 The 3' GEX lists (`3M-february-2018*`, `3M-3pgex-may-2023*`, `9K-LT-*`) do not

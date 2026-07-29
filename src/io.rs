@@ -83,7 +83,7 @@ impl FastqGzWriter {
     }
 }
 
-/// A paired R1/R2 gzip writer for one sample (Cell Ranger naming:
+/// A paired R1/R2 gzip writer for one sample (10x reference naming:
 /// `<prefix>_S<n>_L001_R{1,2}_001.fastq.gz`).
 pub struct PairWriter {
     pub r1: FastqGzWriter,
@@ -124,9 +124,9 @@ impl PairWriter {
 /// Each output file is a SINGLE gzip member: callers pre-format a batch of FASTQ
 /// records into raw bytes and `append` writes them straight into a per-file
 /// `GzEncoder` under one lock per target. Both R1 and R2 are written under the
-/// same lock so the Nth record in R1 stays the mate of the Nth in R2 (Cell Ranger
+/// same lock so the Nth record in R1 stays the mate of the Nth in R2 (10x reference
 /// rejects desynced pairs), and one member per file avoids the multi-member
-/// boundary mis-framing some readers (Cell Ranger) exhibit. Compression happens
+/// boundary mis-framing some readers (10x reference) exhibit. Compression happens
 /// under the lock; with a fast zlib backend it keeps up with the per-target data
 /// rate, so the lock is rarely contended.
 pub struct PairShardWriter {
@@ -139,7 +139,7 @@ struct Pair {
 }
 
 impl PairShardWriter {
-    /// `chunk` is the 1-based file-set number in the Cell Ranger name (`_001`…).
+    /// `chunk` is the 1-based file-set number in the 10x reference name (`_001`…).
     pub fn create(
         dir: &Path,
         prefix: &str,

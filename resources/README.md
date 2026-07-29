@@ -2,7 +2,7 @@
 
 Reference-adjacent data distributed or staged for sbxpress lives here.
 
-## `cellranger_barcodes/`
+## `10x_barcodes/`
 
 10x Genomics cell-barcode whitelists and related translation tables. Keep the
 upstream filenames unchanged so chemistry provenance remains explicit. The

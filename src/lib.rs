@@ -161,7 +161,7 @@ struct Shared<'a> {
     /// Output chunks per logical target (`--split`). Physical writer for logical
     /// target `t`, chunk `c` is `targets[t * split + c]`.
     split: usize,
-    /// Emit only R2 FASTQs with Cell Ranger-style barcode/UMI SAM tags in the
+    /// Emit only R2 FASTQs with 10x-style barcode/UMI SAM tags in the
     /// FASTQ comment, for minimap2 `-y` pass-through.
     minimap2: bool,
     /// Add SBX processing provenance tags to R2 FASTQ comments.
@@ -1254,7 +1254,7 @@ mod tests {
     }
 
     #[test]
-    fn minimap2_header_uses_cell_ranger_tags() {
+    fn minimap2_header_uses_10x_style_tags() {
         let got = minimap2_header(
             b"read_id_001",
             b"AACCGGTT",

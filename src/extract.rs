@@ -19,7 +19,7 @@ pub struct ExtractCfg {
     pub min_cdna_len: usize,
     /// Max mismatches for the 3' adapter trim seed.
     pub adapter_max_mm: u32,
-    /// Cap emitted R2 length; 0 = uncapped. SBX cDNA can be >1 kb, but Cell Ranger
+    /// Cap emitted R2 length; 0 = uncapped. SBX cDNA can be >1 kb, but 10x reference
     /// hard-caps reads at 649 bp. NOT applied here — `extract` retains the whole
     /// fragment; the cap is applied by the emitter after reverse-complementing into
     /// R2 orientation, so it keeps the bases the R2 primer would read.
@@ -88,7 +88,7 @@ const MIN_PARTIAL_ADAPTER: usize = 7;
 ///     seed misses because the insertion frame-shifts it to many mismatches;
 ///   * a partial adapter (≥ `MIN_PARTIAL_ADAPTER` bp) running off the 3' end.
 /// Trimming the adapter ourselves keeps cDNA out of downstream tools' adapter
-/// trimmers (Cell Ranger mis-trims long reads that still carry the adapter).
+/// trimmers (10x reference mis-trims long reads that still carry the adapter).
 /// Allocation-free. The indel check runs only at a cheap 3 bp prefix anchor.
 fn find_adapter(seq: &[u8], from: usize, max_mm: u32) -> Option<usize> {
     let a = ILLUMINA_3P_ADAPTER;
@@ -238,7 +238,7 @@ mod tests {
 
     #[test]
     fn adapter_homopolymer_insertion() {
-        // The real Cell-Ranger-breaking case: AAGAGC -> AAAGAGC (extra A).
+        // The real compatibility-breaking case: AAGAGC -> AAAGAGC (extra A).
         let cdna = b"ACGTACGTACGTACGTACGT";
         let mut s = cdna.to_vec();
         let astart = s.len();

@@ -14,7 +14,7 @@
 #                     whitelist -> DIR/share/sbxpress. Also installs k8 and
 #                     paftools.js into DIR/bin.
 #   --whitelist PATH  path to 737K-arc-v1.txt.gz to install. If omitted, the
-#                     copy bundled in resources/cellranger_barcodes/ is used
+#                     copy bundled in resources/10x_barcodes/ is used
 #                     when present.
 #   --skip-packages   do not run apt-get/Homebrew (packages must already exist).
 #   --skip-apt        backward-compatible alias for --skip-packages.
@@ -167,7 +167,7 @@ log "using k8 $K8_VERSION and paftools.js (minimap2 $MM2_VERSION)"
 # 6. Install whitelist (optional) ----------------------------------------------
 SHARE_DIR="$PREFIX/share/sbxpress"
 BARCODE_SHARE_DIR="$SHARE_DIR/barcodes"
-BUNDLED_WL="resources/cellranger_barcodes/737K-arc-v1.txt.gz"
+BUNDLED_WL="resources/10x_barcodes/737K-arc-v1.txt.gz"
 WL_SRC=""
 if [[ -n "$WHITELIST" ]]; then
   [[ -f "$WHITELIST" ]] || die "whitelist not found: $WHITELIST"
@@ -181,16 +181,16 @@ if [[ -n "$WL_SRC" ]]; then
   $SUDO install -m 0644 "$WL_SRC" "$SHARE_DIR/737K-arc-v1.txt.gz"
 else
   warn "no whitelist installed. The ARC barcode list (737K-arc-v1.txt.gz) is NOT"
-  warn "in the repo. Obtain it from cellranger-arc-<ver>/lib/python/cellranger/barcodes/"
+  warn "in the repo. Obtain it from $TENX_INSTALL/lib/python/barcodes/"
   warn "and pass it at runtime with --whitelist, or re-run with --whitelist PATH."
 fi
 
 # Install the complete curated barcode resource collection. The top-level ARC
 # copy above remains for backward-compatible command examples.
-if compgen -G "resources/cellranger_barcodes/*" >/dev/null; then
+if compgen -G "resources/10x_barcodes/*" >/dev/null; then
   log "installing 10x barcode resources -> $BARCODE_SHARE_DIR/"
   $SUDO install -d "$BARCODE_SHARE_DIR"
-  for barcode in resources/cellranger_barcodes/*; do
+  for barcode in resources/10x_barcodes/*; do
     [[ -f "$barcode" ]] || continue
     $SUDO install -m 0644 "$barcode" "$BARCODE_SHARE_DIR/$(basename "$barcode")"
   done

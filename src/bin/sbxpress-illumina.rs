@@ -21,11 +21,11 @@ const UMI_LEN: usize = 12;
 #[derive(Debug, Parser)]
 #[command(about = "Convert paired Illumina 10x FASTQs to minimap2-tagged R2 FASTQ")]
 struct Cli {
-    /// Illumina Read 1 FASTQ. Repeat once per lane/shard, in R2 order.
+    /// Illumina Read 1 FASTQ. Repeat once per lane/shard, matching --r2 order.
     #[arg(long, required = true, action = clap::ArgAction::Append)]
     r1: Vec<PathBuf>,
 
-    /// Illumina Read 2 FASTQ. Repeat once per lane/shard, in R1 order.
+    /// Illumina Read 2 FASTQ. Repeat once per lane/shard, matching --r1 order.
     #[arg(long, required = true, action = clap::ArgAction::Append)]
     r2: Vec<PathBuf>,
 

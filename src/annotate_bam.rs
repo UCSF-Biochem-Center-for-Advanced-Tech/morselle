@@ -1,4 +1,4 @@
-//! Add Cell Ranger-compatible GENCODE annotation tags to a genomic BAM.
+//! Add 10x-compatible GENCODE annotation tags to a genomic BAM.
 //!
 //! This stage performs feature assignment only. It deliberately does not correct
 //! UMIs or set `xf`: those require evidence aggregated across all reads sharing a
@@ -24,7 +24,7 @@ const BIN_SIZE: i64 = 16_384;
 #[command(
     name = "sbx10x-annotate",
     version,
-    about = "Add Cell Ranger-compatible GX/GN/TX/AN/RE tags to a genomic BAM"
+    about = "Add 10x-compatible GX/GN/TX/AN/RE tags to a genomic BAM"
 )]
 pub struct Cli {
     /// Genomic BAM/SAM produced by minimap2, or `-` for standard input.
@@ -74,7 +74,7 @@ pub struct Cli {
 
     /// Apply the 10x GENCODE gene/transcript biotype, readthrough, and PAR rules.
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
-    pub cellranger_filter: bool,
+    pub reference_filter: bool,
 
     /// Remove numeric version suffixes from Ensembl gene/transcript IDs.
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
@@ -174,7 +174,7 @@ struct Metrics {
     gtf: String,
     genes_mtx: Option<String>,
     include_introns: bool,
-    cellranger_filter: bool,
+    reference_filter: bool,
     strip_id_versions: bool,
     three_prime: bool,
     unordered: bool,
@@ -312,7 +312,7 @@ fn normalize_ensembl_id(value: &str, strip_version: bool) -> String {
 }
 
 impl Annotation {
-    fn load(path: &Path, cellranger_filter: bool, strip_id_versions: bool) -> Result<Self> {
+    fn load(path: &Path, reference_filter: bool, strip_id_versions: bool) -> Result<Self> {
         let mut a = Self::default();
         let mut genes_by_id: HashMap<String, usize> = HashMap::new();
         let mut tx_by_id: HashMap<String, usize> = HashMap::new();
@@ -341,7 +341,7 @@ impl Annotation {
                 bail!("invalid GTF interval at line {}", line_no + 1);
             }
             let attrs = fields[8];
-            if cellranger_filter {
+            if reference_filter {
                 let gene_type =
                     attribute(attrs, "gene_type").or_else(|| attribute(attrs, "gene_biotype"));
                 let transcript_type = attribute(attrs, "transcript_type")
@@ -992,7 +992,7 @@ fn write_multimap_group(
             );
         }
     }
-    // Cell Ranger `mm` additionally records a MAPQ promotion. We deliberately
+    // The reference-pipeline `mm` convention additionally records a MAPQ promotion. We deliberately
     // retain minimap2's native MAPQ; here `mm=1` means the compatible-gene rescue
     // condition alone: multiple reported hits and exactly one compatible gene.
     let rescued = nh > 1 && genes.len() == 1;
@@ -1027,7 +1027,7 @@ pub fn run(cli: &Cli) -> Result<()> {
     }
     let started = Instant::now();
     info!(gtf = %cli.gtf.display(), "loading annotation");
-    let annotation = Annotation::load(&cli.gtf, cli.cellranger_filter, cli.strip_id_versions)?;
+    let annotation = Annotation::load(&cli.gtf, cli.reference_filter, cli.strip_id_versions)?;
     info!(
         genes = annotation.genes.len(),
         transcripts = annotation.transcripts.len(),
@@ -1067,7 +1067,7 @@ pub fn run(cli: &Cli) -> Result<()> {
             .as_ref()
             .map(|path| path.display().to_string()),
         include_introns: cli.include_introns,
-        cellranger_filter: cli.cellranger_filter,
+        reference_filter: cli.reference_filter,
         strip_id_versions: cli.strip_id_versions,
         three_prime: cli.three_prime,
         unordered: cli.unordered,
@@ -1324,7 +1324,7 @@ mod tests {
                 multimap_tags: false,
                 metrics: Some(metrics.clone()),
                 genes_mtx: None,
-                cellranger_filter: true,
+                reference_filter: true,
                 strip_id_versions: true,
                 three_prime: true,
             })

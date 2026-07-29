@@ -185,7 +185,7 @@ sbxpress matrix sample.molecules.coordinate.bam \
 
 With a feature manifest, an unlisted counted `GX` is an error. This prevents a
 sample-specific gene from being silently appended and changing matrix row order.
-`--cell-barcodes` similarly expands the Cell Ranger whitelist into canonical
+`--cell-barcodes` similarly expands the 10x reference whitelist into canonical
 `-1` suffixed matrix columns, retaining cells with zero molecules. Use the same
 gene manifest and barcode whitelist for every comparable experiment.
 

@@ -17,7 +17,7 @@ Commands:\n\
   annotate   Add gene, transcript, region, and collision annotations to BAM\n\
   molecules  Correct UMIs, resolve gene collisions, and mark representatives\n\
   audit      Audit mapping, annotation, trimming, and molecule metrics\n\
-  matrix     Create Cell Ranger-compatible raw feature-barcode matrices\n\
+  matrix     Create 10x-compatible raw feature-barcode matrices\n\
   cells      Call cells and create filtered feature-barcode matrices\n\n\
 Run 'sbxpress <COMMAND> --help' for command-specific options.\n";
 

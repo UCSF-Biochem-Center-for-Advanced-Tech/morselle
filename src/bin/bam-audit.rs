@@ -1,4 +1,4 @@
-//! `bam-audit` — single-pass, O(1)-memory audit of a Cell Ranger BAM.
+//! `bam-audit` — single-pass, O(1)-memory audit of a 10x reference BAM.
 //!
 //! Gathers everything needed for the R2 contamination audit and the long-read
 //! mapping analysis, so a full (multi-hundred-GB) BAM can be summarized on the
@@ -59,10 +59,10 @@ const TSO: &[u8] = b"AAGCAGTGGTATCAACGCAGAGTACATGGG";
 #[command(
     name = "bam-audit",
     version,
-    about = "Single-pass audit of a Cell Ranger BAM"
+    about = "Single-pass audit of a 10x reference BAM"
 )]
 struct Cli {
-    /// Input Cell Ranger BAM (possorted_genome_bam.bam).
+    /// Input 10x reference BAM (possorted_genome_bam.bam).
     bam: PathBuf,
 
     /// Label for this BAM in the JSON (e.g. "ILLUMINA", "SBX p5").
@@ -86,7 +86,7 @@ struct Cli {
     #[arg(long, default_value_t = 64)]
     molecule_sample: u64,
 
-    /// Optional called-cell barcode list (Cell Ranger filtered barcodes.tsv.gz or
+    /// Optional called-cell barcode list (10x reference filtered barcodes.tsv.gz or
     /// sbxpress matrix barcodes.tsv.gz). Enables final-matrix molecule accounting.
     #[arg(long)]
     cells: Option<PathBuf>,
@@ -198,7 +198,7 @@ struct MolAccum {
     region: u8, // bit2=exonic, bit1=intronic, bit0=intergenic (best kept)
     max_readlen: u32,
     counted: bool,    // any read is a counted representative (xf bit 8)
-    eligible: bool,   // any read has Cell Ranger/sbxpress xf bit 16
+    eligible: bool,   // any read has 10x reference/sbxpress xf bit 16
     rep_gene: String, // gene of the counted representative
 }
 
@@ -333,8 +333,8 @@ struct Audit {
     clip3: ClipClasses,
     // molecules
     reads_with_cb_umi: u64,
-    molecules: u64, // xf bit-8 representatives (Cell Ranger's counted molecules)
-    /// Exact Cell Ranger/sbxpress xf values most relevant to molecule counting.
+    molecules: u64, // xf bit-8 representatives (10x reference's counted molecules)
+    /// Exact 10x reference/sbxpress xf values most relevant to molecule counting.
     xf_17_eligible: u64,
     xf_25_representative: u64,
     /// Individual xf bit counts (a record may contribute to several fields).

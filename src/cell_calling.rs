@@ -1,4 +1,4 @@
-//! Cell Ranger-style GEX cell calling: OrdMag followed by multinomial EmptyDrops.
+//! 10x-style GEX cell calling: OrdMag followed by multinomial EmptyDrops.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
@@ -27,7 +27,7 @@ pub struct Cli {
     #[arg(value_name = "RAW_MATRIX")]
     pub raw_matrix: PathBuf,
 
-    /// Cell Ranger-style outs directory receiving filtered outputs.
+    /// 10x-style outs directory receiving filtered outputs.
     #[arg(short, long, default_value = "outs")]
     pub output: PathBuf,
 
@@ -244,7 +244,7 @@ fn linear_slope(x: &[f64], y: &[f64]) -> f64 {
 }
 
 /// Simple Good-Turing proportions, following the Gale-Sampson implementation
-/// used by Cell Ranger. Returns None when fewer than ten frequency classes exist.
+/// used by 10x reference. Returns None when fewer than ten frequency classes exist.
 fn sgt_proportions(freq: &[u64]) -> Option<(Vec<f64>, f64)> {
     let mut nr = BTreeMap::<u64, u64>::new();
     for &r in freq {
@@ -586,7 +586,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         writeln!(filtered_barcodes, "{},{}", raw.genome, raw.barcodes[bc])?;
     }
     let metrics = Metrics {
-        algorithm: "Cell Ranger OrdMag + multinomial EmptyDrops",
+        algorithm: "OrdMag + multinomial EmptyDrops",
         raw_matrix: input.display().to_string(),
         filtered_h5: h5.display().to_string(),
         raw_barcodes: raw.barcodes.len(),

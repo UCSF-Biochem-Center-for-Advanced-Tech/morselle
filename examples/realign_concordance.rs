@@ -1,6 +1,6 @@
 //! Dev tool: real-data precision proxy for the single-indel realign rescue.
 //!
-//! Roche gives only the SET of cell barcodes (Cell Ranger matrix), not per-read CB
+//! Roche gives only the SET of cell barcodes (10x reference matrix), not per-read CB
 //! calls, so a literal per-read "vs Roche" check isn't possible. Instead: build the
 //! trusted CB abundance map from confident exact / within-1 reads (the real cells),
 //! then ask where realign-recovered CBs land. Correct recoveries should pile onto

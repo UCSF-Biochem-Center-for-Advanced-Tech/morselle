@@ -1,4 +1,4 @@
-//! Reconstruct a Cell Ranger raw gene-expression matrix from its barcoded BAM.
+//! Reconstruct a 10x reference raw gene-expression matrix from its barcoded BAM.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File};
@@ -14,19 +14,19 @@ use rust_htslib::bam::{self, record::Aux, Read};
 use serde::Serialize;
 use tracing::info;
 
-/// Reconstruct Cell Ranger's raw GEX matrix from a Cell Ranger BAM.
+/// Reconstruct 10x reference's raw GEX matrix from a 10x reference BAM.
 #[derive(Debug, Parser)]
 #[command(
     name = "cr-bam-to-mtx",
     version,
-    about = "Reconstruct a Cell Ranger raw gene-expression matrix from its barcoded BAM"
+    about = "Reconstruct a 10x reference raw gene-expression matrix from its barcoded BAM"
 )]
 pub struct Cli {
-    /// Cell Ranger possorted_genome_bam.bam input.
+    /// 10x reference possorted_genome_bam.bam input.
     #[arg(value_name = "BAM")]
     pub bam: PathBuf,
 
-    /// Cell Ranger-style outs directory.
+    /// 10x-style outs directory.
     #[arg(short, long, default_value = "outs")]
     pub output: PathBuf,
 
@@ -34,15 +34,15 @@ pub struct Cli {
     #[arg(long, default_value = "unknown")]
     pub genome: String,
 
-    /// Optional Cell Ranger features.tsv[.gz] template, including zero-count rows.
+    /// Optional 10x reference features.tsv[.gz] template, including zero-count rows.
     #[arg(long)]
     pub features: Option<PathBuf>,
 
-    /// Optional Cell Ranger barcodes.tsv[.gz] template, including absent columns.
+    /// Optional 10x reference barcodes.tsv[.gz] template, including absent columns.
     #[arg(long, conflicts_with = "cell_barcodes")]
     pub barcodes: Option<PathBuf>,
 
-    /// Cell Ranger barcode whitelist (plain or .gz). Preserves whitelist order,
+    /// 10x reference barcode whitelist (plain or .gz). Preserves whitelist order,
     /// adds the gem-group suffix, and emits zero-count columns for absent cells.
     #[arg(long, value_name = "WHITELIST", conflicts_with = "barcodes")]
     pub cell_barcodes: Option<PathBuf>,
@@ -67,7 +67,7 @@ pub(crate) struct Matrix {
     pub(crate) features: Vec<Feature>,
     pub(crate) barcodes: Vec<String>,
     /// (barcode index, feature index) -> molecule count. Keeping the barcode
-    /// first makes Matrix Market output match Cell Ranger's column-major order.
+    /// first makes Matrix Market output match 10x reference's column-major order.
     pub(crate) counts: BTreeMap<(usize, usize), u64>,
     pub(crate) records: u64,
     pub(crate) molecules: u64,
@@ -219,7 +219,7 @@ fn read_cell_barcodes(path: &Path, gem_group: u32) -> Result<Vec<String>> {
                 .all(|base| matches!(base, b'A' | b'C' | b'G' | b'T'))
             {
                 bail!(
-                    "invalid Cell Ranger barcode at {}:{}: {barcode}",
+                    "invalid 10x reference barcode at {}:{}: {barcode}",
                     path.display(),
                     index + 1
                 );
@@ -479,7 +479,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cellranger_whitelist_gets_gem_group_suffix() {
+    fn tenx_whitelist_gets_gem_group_suffix() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("barcodes.txt");
         fs::write(&path, "AACCGGTT\nTTGGCCAA\n").unwrap();
@@ -508,7 +508,7 @@ mod tests {
     }
 
     #[test]
-    fn writes_cell_ranger_barcode_major_order() {
+    fn writes_compatibility_barcode_major_order() {
         let matrix = Matrix {
             features: vec![
                 Feature {
@@ -536,7 +536,7 @@ mod tests {
     }
 
     #[test]
-    fn writes_cell_ranger_csc_h5() {
+    fn writes_compatibility_csc_h5() {
         let matrix = Matrix {
             features: vec![
                 Feature {

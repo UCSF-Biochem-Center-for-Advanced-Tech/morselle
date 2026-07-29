@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Gather full-BAM audit data on the server.
 #
-# Runs `bam-audit` over the Illumina / SBX p5 / SBX p7 Cell Ranger BAMs and writes,
+# Runs `bam-audit` over the Illumina / SBX p5 / SBX p7 10x reference BAMs and writes,
 # per BAM, a small JSON summary plus a hash-subsampled molecule dump. Everything it
 # produces is small enough to copy back for analysis (see bam_audit_report.py).
 #

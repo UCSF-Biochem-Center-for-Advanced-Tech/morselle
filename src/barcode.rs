@@ -10,7 +10,7 @@
 //! which scatter across the code space, so O(1) lookups beat a binary search whose
 //! ~log₂(N) comparisons each miss cache. FxHash (multiply+rotate) is used rather
 //! than the slow default SipHash — with SipHash the set can lose to binary search
-//! on `u32` keys. We do NOT rewrite barcodes — Cell Ranger ARC corrects.
+//! on `u32` keys. We do NOT rewrite barcodes — downstream compatibility tools correct them.
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};

@@ -1,7 +1,7 @@
 # sbxpress — Installation & Operations Manual (Ubuntu and macOS)
 
 `sbxpress` converts raw Roche SBX long reads (one full library molecule per read,
-P5→P7) into per-sample 10x R1/R2 FASTQs ready for Cell Ranger ARC. This guide
+P5→P7) into per-sample 10x R1/R2 FASTQs ready for 10x reference ARC. This guide
 covers installing and running it on Ubuntu/Debian and macOS.
 
 ---
@@ -42,7 +42,7 @@ This will:
 4. Install the unified `sbxpress` command to `/usr/local/bin/`; its processing
    engines are installed privately under `/usr/local/libexec/sbxpress/`.
 5. Install the ARC whitelist to `/usr/local/share/sbxpress/` **if it is present**
-   in `resources/cellranger_barcodes/` (see §4 — it is not committed to git).
+   in `resources/10x_barcodes/` (see §4 — it is not committed to git).
 6. Run a built-in smoke test.
 
 Common variants:
@@ -96,7 +96,7 @@ installed whitelist.
 
 ### BAM gene/transcript annotation
 
-`sbxpress annotate` adds Cell Ranger-compatible `GX`, `GN`, `TX`, `AN`, and `RE`
+`sbxpress annotate` adds 10x-compatible `GX`, `GN`, `TX`, `AN`, and `RE`
 tags to a coordinate-sorted genomic BAM using the same GTF used to build the
 sbxpress minimap reference. Coordinate order is preserved; index the output afterward.
 
@@ -120,7 +120,7 @@ sbxpress minimap -a -x splice:sr --secondary=no -y reference.mmi reads.fastq.gz 
 samtools index -@ 8 sample.annotated.coordinate.bam
 ```
 
-Intronic gene-body assignment is enabled by default, matching current Cell Ranger
+Intronic gene-body assignment is enabled by default, matching current 10x reference
 GEX behavior; use `--include-introns false` for exon-only gene assignment. The
 10x GENCODE biotype/readthrough/PAR rules and Ensembl ID-version stripping are
 also enabled by default; each can be disabled explicitly for custom references.
@@ -162,8 +162,8 @@ Its JSON metrics default to `<output>.metrics.json`.
 
 ### BAM to raw gene-expression matrix
 
-The second installed app reconstructs Cell Ranger molecule counts from a complete
-Cell Ranger BAM. For an exactly shaped raw matrix, provide the matching template
+The second installed app reconstructs 10x reference molecule counts from a complete
+10x reference BAM. For an exactly shaped raw matrix, provide the matching template
 files so zero-count features/barcodes and original ordering are retained:
 
 ```bash
@@ -174,7 +174,7 @@ sbxpress matrix /data/outs/possorted_genome_bam.bam \
   --output /data/reconstructed/outs
 ```
 
-The output follows Cell Ranger's layout: the three compressed Matrix Market files
+The output follows 10x reference's layout: the three compressed Matrix Market files
 are under `outs/raw_feature_bc_matrix/`, with `outs/raw_feature_bc_matrix.h5` as
 their HDF5 neighbor and `outs/metrics_summary.json` for run accounting. The app
 prints a `RUN SUMMARY` with elapsed time, throughput, records, molecules, features,
@@ -209,17 +209,17 @@ This data is **10x Single Cell Multiome (ATAC + GEX), GEX side**, so the cell
 barcodes come from the **ARC** gel-bead list **`737K-arc-v1.txt.gz`** (736,320
 barcodes), *not* any 3′ GEX list.
 
-These files are staged under `resources/cellranger_barcodes/` but remain ignored
-by Git because they are external Cell Ranger reference data. Obtain
-it from a Cell Ranger ARC distribution:
+These files are staged under `resources/10x_barcodes/` but remain ignored
+by Git because they are external 10x reference reference data. Obtain
+it from a 10x reference ARC distribution:
 
 ```
-cellranger-arc-<version>/lib/python/cellranger/barcodes/737K-arc-v1.txt.gz
+$TENX_INSTALL/lib/python/barcodes/737K-arc-v1.txt.gz
 ```
 
 Then either:
 
-- place it at `resources/cellranger_barcodes/737K-arc-v1.txt.gz` **before**
+- place it at `resources/10x_barcodes/737K-arc-v1.txt.gz` **before**
   running `install.sh` (all staged barcode resources are copied to
   `share/sbxpress/barcodes/`, with the ARC default also at `share/sbxpress/`), or
 - pass it directly at runtime with `--whitelist /path/to/737K-arc-v1.txt.gz`.
@@ -273,10 +273,10 @@ orientations; orientation is auto-detected and enforced per file). Useful flags:
 | `--realign` | on | single-indel CB rescue (recovers ~+1% of reads at high precision); disable with `--realign false` |
 | `--lenient` | off | within-2 CB rescue — **leave off** (only ~51% precise on the dense ARC whitelist) |
 | `--cb-gate` | on | drop pairs whose CB isn't on/near the whitelist |
-| `--cellranger` | off | Cell Ranger compatibility preset — applies the settings it requires (currently `--max-r2-len 649`; explicit flags override). **Use this for Cell Ranger input.** |
+| `--cellranger` | off | 10x reference compatibility preset — applies the settings it requires (currently `--max-r2-len 649`; explicit flags override). **Use this for 10x reference input.** |
 | `--minimap2` | off | R2-only sbxpress minimap preset. Puts `CR`, `CB`, `UR`, `UB`, `CY`, and `UY` SAM-style tags in the R2 FASTQ comment; use sbxpress minimap `-y`. Mutually exclusive with `--cellranger`. |
 | `--processing-tags` | off | Add SBX provenance tags (`XO`, `XB`, `XI`, `XA`, `XL`) to R2 comments; automatically enabled by `--minimap2`. |
-| `--max-r2-len` | 0 (uncapped) | cap R2 (cDNA) length, seq+qual together; 0 = full-length. Cell Ranger hard-caps at 649 bp (`--cellranger` sets this) |
+| `--max-r2-len` | 0 (uncapped) | cap R2 (cDNA) length, seq+qual together; 0 = full-length. 10x reference hard-caps at 649 bp (`--cellranger` sets this) |
 | `--gzip-level` | 4 | output gzip compression level (lower = faster/larger); output compression is the wall-clock floor at scale |
 | `--split` | 1 | split each sample across N gzip files (`_001`..`_00N`); N>1 parallelizes per-sample compression |
 | `--reader-threads` | 0 (auto) | I/O strategy. Auto: with few input files (e.g. a single large one) decode is decoupled from processing so every core is used; with many files the classic one-file-per-thread path is used. `N>0` forces the pipelined path with N reader threads |
@@ -290,7 +290,7 @@ Tune logging with `RUST_LOG` (e.g. `RUST_LOG=debug sbxpress ...`).
 In `--out-dir`:
 
 - `<sample>_S<n>_L001_R1_001.fastq.gz` / `_R2_001.fastq.gz` — per-sample pairs in
-  Cell Ranger naming (R1 = 28 bp CB+UMI, R2 = cDNA).
+  10x reference naming (R1 = 28 bp CB+UMI, R2 = cDNA).
 - With `--minimap2`, only the R2 files are written. Their comments carry raw and
   corrected barcode/UMI tags (`CR`/`CB`, `UR`/provisional `UB`) and qualities
   (`CY`, `UY`). Align with `sbxpress minimap -a -y`; `-y` copies these comments to SAM/BAM.
@@ -308,9 +308,9 @@ elapsed time, threads, reads/sec, and `processed / emitted / assigned / lost`,
 followed by a `lost breakdown` (unparseable · no_cdna · cb_fail_gated ·
 index_undetermined). Capture it with `2> run1.log` (or `|& tee run1.log`).
 
-These feed directly into `cellranger-arc count` (use the ARC reference). Each FASTQ
+These feed directly into the 10x reference count command (use the ARC reference). Each FASTQ
 is written as a **single gzip member** (compressed once, during processing, via the
-zlib backend). This matters: Cell Ranger mis-frames records at multi-member gzip
+zlib backend). This matters: 10x reference mis-frames records at multi-member gzip
 boundaries, so single-member output is required — it is always produced.
 
 **Minimap2 workflow:** `--minimap2` is a distinct output mode, so it cannot be used
@@ -319,18 +319,18 @@ the raw barcode/UMI as `CR`/`UR`, and a provisional `UB` for later gene-aware UM
 correction. Keep barcode and UMI separate: group `(CB, UR)` before correction and
 `(CB, UB, gene)` after assignment. A combined molecule identifier belongs downstream.
 
-**Long R2 + Cell Ranger:** Cell Ranger has a **hard 649 bp read-length cap** — a read of
+**Long R2 + 10x reference:** 10x reference has a **hard 649 bp read-length cap** — a read of
 650 bp or longer fails with STAR `quality string length is not equal to sequence length`.
-SBX cDNA routinely exceeds this. Pass **`--cellranger`** to apply the Cell Ranger
+SBX cDNA routinely exceeds this. Pass **`--cellranger`** to apply the 10x reference
 compatibility preset (currently `--max-r2-len 649`), which caps R2 to 649 bp (sequence +
 quality together; read counts unchanged). sbxpress also trims the 3′ read-through adapter
 itself — including SBX homopolymer-indel variants (`AAGAGC`→`AAAGAGC`) and 3′-end
 partials — so the emitted cDNA is adapter-free; the cap simply keeps every read inside
-Cell Ranger's length limit. STAR uses ~90 bp for gene mapping regardless of R2 length.
+10x reference's length limit. STAR uses ~90 bp for gene mapping regardless of R2 length.
 
 **Throughput tip (`--split`):** compression for one sample goes through one writer,
 so a hot sample can bottleneck on a single core. `--split N` writes that sample as N
-files (`…_R1_001.fastq.gz` … `_00N`), which Cell Ranger reads together, letting N
+files (`…_R1_001.fastq.gz` … `_00N`), which 10x reference reads together, letting N
 threads compress it in parallel. Set N up to `--threads` and keep
 `N × (samples+1) × 2` under your open-file limit (`ulimit -n`); e.g. `--split 8`.
 Within each file R1/R2 stay mate-ordered.

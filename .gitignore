@@ -26,3 +26,6 @@ target
 # Python helper-script bytecode
 __pycache__/
 *.py[cod]
+
+# Locally generated presentation/report artifacts
+outputs/

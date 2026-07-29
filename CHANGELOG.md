@@ -35,7 +35,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [0.3.3] — 2026-07-14
 
 ### Added
-- `sbxpress cells` implements Cell Ranger-style GEX cell calling with bootstrapped
+- `sbxpress cells` implements 10x-style GEX cell calling with bootstrapped
   OrdMag, Simple Good-Turing ambient profiling, multinomial EmptyDrops Monte Carlo
   testing, BH FDR correction, and filtered MEX/HDF5 outputs.
 - `sbxpress illumina` converts multiple R1/R2 lanes concurrently into numbered
@@ -53,7 +53,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 - `sbxpress illumina` converts paired 10x Illumina R1/R2 FASTQs into the same
   whitelist-corrected, minimap2-tagged R2-only handoff produced by SBX extraction.
-- `sbxpress audit` now reports explicit mapped/unique-gene counts, Cell Ranger
+- `sbxpress audit` now reports explicit mapped/unique-gene counts, 10x reference
   `xf` values and bits, UMI correction impact, SBX collision outcome records,
   detected genes/cells, and molecules-per-cell distributions. The comparison
   report adds platform-only molecules and per-cell/per-gene concordance.
@@ -62,15 +62,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 - Unique Hamming-1 cell barcodes are corrected to the canonical whitelist
-  sequence before minimap2/Cell Ranger `CB` emission; ambiguous Hamming-1
+  sequence before minimap2/10x reference `CB` emission; ambiguous Hamming-1
   matches are rejected rather than assigned arbitrarily.
 
 ### Added
-- `sbxpress matrix --cell-barcodes` reads a plain/gzipped Cell Ranger whitelist,
+- `sbxpress matrix --cell-barcodes` reads a plain/gzipped 10x reference whitelist,
   applies a configurable gem-group suffix, and retains every zero-count cell column.
 - `sbxpress annotate --genes-mtx` creates or verifies a canonical filtered gene
   manifest; `sbxpress matrix --features` now enforces it strictly for stable rows.
-- Formal `resources/cellranger_barcodes/` staging and installation of the full
+- Formal `resources/10x_barcodes/` staging and installation of the full
   available 10x barcode-resource collection under `share/sbxpress/barcodes/`.
 - Idempotent `uninstall.sh` with custom-prefix, dry-run, data-preservation, and
   optional minimap2-companion removal controls.
@@ -78,13 +78,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `audit`, and `matrix` subcommands. `minimap` transparently wraps minimap2;
   processing engines are installed privately under `libexec/sbxpress`.
 - `sbx10x-molecules`: two-pass, coordinate-order-preserving gene-aware UMI
-  correction, read-support collision resolution, corrected `UB`, Cell Ranger
+  correction, read-support collision resolution, corrected `UB`, 10x reference
   `xf=17/25` eligibility/representative tagging, and `XV`/`XW` collision audit tags.
 - `--processing-tags` emits `XO`, `XB`, `XI`, `XA`, and `XL` per-read SBX
   provenance in R2 FASTQ comments for minimap2 `-y` propagation. The
   `--minimap2` preset enables it automatically.
 - `sbx10x-annotate`: strand-aware GTF feature assignment that preserves existing
-  barcode/UMI tags and adds Cell Ranger-compatible `GX`, `GN`, `TX`, `AN`, and
+  barcode/UMI tags and adds 10x-compatible `GX`, `GN`, `TX`, `AN`, and
   `RE` tags to coordinate-sorted minimap2 BAMs, with default 10x GENCODE filtering,
   optional intron inclusion, collision-degree tags (`XC`/`XT`), non-destructive
   terminal-exon preference tags (`ZG`/`ZT`/`XP`) behind an explicit
@@ -109,8 +109,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   barcodes ~4–10× above chance. The flag is now settable (`--realign true|false`).
 
 ### Added
-- `cr-bam-to-mtx`: reconstructs Cell Ranger raw GEX matrices from corrected BAM
-  molecule tags, including Cell Ranger-compatible MEX coordinate ordering, the
+- `cr-bam-to-mtx`: reconstructs 10x reference raw GEX matrices from corrected BAM
+  molecule tags, including 10x-compatible MEX coordinate ordering, the
   `outs/raw_feature_bc_matrix/` layout, and its CSC HDF5 neighbor
   `outs/raw_feature_bc_matrix.h5`.
 - Structured `metrics_summary.json`, a `RUN SUMMARY`, and fixture validation for
@@ -130,7 +130,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 - `bench_whitelist` example: microbenchmark comparing the whitelist membership
   backends (sorted `Vec` vs `FxHashSet`) across sizes 96 → ~2M on hit/fail streams.
-- `--cellranger` compatibility preset that applies the settings Cell Ranger
+- `--cellranger` compatibility preset that applies the settings 10x reference
   requires (currently `--max-r2-len 649`); explicit flags override it.
 - `--reader-threads` (default `0` = auto) selecting the I/O strategy.
 - Pipelined I/O path for runs with few input files: one reader thread per file
@@ -144,7 +144,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 - **R2 is now emitted reverse-complemented** (with reversed quality) to match the
   Illumina paired-end convention, fixing the ~46% "Reads Mapped Antisense to Gene"
-  reported by Cell Ranger.
+  reported by 10x reference.
 - `--max-r2-len` is applied at write time (after reverse-complementing) instead of
   during extraction, so the whole cDNA fragment is retained through adapter trimming
   and the cap keeps the bases the R2 primer would actually read.
@@ -159,14 +159,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   memory (<20 MB at 2M). `Whitelist::codes()` → `codes_sorted()` (diagnostics only).
 
 ### Fixed
-- Cell Ranger `quality string length is not equal to sequence length` on long reads:
-  Cell Ranger hard-caps reads at 649 bp (fails at 650). Use `--cellranger` (or
+- 10x reference `quality string length is not equal to sequence length` on long reads:
+  10x reference hard-caps reads at 649 bp (fails at 650). Use `--cellranger` (or
   `--max-r2-len 649`) to cap R2 within the limit.
 
 ## [0.1.0] — milestone build (M0–M7)
 
 Initial end-to-end pipeline converting raw Roche SBX long reads into per-sample 10x
-R1/R2 FASTQs for Cell Ranger ARC.
+R1/R2 FASTQs for 10x reference ARC.
 
 ### Added
 - **M0** — crate scaffold: CLI, logging, module layout, FASTQ read/write passthrough.
@@ -185,7 +185,7 @@ R1/R2 FASTQs for Cell Ranger ARC.
 - **M6** — parallel processing across files (rayon); loss analysis with location
   confidence and `--lenient` rescue.
 - CB reframe rescue for homopolymer-indel frame shifts (`--cb-reframe`, on by default).
-- Single-member gzip output (Cell Ranger mis-frames records at multi-member gzip
+- Single-member gzip output (10x reference mis-frames records at multi-member gzip
   boundaries) written during processing.
 - `--split` to shard each sample across N gzip files for parallel compression.
 - End-of-run RUN SUMMARY report: timing, throughput, and lost breakdown.

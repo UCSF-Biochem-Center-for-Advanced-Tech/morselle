@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run raw Roche SBX GEX data through extraction, minimap2, annotation, UMI
-# correction, matrix creation, and Cell Ranger-style cell calling.
+# correction, matrix creation, and 10x-style cell calling.
 #
 # This script deliberately keeps extraction and the two coordinate-sorted BAMs:
 # they make a failed stage restartable without repeating raw-data processing or
@@ -32,7 +32,8 @@ Options:
   --genome NAME            Feature genome label; default GRCh38.
   --extract-threads N      Extraction workers; default 32.
   --map-threads N          minimap2 workers; default 32.
-  --annotate-threads N     Unordered annotation workers; default 8.
+  --annotate-threads N     Annotation workers; default 8. Used by the fast
+                           unordered mode; multimap-tag mode is streaming.
   --sort-threads N         samtools sort/index workers; default 8.
   --molecule-threads N     Molecule-calling workers; default 8.
   --split N                Extracted FASTQ shards per sample; default 16.
@@ -41,6 +42,8 @@ Options:
   --expect-cells N         Expected recovered cells; passed to sbxpress cells.
   --no-three-prime         Disable terminal-exon preference tags.
   --multimap-tags          Retain up to ten secondary hits and add NH/HI/mm tags.
+                           This uses query-grouped streaming annotation, not
+                           unordered parallel annotation.
   --audit                  Also emit comparison audit JSON and molecule sample.
   --audit-label TEXT       Audit label; default SBX_SAMPLE.
   --molecule-sample N      Audit 1-in-N molecule sample; default 64.
@@ -82,7 +85,14 @@ MOLECULE_SAMPLE=64
 
 while (( $# > 0 )); do
     case "$1" in
-        --fastqs) FASTQS+=("${2:?missing value for --fastqs}"); shift 2 ;;
+        --fastqs)
+            shift
+            (( $# > 0 )) || die "missing value for --fastqs"
+            while (( $# > 0 )) && [[ $1 != --* ]]; do
+                FASTQS+=("$1")
+                shift
+            done
+            ;;
         --sample-sheet) SAMPLE_SHEET=${2:?missing value for --sample-sheet}; shift 2 ;;
         --sample) SAMPLE=${2:?missing value for --sample}; shift 2 ;;
         --whitelist) WHITELIST=${2:?missing value for --whitelist}; shift 2 ;;
@@ -138,13 +148,14 @@ AUDIT_JSON="$AUDIT_DIR/$SAMPLE.audit.json"
 AUDIT_MOLECULES="$AUDIT_DIR/$SAMPLE.molecules.tsv.gz"
 AUDIT_LABEL=${AUDIT_LABEL:-"SBX_$SAMPLE"}
 
-mkdir -p "$EXTRACT_DIR" "$ANNOTATION_DIR" "$MOLECULES_DIR" "$MATRIX_DIR" "$LOG_DIR" "$TMP_DIR"
+mkdir -p "$EXTRACT_DIR" "$ANNOTATION_DIR" "$MOLECULES_DIR" "$MATRIX_DIR" "$LOG_DIR" "$TMP_DIR" "$(dirname "$GENES_MTX")"
 (( AUDIT == 0 )) || mkdir -p "$AUDIT_DIR"
 
 echo "sbxpress version: $(sbxpress --version)"
 echo "sample:           $SAMPLE"
 echo "output:           $SAMPLE_OUT"
 echo "map/annotate/sort threads: $MAP_THREADS/$ANNOTATE_THREADS/$SORT_THREADS"
+echo "multimap tags:    $([[ $MULTIMAP_TAGS == 1 ]] && echo enabled || echo disabled)"
 
 if [[ ! -s "$EXTRACT_DIR/metrics_summary.json" ]]; then
     echo "[1/5] extracting and demultiplexing raw SBX data"

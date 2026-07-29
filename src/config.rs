@@ -121,15 +121,15 @@ pub struct Params {
     #[arg(long, default_value_t = 50)]
     pub min_cdna_len: usize,
 
-    /// Cap emitted R2 (cDNA) length; 0 = uncapped (full-length SBX cDNA). Cell
-    /// Ranger expects standard short R2 (~90 bp) and mis-trims very long reads
-    /// (seq/qual desync), so set this to your chemistry's R2 length (e.g. 90) for
-    /// Cell Ranger input. STAR uses ~90 bp for gene mapping regardless.
+    /// Cap emitted R2 (cDNA) length; 0 = uncapped (full-length SBX cDNA).
+    /// Compatibility workflows expect standard short R2 (~90 bp) and can
+    /// mis-trim very long reads (seq/qual desync), so set this to your chemistry's
+    /// R2 length (e.g. 90). STAR uses ~90 bp for gene mapping regardless.
     #[arg(long, default_value_t = 0)]
     pub max_r2_len: usize,
 
     /// With a whitelist, drop pairs whose CB is neither on-whitelist nor within
-    /// Hamming-1 (M4). Disable to emit all and let Cell Ranger filter.
+    /// Hamming-1 (M4). Disable to emit all and let 10x reference filter.
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub cb_gate: bool,
 
@@ -138,13 +138,13 @@ pub struct Params {
     pub adapter_max_mm: u32,
 
     /// gzip compression level (0–9) for output FASTQs. Each file is written as a
-    /// single gzip member (Cell Ranger mis-frames records at multi-member gzip
+    /// single gzip member (10x reference mis-frames records at multi-member gzip
     /// boundaries). Lower is faster but larger; the default (4) favors throughput,
     /// since output compression is the run's wall-clock floor at scale.
     #[arg(long, default_value_t = 4)]
     pub gzip_level: u32,
 
-    /// Split each sample's output across N gzip files (Cell Ranger reads them all:
+    /// Split each sample's output across N gzip files (10x reference reads them all:
     /// `_001`..`_00N`). N>1 lets N writer threads compress one sample in parallel,
     /// removing the single-encoder bottleneck on hot samples. Keep N ≤ --threads
     /// and mind the open-file limit (`ulimit -n`): N × (samples+1) × 2 files.
@@ -161,8 +161,8 @@ pub struct Params {
     #[arg(long, default_value_t = 0)]
     pub reader_threads: usize,
 
-    /// Cell Ranger compatibility preset. Applies the settings Cell Ranger requires
-    /// (currently `--max-r2-len 649`: Cell Ranger has a hard 649 bp read cap and
+    /// Compatibility preset for 10x-style paired FASTQ output. Applies the needed
+    /// settings (currently `--max-r2-len 649`: compatible consumers have a 649 bp read cap and
     /// fails at 650 bp with "quality string length is not equal to sequence
     /// length"). Explicit flags override the preset. More presets may be added.
     #[arg(long, default_value_t = false)]
@@ -180,8 +180,8 @@ pub struct Params {
     pub processing_tags: bool,
 }
 
-/// R2 length cap Cell Ranger tolerates — it hard-fails at 650 bp.
-pub const CELLRANGER_MAX_R2_LEN: usize = 649;
+/// R2 length cap accepted by the compatibility preset.
+pub const COMPAT_MAX_R2_LEN: usize = 649;
 
 impl Cli {
     /// R1 length = CB + UMI (28 bp for v3 GEX).
@@ -199,10 +199,10 @@ impl Params {
             self.processing_tags = true;
         }
         if self.cellranger {
-            // Cell Ranger hard-caps reads at 649 bp (fails at 650). Only set it
+            // The compatibility preset caps reads at 649 bp. Only set it
             // if the user hasn't already chosen a cap.
             if self.max_r2_len == 0 {
-                self.max_r2_len = CELLRANGER_MAX_R2_LEN;
+                self.max_r2_len = COMPAT_MAX_R2_LEN;
             }
         }
     }
@@ -255,8 +255,8 @@ mod tests {
     }
 
     #[test]
-    fn cellranger_preset_sets_r2_cap() {
-        assert_eq!(parse(&["--cellranger"]).max_r2_len, CELLRANGER_MAX_R2_LEN);
+    fn compat_preset_sets_r2_cap() {
+        assert_eq!(parse(&["--cellranger"]).max_r2_len, COMPAT_MAX_R2_LEN);
     }
 
     #[test]
