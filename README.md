@@ -260,8 +260,7 @@ directory. Obtain it from a 10x reference ARC distribution:
 $TENX_INSTALL/lib/python/barcodes/737K-arc-v1.txt.gz
 ```
 
-and pass it with `--whitelist` (or place it in `resources/10x_barcodes/` before
-running `install.sh`).
+and pass it at runtime with `--whitelist`.
 
 For stable feature rows across samples, build one canonical `genes.mtx` from the
 reference GTF with `sbxpress annotate --genes-mtx`, then pass that same file to

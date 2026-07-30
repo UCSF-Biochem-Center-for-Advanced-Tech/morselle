@@ -3,19 +3,15 @@
 # sbxpress installer for Ubuntu/Debian and macOS.
 #
 # Installs build prerequisites, minimap2 companions, the Rust toolchain (if
-# missing), builds the release binaries, and installs them (plus the ARC
-# whitelist, if available) under a prefix. Idempotent and safe to re-run.
+# missing), builds the release binaries, and installs them under a prefix.
+# Idempotent and safe to re-run.
 #
 # Usage:
-#   ./install.sh [--prefix DIR] [--whitelist PATH] [--skip-packages] [--skip-rust]
+#   ./install.sh [--prefix DIR] [--skip-packages] [--skip-rust]
 #
 # Options:
-#   --prefix DIR      install root (default: /usr/local). Binary -> DIR/bin,
-#                     whitelist -> DIR/share/sbxpress. Also installs k8 and
-#                     paftools.js into DIR/bin.
-#   --whitelist PATH  path to 737K-arc-v1.txt.gz to install. If omitted, the
-#                     copy bundled in resources/10x_barcodes/ is used
-#                     when present.
+#   --prefix DIR      install root (default: /usr/local). Binaries, k8, and
+#                     paftools.js -> DIR/bin.
 #   --skip-packages   do not run apt-get/Homebrew (packages must already exist).
 #   --skip-apt        backward-compatible alias for --skip-packages.
 #   --skip-rust       do not install rustup (use the cargo already on PATH).
@@ -24,7 +20,6 @@
 set -euo pipefail
 
 PREFIX="/usr/local"
-WHITELIST=""
 SKIP_PACKAGES=0
 SKIP_RUST=0
 
@@ -35,7 +30,6 @@ die()  { printf '\033[1;31m[sbxpress] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --prefix)    PREFIX="${2:?--prefix needs a value}"; shift 2 ;;
-    --whitelist) WHITELIST="${2:?--whitelist needs a value}"; shift 2 ;;
     --skip-packages|--skip-apt) SKIP_PACKAGES=1; shift ;;
     --skip-rust) SKIP_RUST=1; shift ;;
     -h|--help)   sed -n '2,21p' "$0"; exit 0 ;;
@@ -164,29 +158,9 @@ PAFTOOLS_HELP="$("$BIN_DIR/k8" "$BIN_DIR/paftools.js" 2>&1 || true)"
 grep -qi '^Usage:' <<< "$PAFTOOLS_HELP" || die "paftools.js verification failed"
 log "using k8 $K8_VERSION and paftools.js (minimap2 $MM2_VERSION)"
 
-# 6. Install whitelist (optional) ----------------------------------------------
+# 6. Install staged barcode resources (optional) --------------------------------
 SHARE_DIR="$PREFIX/share/sbxpress"
 BARCODE_SHARE_DIR="$SHARE_DIR/barcodes"
-BUNDLED_WL="resources/10x_barcodes/737K-arc-v1.txt.gz"
-WL_SRC=""
-if [[ -n "$WHITELIST" ]]; then
-  [[ -f "$WHITELIST" ]] || die "whitelist not found: $WHITELIST"
-  WL_SRC="$WHITELIST"
-elif [[ -f "$BUNDLED_WL" ]]; then
-  WL_SRC="$BUNDLED_WL"
-fi
-if [[ -n "$WL_SRC" ]]; then
-  log "installing whitelist -> $SHARE_DIR/737K-arc-v1.txt.gz"
-  $SUDO install -d "$SHARE_DIR"
-  $SUDO install -m 0644 "$WL_SRC" "$SHARE_DIR/737K-arc-v1.txt.gz"
-else
-  warn "no whitelist installed. The ARC barcode list (737K-arc-v1.txt.gz) is NOT"
-  warn "in the repo. Obtain it from $TENX_INSTALL/lib/python/barcodes/"
-  warn "and pass it at runtime with --whitelist, or re-run with --whitelist PATH."
-fi
-
-# Install the complete curated barcode resource collection. The top-level ARC
-# copy above remains for backward-compatible command examples.
 if compgen -G "resources/10x_barcodes/*" >/dev/null; then
   log "installing 10x barcode resources -> $BARCODE_SHARE_DIR/"
   $SUDO install -d "$BARCODE_SHARE_DIR"
@@ -205,7 +179,7 @@ if [[ -f "$SMOKE_FQ" && -f "$SMOKE_SS" ]]; then
   SMOKE_OUT="$(mktemp -d)"
   log "running smoke test on $SMOKE_FQ ..."
   if "$BIN_DIR/sbxpress" extract --fastqs "$SMOKE_FQ" -o "$SMOKE_OUT" --sample-sheet "$SMOKE_SS" \
-       ${WL_SRC:+--whitelist "$WL_SRC"} >/dev/null 2>&1 \
+       >/dev/null 2>&1 \
      && [[ -f "$SMOKE_OUT/metrics_summary.json" ]]; then
     log "smoke test OK (metrics_summary.json written)."
   else

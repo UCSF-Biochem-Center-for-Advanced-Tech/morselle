@@ -41,15 +41,12 @@ This will:
 3. Build the optimized release binaries (`cargo build --release --locked`).
 4. Install the unified `sbxpress` command to `/usr/local/bin/`; its processing
    engines are installed privately under `/usr/local/libexec/sbxpress/`.
-5. Install the ARC whitelist to `/usr/local/share/sbxpress/` **if it is present**
-   in `resources/10x_barcodes/` (see §4 — it is not committed to git).
-6. Run a built-in smoke test.
+5. Run a built-in smoke test.
 
 Common variants:
 
 ```bash
 ./install.sh --prefix "$HOME/.local"          # user-local install (no sudo)
-./install.sh --whitelist /data/737K-arc-v1.txt.gz
 ./install.sh --skip-packages                    # packages already present / no sudo
 ./install.sh --skip-apt                         # legacy alias for --skip-packages
 ./install.sh --skip-rust                        # use the cargo already installed
@@ -217,12 +214,7 @@ it from a 10x reference ARC distribution:
 $TENX_INSTALL/lib/python/barcodes/737K-arc-v1.txt.gz
 ```
 
-Then either:
-
-- place it at `resources/10x_barcodes/737K-arc-v1.txt.gz` **before**
-  running `install.sh` (all staged barcode resources are copied to
-  `share/sbxpress/barcodes/`, with the ARC default also at `share/sbxpress/`), or
-- pass it directly at runtime with `--whitelist /path/to/737K-arc-v1.txt.gz`.
+Pass it directly at runtime with `--whitelist /path/to/737K-arc-v1.txt.gz`.
 
 Without a whitelist the pipeline still runs but cannot gate/rescue cell barcodes
 (quality drops sharply) — always supply it for production.
