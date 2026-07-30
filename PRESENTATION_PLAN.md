@@ -119,6 +119,85 @@ in strict locus uniqueness (`NH=1`) with longer SBX cDNA is not evidence that
 long reads map worse. It may reflect additional reported genomic homology while
 gene assignment remains comparatively stable.
 
+## Mapping-evaluation status (as of 2026-07-30)
+
+Current state of the controlled evaluation plan from `mapping.md`, run via
+`scripts/run_mapping_evaluation.sh` and `scripts/run_full_evaluation.sh`,
+output in `CAT02/mapping_evaluation/`:
+
+**1. Compact-fixture validation, complete (`baseline/` vs `multimap/`, Illumina
+path, 10,495,177 R2 read pairs from the CAT02 M2 example fixtures).** This is
+step 1-2 of the mapping.md plan, not yet the SBX-specific question — it
+validates that the diagnostic multimap arm (`-N 10`, `--multimap-tags`) doesn't
+change molecule-level output on its own. Result: `molecules_counted` differs by
+153 out of 5,798,640 (0.0026%) between baseline and multimap arms. Per
+mapping.md's decision criteria, this supports keeping `--secondary=no` as the
+production default — the diagnostic arm shows no material recovery difference
+at this scale. This is a first validation point only; it does not yet test
+long SBX reads, where the ambiguity effect is expected to matter more.
+Read-name-matched churn behind that net delta (does it hide offsetting
+gain/loss pools?) is now checked and documented in `mapping.md` — both pools
+are genuinely small (hundreds of reads out of 9.4M, not a large cancellation).
+(`compare_downstream.py` was reading wrong metrics-JSON keys and silently
+returning NaN for all sbxpress arm columns; fixed 2026-07-30 to use the actual
+keys `primary`, `gene_degree_1`, `molecules_counted`, etc.)
+
+**3b. Preliminary (not full-scale) P5/P7 churn data, complete.** Rather than
+wait on the full-scale run, the same baseline+multimap two-arm protocol and
+churn comparison was run on a ~9.5M-read prefix subsample of real raw P5/P7
+data (`mapping_evaluation/p5_prelim/`, `p7_prelim/`; script:
+`/tmp/.../scratchpad/run_prelim_arm.sh`, a parameterized copy of
+`run_mapping_evaluation.sh` not committed to the repo). Confirmed
+representative in read length (233bp/254bp mean vs. 226bp/244bp full-scale).
+All 3 datasets (Illumina fixture, SBX P5 prelim, SBX P7 prelim) now agree that
+(a) net churn stays small and positive, increasing somewhat with read length,
+and (b) most of the churn on both sides — not just Illumina's — comes from the
+`--multimap-tags` vs. `--unordered` annotation code path itself rather than
+from genuine secondary-alignment resolution; see `mapping.md` for the full
+3-way table and the resulting annotator follow-up. This is still a shard-prefix
+subsample, not a random draw or the full-scale run — re-confirm on
+`run_full_evaluation.sh`'s output once it completes.
+
+**2. Secondary-hit classification, complete on the same compact fixture
+(`analysis/summary.txt`, `analysis/secondary_classes.tsv`).** Adds resolution
+mapping.md flagged as missing ("does not identify the source of each secondary
+alignment"). By length bin, secondary hits classify as: unannotated_mapped
+49-58%, decoy_other 18-27%, diff_gene 20-23%, same_gene only 1.2-1.7%. `GX`
+(compatible gene found) declines 65.9%→62.6% ≤250bp→≥401bp while `NH=1` stays
+roughly flat (91.3%→92.4%) and `mm%` (multi-hit-but-single-compatible-gene)
+stays small (2.6%→2.3%). This is direct evidence for mapping.md's mechanism 1
+(longer reads pick up additional non-genic/homologous genomic hits, rarely a
+truly competing gene) — worth pulling into mapping.md itself as supporting data
+before it's cited in the deck, per the "update mapping.md first" rule above.
+
+**3. Retrospective GX-by-length on the existing full-scale P5/P7 production
+baseline BAMs, complete (`existing_gx_analysis/`, 1-in-10 systematic sample of
+primary records via `scripts/analyze_gx_by_length.py`).** Confirms the
+mapping.md pattern at full production scale for both orientations: `GX=1%`
+declines with length (P5 60.0%→51.6%, P7 62.3%→55.7%) while mean MAPQ *rises*
+slightly with length (P5 52.1→54.8, P7 53.3→56.8) — longer reads place more
+confidently but less gene-specifically, the same paradox mapping.md describes.
+It also surfaces a length-dependent version of the P5/P7 orientation effect:
+mean soft-clip fraction is comparable at short lengths (P5 3.1% vs. P7 3.3% at
+≤250bp) but diverges sharply at long lengths (P5 15.6% vs. P7 5.2% at ≥401bp).
+This is new evidence, not yet in mapping.md — feed it back there before the
+slide cites it, since it directly strengthens the CB/UMI-position hypothesis
+above (whichever segment is decoded second degrades more, and that shows up
+disproportionately in the longest-read tail).
+
+**4. Full-scale P5/P7 diagnostic evaluation, in progress, not yet available.**
+`scripts/run_full_evaluation.sh` was launched 2026-07-30 06:38 against the full
+raw P5 dataset (`CAT02/p5_out_7-7`) and was still running the P5 baseline arm's
+minimap2/annotation stage as of this review — the P5 multimap arm and the
+entire P7 arm have not started. This is the run that will actually test the
+mapping.md question (`NH=1`-by-length ambiguity and downstream molecule/matrix
+impact) on real long SBX reads rather than the compact Illumina-derived
+fixture. **Do not put full-scale multimap NH=1-by-length numbers or a
+baseline-vs-multimap downstream-impact comparison on any slide until this run
+completes** — the only full-scale evidence available right now is the
+retrospective GX-by-length pass on the existing baseline (secondary-alignment-
+free) BAMs in item 3, which cannot speak to `NH=1` or multimap recovery at all.
+
 ## Sequencing depth context for M2
 
 For the Multiome GEX comparison, preserve the distinction among these metrics:
@@ -134,6 +213,110 @@ For the Multiome GEX comparison, preserve the distinction among these metrics:
 - Current SBX metrics do not retain a M2-specific count of raw reads before
   extraction; add a per-sample raw-read counter before parse/orientation/cDNA
   gating to calculate raw SBX reads per filtered cell.
+
+**Open discrepancy to resolve before this goes on a slide:** the 612,462 figure
+above is the sbxpress audit's own internal cell-calling heuristic applied to the
+Illumina Cell Ranger BAM, not Cell Ranger's own `Estimated Number of Cells`
+(32,357, from `metrics_summary.csv`). Cell Ranger's own denominator gives 86,774
+mean reads/cell — its own reported value. Mixing the two conventions understates
+depth/cell by ~19x and will read as a data-quality problem next to standard
+10x depth targets (10-50k reads/cell) rather than the audit-vs-official-caller
+mismatch it actually is. Decide which cell-calling convention the depth-per-cell
+slide uses (official Cell Ranger call vs. the audit's own caller, consistently
+for both Illumina and SBX arms) before publishing the number.
+
+## Cross-platform comparison slides (CAT02 `result_comparison` M2 audit)
+
+Separate from the mapping.md ambiguity question, `CAT02/result_comparison`
+holds a completed three-way technical comparison (Illumina / SBX-P5 / SBX-P7,
+each through both Cell Ranger and sbxpress) for the M2_GEX sample. This adds
+slides that answer "how much sequencing does SBX need to match Illumina" and
+"what does that imply for pricing" — orthogonal to the mapping-ambiguity work
+below but part of the same deck. Proposed slides, in order:
+
+1. **Study design** — one sample (M2_GEX) pulled from a 15-sample pooled
+   NovaSeqX run, run through 3 technical preps × 2 pipelines. Note explicitly
+   that the other 14 pooled samples were only demultiplexed, not carried
+   through this comparison — this is a single-sample deep dive, not a
+   population-level validation.
+2. **Mapping efficiency by platform × pipeline** — unmapped %, gene-assigned %,
+   from `sbxpress audit` run against both the Cell Ranger and minimap2 BAMs for
+   each of the three preps. Headline: sbxpress out-recovers Cell Ranger on SBX
+   reads (+6-7% more molecules) but underperforms Cell Ranger on standard
+   Illumina reads (minimap2 leaves ~5x more reads unmapped) — the aligner is
+   presently tuned toward long SBX reads, not short Illumina R2.
+3. **Cell calling & sensitivity** — standard Cell Ranger `metrics_summary.csv`
+   fields only (cells called, median genes/cell, median UMI/cell, sequencing
+   saturation). Flag that Q30-in-barcode/RNA/UMI reads 0.0% for both SBX preps
+   because `sbxpress extract --cellranger` writes a flat placeholder quality
+   string into the synthetic FASTQ — not a real quality signal, omit or footnote
+   it rather than let it read as an SBX quality problem.
+4. **Read-depth equivalence** — fit a two-point Michaelis-Menten saturation
+   curve per condition (`sampled_reads_with_cb_umi`/`sampled_molecules` vs.
+   full-depth `reads_with_cb_umi`/`molecules` from each `sbxpress audit` JSON)
+   and solve for the read depth SBX needs to match Illumina/Cell Ranger's full
+   molecule recovery (285.7M molecules from 2.81B reads / 252.7 Gb of R2).
+   Result: SBX-P7/minimap needs 39.8% of Illumina's read count but 108.0% of
+   its Gb; SBX-P5/minimap needs 49.6% of reads but 124.7% of Gb. Fewer reactions,
+   not fewer bases — state both units, since they point opposite directions.
+5. **Cost-parity breakeven** — no external price data required, only the ratio
+   from slide 4: breakeven price ratio = Illumina depth used / SBX depth needed.
+   Confirmed: both platforms are priced per run/lane, so $/read is the right
+   proxy (not $/Gb) — use the read-based framing as primary. Per-read billing:
+   SBX can cost up to 2.51x (P7) / 2.01x (P5) Illumina's price per read and
+   still break even. (Per-Gb framing — SBX priced at or below 92.6% (P7) /
+   80.2% (P5) of Illumina's $/Gb — is now secondary context, not the headline,
+   since output isn't actually billed that way.)
+6. **CB/UMI position: a yield/fidelity tradeoff (P5 vs. P7)** — P5 (CB/UMI read
+   first) parses substantially more raw signal into valid pairs (62.6% vs.
+   46.9% `pairs_pct`; unparseable 13.9% vs. 33.8%) and calls barcodes more
+   accurately (76.7% vs. 68.4% whitelist hit rate). P7 (cDNA read first) then
+   wins on every downstream alignment metric on the reads that do survive
+   (unmapped 1.37% vs. 6.78%; gene-assigned 60.26% vs. 58.25%; molecules
+   recovered 296.7M vs. 281.6M). Working hypothesis: SBX signal quality decays
+   over read position, so whichever segment is decoded second is degraded;
+   barcode degradation is partially recoverable via whitelist correction,
+   cDNA degradation is not, so protecting cDNA (P7) wins on final yield despite
+   P7's lower parse success. This connects directly to the length-dependent
+   clip-fraction divergence in the mapping-evaluation section below (P5's
+   soft-clip fraction reaches 15.6% at ≥401bp vs. P7's 5.2% — same mechanism,
+   now shown as a function of read length). Caveat to confirm before this slide
+   ships: `sbx_5p_data`/`sbx_3p_data` naming also matches 10x's 5'-kit/3'-kit
+   convention, a genuinely different capture chemistry, not just a read-direction
+   flip of the same library — confirm P5/P7 here are the same molecule read in
+   both orientations before calling this a pure orientation effect.
+7. **Fragment-length sweet spot — open question, not yet answerable.** Because
+   SBX bills per run/lane (slide 5), and run reads/lane is tunable by target
+   molecule size (shorter molecule → more reads/run at fixed run cost), the
+   real optimization target is *useful molecules per run*, i.e.
+   `reads_per_run(length) × P(read becomes a counted molecule | length)`, not
+   per-read quality alone. Current data only characterizes the second factor,
+   and only partially:
+   - Within the 250-650bp range already measured (`existing_gx_analysis`),
+     gene-assignment specificity *improves* as length decreases (`GX=1%`: P5
+     60.0%→51.6%, P7 62.3%→55.7% as length increases from ≤250 to ≥401bp), and
+     soft-clip degradation drops sharply (P5 15.6%→3.1%). So within this
+     range, shorter is strictly better on quality per read, not worse — the
+     "reduced mapping rate" cost has to be a shorter-fragment effect than
+     anything measured so far.
+   - That analysis excludes unmapped reads by construction (`analyze_gx_by_length.py`
+     scans primary mapped records only) and has no bin below 250bp, so it
+     cannot see whether/where unmapped rate rises as fragments get shorter —
+     which is exactly where a real "reduced mapping rate" cost would show up
+     (too little unique sequence to place confidently).
+   - `reads_per_run(length)` is a device/chemistry throughput property, not
+     something in any file reviewed here (P5 vs. P7's different raw read
+     totals, 19.39B vs. 23.77B, are confounded with whatever else differs
+     between those two runs/preps and should not be used to infer a
+     length-throughput curve).
+   To answer this for real: (a) extend the length bins below 250bp (e.g.
+   100/150/200/250) and, critically, compute unmapped-rate-by-length from the
+   pre-alignment tagged-cDNA length distribution joined to mapping outcome —
+   not from the post-hoc mapped-only BAM scan; (b) get the actual
+   reads-per-run vs. target-molecule-length function from device throughput
+   data, ideally from a controlled run set that varies target length at fixed
+   device settings. Until both exist, this slide should state the shape of the
+   problem and the two open curves, not a claimed optimum.
 
 ## End state and decision
 
@@ -154,5 +337,11 @@ and beneficial at the gene and molecule levels.
 ## Local source boundary
 
 This brief is derived from the project discussion, current sbxpress source and
-documentation, and the locally generated M2 audit summaries. It is not an
-external performance claim or a completed validation report.
+documentation, and the locally generated M2 audit summaries — including
+`CAT02/result_comparison` (three-way Illumina/SBX-P5/SBX-P7 × Cell
+Ranger/sbxpress comparison) and `CAT02/mapping_evaluation` (controlled
+baseline-vs-multimap evaluation per `mapping.md`, partially complete as of
+2026-07-30; see status section above). It is not an external performance claim
+or a completed validation report. The fragment-length sweet-spot question is
+explicitly unresolved — no throughput-vs-length or short-fragment mapping data
+exists yet to answer it.
