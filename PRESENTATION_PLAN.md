@@ -119,6 +119,129 @@ in strict locus uniqueness (`NH=1`) with longer SBX cDNA is not evidence that
 long reads map worse. It may reflect additional reported genomic homology while
 gene assignment remains comparatively stable.
 
+## Mapping-ambiguity slides (presentable now)
+
+The following slides are based on completed analyses and can be included before
+the full-scale P5/P7 diagnostic run finishes. Each is scoped to the data that
+actually exists; framing notes are mandatory where stated.
+
+### Slide M1 — The central paradox (full-scale P5/P7 production BAMs)
+
+**Source:** `mapping_evaluation/existing_gx_analysis/` (1-in-10 systematic
+sample, ~61M primary records across P5 and P7 production BAMs).
+
+**Content:** Two-panel figure or table, P5 and P7 side by side.
+
+| Length bin | P5 GX=1% | P5 MAPQ | P7 GX=1% | P7 MAPQ |
+|---|---|---|---|---|
+| ≤250 bp | 60.0% | 52.1 | 62.3% | 53.3 |
+| 251–300 bp | 55.5% | 54.1 | 57.6% | 54.7 |
+| 301–350 bp | 53.4% | 55.0 | 55.7% | 55.6 |
+| 351–400 bp | 52.5% | 55.4 | 55.3% | 56.4 |
+| ≥401 bp | 51.6% | 54.8 | 55.7% | 56.8 |
+
+**Key sentence:** Longer reads align more confidently (MAPQ rises) but land
+in annotated gene territory less often (GX=1% falls) — the paradox that
+motivates the multimap diagnostic.
+
+**Mandatory framing:** These are baseline (`--secondary=no`) BAMs; `NH=1`
+is trivially 100% for all records here and is not shown. The GX=1% decline
+is a separate signal from the `NH=1` question in `mapping.md` and is not yet
+decomposed by secondary-hit class at this scale.
+
+### Slide M2 — P5 vs P7 orientation effect at long lengths
+
+**Source:** same as M1.
+
+**Content:** Single data point, can live as a call-out on slide M1 or its
+own panel.
+
+> P5 soft-clip fraction reaches **15.6%** at ≥401 bp; P7 stays at **5.2%**.
+> At ≤250 bp the two orientations are indistinguishable (3.1% vs. 3.3%).
+
+**Key sentence:** The orientation effect is length-dependent — it only
+surfaces in the longest-read tail, consistent with signal degradation
+accumulating over read position (the segment decoded second degrades more,
+and that shows up disproportionately in long reads).
+
+**Connection:** Links directly to the CB/UMI position slide (slide 6 in the
+cross-platform section). Forward-reference it: "the same mechanism that
+explains P7's better barcode accuracy also explains P5's excess clipping in
+long reads."
+
+**Mandatory framing:** Confirm before this slide ships that P5/P7 here are
+the same molecule read in two orientations, not 10x 5'/3' capture-chemistry
+variants (different GTF exon coverage would create a superficially similar
+pattern for unrelated reasons).
+
+### Slide M3 — Where secondary hits actually go (M2 compact cohort)
+
+**Source:** `mapping_evaluation/analysis/secondary_classes.tsv` and
+`score_gaps.tsv`. M2 compact cohort only (~9.4M reads, 250–650 bp range,
+processed via `sbxpress illumina` path).
+
+**Content:** Stacked bar chart of secondary-hit class by length bin, with
+a small inset table of AS score gaps.
+
+| Secondary class | Typical fraction across bins | Meaning |
+|---|---|---|
+| `unannotated_mapped` | 55–58% | Genomic hit, no annotated gene — pseudogene, repeat, annotation gap |
+| `diff_gene` | 20–22% | Hit lands on a different gene — potential paralog/shared exon |
+| `decoy_other` | 19–27% | Random/decoy chromosome — near-zero AS gap (tied placement) |
+| `same_gene` | 1–2% | Secondary confirms primary gene — `mm` rescue candidate |
+
+Score gap (primary AS − secondary AS) by class:
+- `diff_gene`: median gap grows with length (6 → 9 bp from ≤250 to ≥401);
+  longer reads are *better differentiated* from alternative gene placements.
+- `decoy_other`: median gap ≈ 0 across all bins; these are tied placements
+  to low-complexity/repeat sequence, not a length effect.
+- `same_gene`: median gap 0–3 bp (nearly tied, as expected for the same locus).
+
+**Key sentence:** When a longer read does pick up a secondary hit, it almost
+never lands on a competing annotated gene — it lands in unannotated genomic
+space or on a decoy contig. Multi-gene ambiguity (`diff_gene` + `same_gene`)
+accounts for only ~22–24% of secondaries and, for `diff_gene`, the primary
+is increasingly better-supported as reads get longer.
+
+**Mandatory framing:** *"M2 compact cohort (sbxpress illumina path,
+9.4M reads, 250–650 bp). NH=1 fraction is roughly flat across length bins
+in this cohort (91–92%); the full-scale P5/P7 diagnostic run — in progress
+— will test whether secondary-hit composition shifts when NH=1 does decline
+with length."*
+
+### Slide M4 — Multimap mode changes almost nothing downstream (M2 compact)
+
+**Source:** `mapping_evaluation/` baseline vs multimap arms; churn table
+in `mapping.md`.
+
+**Content:** Two-column comparison table plus the 3-dataset churn summary.
+
+| Metric | Baseline | Multimap | Δ |
+|---|---|---|---|
+| Molecules counted | 5,798,640 | 5,798,793 | +153 (0.003%) |
+| Cells called | 26,303 | 26,305 | +2 |
+| Filtered UMI total | 7,676,750 | 7,677,264 | +514 (0.007%) |
+
+Reads that change GX assignment (read-name-matched join, all 3 datasets):
+
+| Dataset | Lost single-gene | Gained single-gene | Net |
+|---|---|---|---|
+| M2 compact (sbxpress illumina) | 501 (0.009%) | 652 (0.018%) | +151 |
+| SBX P5 prelim (~9.5M reads) | 379 (0.007%) | 624 (0.014%) | +232 |
+| SBX P7 prelim (~9.5M reads) | 284 (0.005%) | 591 (0.015%) | +303 |
+
+**Key sentence:** At all three scales tested, enabling the multimap diagnostic
+path changes fewer than 0.02% of reads in either direction and adds a net of
+~150–300 molecules per ~9.5M reads. Both the gain pool and the loss pool are
+genuinely small — this is not two large effects cancelling.
+
+**Mandatory framing:** *"Preliminary; all three datasets are ~9.5M read
+subsets, not the full production scale. The P5/P7 full-scale run (in
+progress) will confirm whether these rates hold at 1.2B reads per
+orientation. These results support keeping `--secondary=no` as the production
+default; they do not yet test whether multimap rescue improves recovery on
+reads in the long-length tail where NH=1 is expected to decline."*
+
 ## Mapping-evaluation status (as of 2026-07-30)
 
 Current state of the controlled evaluation plan from `mapping.md`, run via
