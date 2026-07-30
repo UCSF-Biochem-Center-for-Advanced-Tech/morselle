@@ -107,42 +107,17 @@ Acceptance should be exact equality where the semantics are deterministic (for
 example BAM→matrix), and a documented explanation for unavoidable mapper or
 algorithm differences elsewhere.
 
-## Mapping observation to include
+## Mapping analysis source
 
-The M2 audit observed lower strict locus uniqueness (`NH=1`) at longer SBX cDNA
-lengths, while gene assignment is more stable. This should **not** be described
-as “long reads map worse.”
+Use [mapping.md](mapping.md) as the authoritative source for the M2
+read-length/uniqueness observation, tag definitions, controls, limitations, and
+proposed follow-up analyses. Do not duplicate or extend its interpretation in
+the presentation plan without updating `mapping.md` first.
 
-Current interpretation:
-
-- Longer sequence can reveal an additional homologous genomic placement without
-  creating another compatible gene.
-- `NH` depends on minimap2 secondary-hit reporting (`-N`, index, preset, score
-  and chaining thresholds), not only on sequence information.
-- The effect persists in aligned-length bins and SBX has less heavy soft clipping
-  than Illumina, reducing the likelihood that adapter or poly(A/T) carryover is
-  the main explanation.
-- Long and short read bins may differ in transcript class, intronic content,
-  gene family composition, or molecule quality; this is not yet causal evidence
-  for a read-length effect.
-
-Refer readers to [mapping.md](mapping.md) for full evidence, tag definitions,
-limitations, and discriminating analyses.
-
-## Follow-up mapping analyses
-
-Before proposing an SBX-specific mapping policy, plan:
-
-1. Compare `NH=1` by length **within the same gene**, biotype, exon/intron
-   class, and gene-length strata.
-2. Classify secondary hits as same-gene, paralog/pseudogene, repeat/decoy, or
-   different-gene alternatives.
-3. Record primary/secondary alignment score gap, coverage, identity, clipping,
-   and overlap where available.
-4. Re-map a stratified subset under `--secondary=no` and `-N 10` to separate
-   reporting policy from intrinsic sequence ambiguity.
-5. Measure molecule and matrix consequences; `NH>1` alone is not a failure if
-   the gene-aware molecule decision remains stable.
+For the presentation, summarize only its central conclusion: the observed decline
+in strict locus uniqueness (`NH=1`) with longer SBX cDNA is not evidence that
+long reads map worse. It may reflect additional reported genomic homology while
+gene assignment remains comparatively stable.
 
 ## Sequencing depth context for M2
 
