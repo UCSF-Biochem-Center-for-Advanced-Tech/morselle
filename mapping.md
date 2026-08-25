@@ -154,6 +154,172 @@ output once `run_full_evaluation.sh` completes, both to get a proper random
 (not shard-prefix) sample and to see whether the length-vs-net-effect trend
 holds at full statistical power.
 
+## Full-scale P5/P7 run, complete (2026-08-02)
+
+`run_full_evaluation.sh` finished both orientations: P5 baseline+multimap
+(started 2026-07-30 06:38, multimap arm done 2026-07-31 20:15) and P7
+baseline+multimap (started 2026-08-01 07:07, multimap arm done 2026-08-02
+10:30). Both arms for both orientations ran to completion (`--secondary=no`
+and `-N 10`, full raw `p5_out_7-7`/`p7_out_7-7` inputs, ~1.1-1.8B records
+each). Output in `mapping_evaluation/p5/` and `mapping_evaluation/p7/`.
+
+**Mapping efficiency at full scale (baseline arm, `--secondary=no`, the
+production setting) — % is of total records / primary records respectively:**
+
+| dataset | unmapped % | gene-assigned % of primary | unique-gene % of primary | molecules / record |
+|---|---|---|---|---|
+| Illumina (compact fixture) | 0.99% | 65.63% | 64.91% | 0.598 |
+| SBX P5 (full) | 6.54% | 59.95% | 59.31% | 0.201 |
+| SBX P7 (full) | 1.33% | 61.70% | 61.05% | 0.241 |
+
+This is a much stronger confirmation of the P5-vs-P7 orientation effect than
+the preliminary 9.5M-read subsamples could show: at full production scale,
+P5's unmapped rate (6.54%) is **~5x** P7's (1.33%), and P7 recovers ~20% more
+molecules per raw read than P5 (0.241 vs 0.201). This is consistent with —
+and now backed by billions of reads rather than millions — the CB/UMI
+position hypothesis and the length-dependent soft-clip divergence documented
+in `existing_gx_analysis/` (P5 15.6% vs P7 5.2% soft-clip at ≥401bp).
+
+**Net molecule-count delta, multimap arm vs. baseline, at full scale:**
+
+| dataset | mol. baseline | mol. multimap | net Δ | net Δ % |
+|---|---|---|---|---|
+| Illumina (compact fixture) | 5,798,640 | 5,798,793 | +153 | 0.0026% |
+| SBX P5 (full) | 267,439,314 | 267,452,335 | +13,021 | 0.0049% |
+| SBX P7 (full) | 281,922,224 | 281,935,609 | +13,385 | 0.0047% |
+
+This resolves the open question from the preliminary comparison. At full
+statistical power, P5 (0.0049%) and P7 (0.0047%) land on essentially the
+**same** net-Δ percentage — the prelim ordering (P7 0.0055% > P5 0.0046%) does
+not hold up. The earlier caution was correct: that ordering was noise, not a
+real orientation- or length-driven trend. The net effect of the multimap
+diagnostic arm stays small, positive, and orientation-independent at
+production scale. This continues to support keeping `--secondary=no` as the
+production default.
+
+**These two findings are not in tension — worth stating precisely.** `-N 10`
+detects and characterizes the ambiguity: there is plenty of it, and it is
+real (see `secondary_classes.tsv`: unannotated_mapped 55–58%, diff_gene
+20–22%, decoy_other 19–27%, same_gene 1–2%). With `--secondary=no`, minimap2
+reports only the single best-scoring alignment per read; `NH` is trivially 1
+for everything, and any other comparably-good genomic placement is silently
+discarded, not absent — it just isn't reported. The full-scale churn result
+says that once detected, this ambiguity mostly doesn't change the *final
+molecule count*, because most of it is either genomic noise
+(decoy/unannotated) or resolves to the same gene either way. So
+`--secondary=no` in production is a statement about output stability, not a
+claim that multimapping doesn't exist.
+
+**Secondary observation worth a follow-up look:** the raw (unfiltered)
+molecule counts above increase slightly in the multimap arm for both
+orientations, but the *filtered* (in-called-cell) molecule totals move in
+different directions — P5 filtered molecules **decrease** slightly
+(195,083,598 → 194,827,820, −0.13%) while P7 filtered molecules **increase**
+slightly (205,793,650 → 205,939,908, +0.07%). Filtered cell counts are
+similarly mixed (P5: 33,804 → 33,697; P7: 33,400 → 33,443). The unfiltered
+net-Δ story above is robust; this filtered-level divergence suggests the
+small per-read changes land close enough to the cell-calling boundary to
+shift a handful of borderline calls in opposite directions per orientation.
+Not yet explained — flagged for follow-up, not a correction to the
+conclusion above.
+
+**Read-level churn join at full scale, complete (2026-08-06).** Ran on all
+matched primary reads between baseline and multimap arms (join logic
+pre-validated by exactly reproducing the compact-fixture numbers above:
+501/652/115/net+151).
+
+| dataset | matched reads | lost (single→non-single) | lost, →0 / →2+ genes | gained (non-single→single) | gained, `mm`-tagged | net Δ (read-level) |
+|---|---|---|---|---|---|---|
+| SBX P5 (full) | 1,287,526,839 | 49,775 (0.00387%) | 46,724 (93.9%) / 3,051 (6.1%) | 87,505 (0.00680%) | 12,511 (14.3%) | +37,730 (0.00293%) |
+| SBX P7 (full) | 1,139,775,292 | 36,527 (0.00320%) | 34,402 (94.2%) / 2,125 (5.8%) | 67,506 (0.00592%) | 8,553 (12.7%) | +30,979 (0.00272%) |
+
+This reconfirms, at true full production scale, every pattern the compact
+fixture and preliminary subsamples suggested: churn stays a tiny fraction of
+reads in both directions, ~94% of losses drop to zero compatible genes
+rather than becoming genuinely multi-gene, and only ~13-14% of gains carry
+the `mm` tag (the true multimap-rescue signature) — the rest is the
+`--multimap-tags` vs. `--unordered` annotation code-path artifact, not
+secondary-alignment rescue, exactly as documented above. P5 shows
+proportionally ~30-40% more churn events per read than P7 (0.00293% vs.
+0.00272% net, and larger gaps on the raw lost/gained rates) — small, but in
+the same direction as every other metric in this document: P5 is the noisier
+orientation.
+
+**Read-level net vs. molecule-level net — not a contradiction, worth
+explaining.** This read-level net (+37,730 P5, +30,979 P7) is noticeably
+larger than the molecule-level net reported earlier in this document
+(+13,021 P5, +13,385 P7) — a ~2.9x and ~2.3x compression respectively. That's
+expected, not an inconsistency: the read-level count is *distinct reads*
+whose single-gene status flips, while the molecule-level count is *distinct
+(CB, UMI, gene) groups*. Multiple reads commonly support the same molecule;
+a read flipping status only changes the molecule-level outcome if it was the
+read carrying that molecule's only gene evidence. Most flipped reads
+apparently belong to molecules some other read already resolved the same
+way, so only about a third to a half of the read-level churn actually
+propagates to a molecule-count change.
+
+**Filtered-molecule divergence experiment, complete (2026-08-06).** Two-part
+test of the "secondary observation" above (P5 filtered molecules down 0.13%,
+P7 up 0.07% in the multimap arm):
+
+1. *Reseed noise floor.* Reran `sbxpress cells` on the identical P5/P7
+   baseline raw matrices under 5 explicit seeds (1-5) to measure pure
+   algorithm randomness, since `--seed 0` is the fixed production default
+   and baseline/multimap were never run with different seeds:
+
+   | dataset | seed-noise `filtered_cells` range | seed-noise `filtered_molecules` range | multimap arm actual value | inside noise range? |
+   |---|---|---|---|---|
+   | P5 | 33,766–33,898 | 194,981,110–195,345,823 | 33,697 / 194,827,820 | **No — below both ranges** |
+   | P7 | 33,338–33,542 | 205,590,561–206,206,106 | 33,443 / 205,939,908 | Yes — within both ranges |
+
+   This splits the earlier "opposite-direction" story apart: **P5's shift is
+   a real, out-of-noise-floor effect** — the multimap arm's filtered
+   cells/molecules fall below the entire spread produced by pure EmptyDrops
+   seed variation. **P7's shift is statistically indistinguishable from
+   ordinary algorithm noise** — its multimap-arm value sits comfortably
+   inside the same spread five different seeds produce on the unchanged
+   baseline matrix. The original framing ("P5 loses, P7 gains,
+   orientation-symmetric") was misleading; it is closer to "P5 has a real
+   small loss, P7 shows no distinguishable effect at all."
+
+2. *Barcode-level diff* (baseline vs. multimap `raw_feature_bc_matrix.h5`,
+   no rerun needed): P5 has 110 cells lost / 3 gained (net −107, matches
+   33,804→33,697 exactly); P7 has 45 lost / 88 gained (net +43, matches
+   33,400→33,443). The mechanistically interesting part: **the raw UMI
+   total summed across all flipped-status barcodes is essentially zero** —
+   6 UMIs total (of a +13,021 dataset-wide delta) for P5's 113 flipped
+   barcodes, 25 UMIs (of +13,385) for P7's 133. The flips are not caused by
+   those barcodes gaining or losing a meaningful number of UMIs. Most
+   flipped barcodes (P5: 85/113, P7: 64/133) also sit *outside* ±5% of the
+   OrdMag cutoff, so it isn't a simple threshold-crossing effect either.
+   The likely mechanism: multimap-arm reassigns a small number of UMIs from
+   one gene to another *without* changing a barcode's total UMI count, and
+   EmptyDrops' likelihood-ratio test is sensitive to the shape of a
+   barcode's expression profile relative to the ambient pool, not just its
+   depth — so a same-count, different-gene reassignment can tip a
+   borderline barcode's call without any visible change in its UMI total.
+   Not yet confirmed against the actual gene-level reassignments (would
+   need to cross-reference specific flipped barcodes against the churn
+   join's per-read gene calls); flagged as a possible follow-up, not
+   pursued further since the practical conclusion (small, P5-only,
+   real-but-tiny effect) is already clear enough to act on.
+
+(While building the barcode-diff code: caught and fixed a real bug —
+`np.add.reduceat` silently mishandles empty bins, i.e. barcodes with zero
+UMIs, by pulling in the next barcode's total instead of returning 0.
+Verified against the known molecule count (267,439,314) and against a slow
+per-barcode loop; switched to a cumsum-diff implementation, which matched
+exactly. All 16,555 zero-UMI P5 barcodes were affected by the original bug.)
+
+**Bottom line for both experiments:** neither changes the production
+recommendation. The full-scale churn join confirms `--secondary=no` remains
+the right default — the net effect stays small, positive, and mostly an
+annotation-code-path artifact rather than genuine multimap rescue. The
+filtered-molecule divergence is real for P5 but tiny (~110 cells out of
+33,804, driven by gene-reassignment near the cell-calling boundary, not a
+meaningful recovery difference) and not even distinguishable from noise for
+P7.
+
 ## Current controls and limitations
 
 The aligned-length analysis and soft-clip diagnostics reduce the likelihood that

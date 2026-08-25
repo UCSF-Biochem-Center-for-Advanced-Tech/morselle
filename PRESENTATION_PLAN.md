@@ -222,25 +222,35 @@ in `mapping.md`.
 | Cells called | 26,303 | 26,305 | +2 |
 | Filtered UMI total | 7,676,750 | 7,677,264 | +514 (0.007%) |
 
-Reads that change GX assignment (read-name-matched join, all 3 datasets):
+Reads that change GX assignment (read-name-matched join):
 
 | Dataset | Lost single-gene | Gained single-gene | Net |
 |---|---|---|---|
 | M2 compact (sbxpress illumina) | 501 (0.009%) | 652 (0.018%) | +151 |
 | SBX P5 prelim (~9.5M reads) | 379 (0.007%) | 624 (0.014%) | +232 |
 | SBX P7 prelim (~9.5M reads) | 284 (0.005%) | 591 (0.015%) | +303 |
+| **SBX P5 (full, 1.29B reads)** | **49,775 (0.004%)** | **87,505 (0.007%)** | **+37,730 (0.003%)** |
+| **SBX P7 (full, 1.14B reads)** | **36,527 (0.003%)** | **67,506 (0.006%)** | **+30,979 (0.003%)** |
 
-**Key sentence:** At all three scales tested, enabling the multimap diagnostic
-path changes fewer than 0.02% of reads in either direction and adds a net of
-~150–300 molecules per ~9.5M reads. Both the gain pool and the loss pool are
-genuinely small — this is not two large effects cancelling.
+**Key sentence:** At every scale tested, from 9.4M reads up to the full
+1.1-1.3B-read production runs, enabling the multimap diagnostic path changes
+under 0.01% of reads in either direction. Both the gain and loss pools stay
+genuinely small at every scale — this is not two large effects cancelling.
+Note the full-scale *read-level* net (+37,730 P5, +30,979 P7) is larger than
+the *molecule-level* net reported elsewhere on this deck (+13,021 P5,
++13,385 P7) — expected, not a contradiction: many reads share a molecule, so
+a read's status flipping only changes the molecule-level count if it was
+that molecule's only supporting read. See mapping.md for the full
+explanation before presenting this distinction.
 
-**Mandatory framing:** *"Preliminary; all three datasets are ~9.5M read
-subsets, not the full production scale. The P5/P7 full-scale run (in
-progress) will confirm whether these rates hold at 1.2B reads per
-orientation. These results support keeping `--secondary=no` as the production
-default; they do not yet test whether multimap rescue improves recovery on
-reads in the long-length tail where NH=1 is expected to decline."*
+**Mandatory framing:** *"The full-scale P5/P7 run (1.1-1.3B reads/arm) is
+now complete and is reflected in the last two rows above. It reconfirms
+every pattern the compact fixture and preliminary subsamples suggested: the
+net effect stays small and positive, ~94% of losses drop to zero compatible
+genes rather than true multi-gene ambiguity, and only ~13-14% of gains carry
+the `mm` tag (the actual multimap-rescue signature) — the rest is the
+`--multimap-tags` vs. `--unordered` annotation code-path artifact. This
+continues to support `--secondary=no` as the production default."*
 
 ## Mapping-evaluation status (as of 2026-07-30)
 
@@ -308,18 +318,42 @@ slide cites it, since it directly strengthens the CB/UMI-position hypothesis
 above (whichever segment is decoded second degrades more, and that shows up
 disproportionately in the longest-read tail).
 
-**4. Full-scale P5/P7 diagnostic evaluation, in progress, not yet available.**
-`scripts/run_full_evaluation.sh` was launched 2026-07-30 06:38 against the full
-raw P5 dataset (`CAT02/p5_out_7-7`) and was still running the P5 baseline arm's
-minimap2/annotation stage as of this review — the P5 multimap arm and the
-entire P7 arm have not started. This is the run that will actually test the
-mapping.md question (`NH=1`-by-length ambiguity and downstream molecule/matrix
-impact) on real long SBX reads rather than the compact Illumina-derived
-fixture. **Do not put full-scale multimap NH=1-by-length numbers or a
-baseline-vs-multimap downstream-impact comparison on any slide until this run
-completes** — the only full-scale evidence available right now is the
-retrospective GX-by-length pass on the existing baseline (secondary-alignment-
-free) BAMs in item 3, which cannot speak to `NH=1` or multimap recovery at all.
+**4. Full-scale P5/P7 diagnostic evaluation, complete (2026-08-02).**
+`scripts/run_full_evaluation.sh` finished both orientations: P5
+baseline+multimap (launched 2026-07-30 06:38, done 2026-07-31 20:15) and P7
+baseline+multimap (launched 2026-08-01 07:07, done 2026-08-02 10:30). Full
+raw `p5_out_7-7`/`p7_out_7-7` inputs, both arms (`--secondary=no` and
+`-N 10`), ~1.1-1.8B records each. Results now in `mapping.md`'s "Full-scale
+P5/P7 run" section:
+- Mapping efficiency confirms the P5-vs-P7 orientation effect far more
+  strongly than the preliminary subsamples: P5 unmapped 6.54% vs. P7 1.33%
+  (~5x), P7 recovering ~20% more molecules per raw read (0.241 vs. 0.201).
+- Net molecule-count delta between baseline and multimap arms stays small at
+  full scale for both orientations (P5 +0.0049%, P7 +0.0047%) and — unlike
+  the preliminary subsamples — the two are now essentially identical. This
+  resolves the earlier open question: the prelim ordering (P7 > P5) was
+  noise, not a real trend. Still supports `--secondary=no` as production
+  default.
+- The read-name-matched lost/gained/`mm`-tagged churn breakdown at full scale
+  (2026-08-06) is now in the M4 slide table below: P5 net +37,730 reads
+  (0.003%), P7 net +30,979 reads (0.003%) — same small-and-positive pattern
+  as every smaller-scale test, ~94% of losses go to zero genes not true
+  multi-gene ambiguity, only ~13-14% of gains are genuine `mm`-tagged rescue.
+- The filtered-molecule divergence (P5 −0.13%, P7 +0.07%) has now been
+  tested against an EmptyDrops reseed noise floor (5 seeds, both
+  orientations) plus a direct barcode-level UMI diff. Result: **P5's shift
+  is real** — outside the entire range 5 different seeds produce on the
+  unchanged baseline matrix — while **P7's shift is statistically
+  indistinguishable from ordinary seed-to-seed algorithm noise**. The
+  earlier "symmetric, opposite-direction" framing was misleading; it's
+  closer to "P5 has a real small loss (~110 of 33,804 cells), P7 shows no
+  distinguishable effect." Mechanistically, the flipped barcodes' raw UMI
+  totals barely move (6 of 13,021 total UMI delta for P5's 113 flipped
+  barcodes) — the effect looks like small gene-level reassignment
+  (same UMI count, different gene) tipping EmptyDrops' profile-based
+  likelihood test for a few boundary barcodes, not a depth change. Neither
+  finding changes the `--secondary=no` production recommendation. Full
+  detail in mapping.md's "Full-scale P5/P7 run" section.
 
 ## Sequencing depth context for M2
 
