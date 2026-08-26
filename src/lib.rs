@@ -13,6 +13,7 @@ pub mod config;
 pub mod cr_bam_to_mtx;
 pub mod demux;
 pub mod extract;
+pub mod gzin;
 pub mod homopolymer;
 pub mod io;
 pub mod orient;
@@ -25,7 +26,6 @@ use std::time::Instant;
 
 use anyhow::Result;
 use crossbeam_channel::{bounded, Receiver, Sender};
-use needletail::parse_fastx_file;
 use rayon::prelude::*;
 use tracing::info;
 
@@ -35,6 +35,7 @@ use crate::barcode::Whitelist;
 use crate::config::Cli;
 use crate::demux::{index_anchor_starts, DemuxVia, Demuxer};
 use crate::extract::{extract, ExtractCfg};
+use crate::gzin::{open_fastx, open_fastx_scan};
 use crate::io::{discover_fastqs, PairShardWriter};
 use crate::orient::{orient, OrientCfg, OrientMode};
 use crate::pipeline::{CbStatus, Orientation, ReadClass};
@@ -299,6 +300,7 @@ pub fn run(cli: &Cli) -> Result<()> {
     let n_workers = rayon::current_num_threads();
     let forced_readers = cli.params.reader_threads;
     let use_pipeline = forced_readers > 0 || inputs.len() < n_workers;
+    info!(decoder = %crate::gzin::backend_description(), "gzip input decoder");
 
     let t_proc = Instant::now();
     let locals = if use_pipeline {
@@ -791,7 +793,7 @@ fn process_file(input: &Path, sh: &Shared) -> Result<Stats> {
     let n_targets = sh.targets.len() / sh.split;
     let mut bufs = make_target_bufs(n_targets);
 
-    let mut reader = parse_fastx_file(input)?;
+    let mut reader = open_fastx(input)?;
     while let Some(rec) = reader.next() {
         let rec = rec?;
         process_one(
@@ -862,7 +864,7 @@ fn reader_loop(
         let idx = next.fetch_add(1, Ordering::Relaxed);
         let Some(input) = files.get(idx) else { break };
         let expected = file_orientation(input, sh)?;
-        let mut reader = parse_fastx_file(input)?;
+        let mut reader = open_fastx(input)?;
         let mut batch = Batch::with_orientation(expected);
         while let Some(rec) = reader.next() {
             let rec = rec?;
@@ -965,7 +967,7 @@ fn detect_orientation(
         expected: None,
         ..*base_cfg
     };
-    let mut reader = parse_fastx_file(input)?;
+    let mut reader = open_fastx_scan(input)?;
     let (mut p5, mut p7) = (0u64, 0u64);
     let mut seen = 0;
     while let Some(rec) = reader.next() {

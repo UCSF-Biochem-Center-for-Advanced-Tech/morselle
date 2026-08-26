@@ -6,6 +6,25 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.6] — 2026-08-26
+
+### Added
+- Opt-in parallel gzip input decoding via `SBXPRESS_RAPIDGZIP=1`, using
+  [`rapidgzip-core`](https://crates.io/crates/rapidgzip-core) in place of the
+  serial flate2 reader. `SBXPRESS_RAPIDGZIP_THREADS` sets the per-file decoder
+  budget and `SBXPRESS_RAPIDGZIP_POOL` caps process-wide decode slots so the
+  one-file-per-thread path cannot oversubscribe the machine. Decode-only: output
+  writers are unchanged and every emitted FASTQ is still a single gzip member.
+  The gain depends on input framing (BGZF and `pigz --independent` parallelize
+  well; `pigz`'s default dependent-block framing does not), so it is off by
+  default and intended to be measured per dataset.
+
+### Fixed
+- Documented that the pipelined path's output is not byte-reproducible between
+  runs. Record order there depends on worker scheduling, with the serial reader
+  as much as the parallel one; the per-file path remains byte-reproducible. Both
+  paths keep R1/R2 mate ordering.
+
 ## [0.3.5] — 2026-07-16
 
 ### Added
