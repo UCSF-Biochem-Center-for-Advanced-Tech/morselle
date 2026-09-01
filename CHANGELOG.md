@@ -6,6 +6,26 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `sbx10x::yc` encodes and decodes the Roche SBX `YC` duplex-consensus tag,
+  written from the published XOOS specification (not derived from Roche's
+  reference implementation, whose licence restricts derivatives to Roche
+  instrument data). Covers parse/serialise, reverse-complement, trim, and
+  per-position provenance, with the four published worked examples as fixtures.
+- `sbx10x::overlap` merges overlapping Illumina mates into the full fragment — a
+  port of HTStream's `hts_Overlapper` adapted to 10x geometry. Merges the *raw*
+  mates before any trimming, which is what makes the alignment gapless, and
+  removes adapter read-through by geometry rather than sequence matching.
+- `sbxpress illumina --overlap` (default off) reconstructs the fragment before
+  extraction. Merged pairs (`sins`/`mins`) carry the same canonical layout as an
+  SBX read and go through the same `extract`, gaining a `YC:Z:` tag; unmerged
+  pairs (`lins`) fall back to the existing R1-barcode / R2-cDNA path unchanged.
+  Insert-class counts and a cDNA-length histogram are logged and recorded in the
+  metrics JSON.
+- `--trim-tso` (default off, both arms) trims the template-switch oligo where it
+  sits between the cDNA and the 3' read-through adapter. Anchored rather than
+  scanned, so a chance match inside the cDNA cannot truncate real sequence.
+
 ## [0.3.5] — 2026-07-16
 
 ### Added
