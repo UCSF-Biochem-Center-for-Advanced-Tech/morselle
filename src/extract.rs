@@ -12,6 +12,16 @@
 
 use crate::anchors::{hamming_leq, ILLUMINA_3P_ADAPTER};
 
+/// Reverse-complement of [`crate::anchors::TSO`], as the template-switch oligo
+/// appears in the canonical frame: between the cDNA and the 3' read-through
+/// adapter. A fragment carries it only when it reached the cDNA's 5' end, so it
+/// is enriched in short fragments. Verified against `revcomp(TSO)` in tests.
+const TSO_RC: &[u8] = b"CCCATGTACTCTGCGTTGATACCACTGCTT";
+
+/// Shortest partial TSO trimmed at the 3' end of a read that never reached an
+/// adapter. 12 bp with a 1-mismatch budget keeps false trims near zero.
+const MIN_PARTIAL_TSO: usize = 12;
+
 /// Tuning for [`extract`].
 #[derive(Debug, Clone, Copy)]
 pub struct ExtractCfg {
@@ -19,6 +29,9 @@ pub struct ExtractCfg {
     pub min_cdna_len: usize,
     /// Max mismatches for the 3' adapter trim seed.
     pub adapter_max_mm: u32,
+    /// Trim the template-switch oligo when it sits between the cDNA and the 3'
+    /// adapter. Off by default: enabling it changes emitted cDNA.
+    pub trim_tso: bool,
     /// Cap emitted R2 length; 0 = uncapped. SBX cDNA can be >1 kb, but 10x reference
     /// hard-caps reads at 649 bp. NOT applied here — `extract` retains the whole
     /// fragment; the cap is applied by the emitter after reverse-complementing into
@@ -45,12 +58,47 @@ pub struct Extracted {
     pub adapter_pos: Option<usize>,
     /// The 3' read-through adapter was found and trimmed.
     pub adapter_trimmed: bool,
+    /// Where the reverse-complemented TSO starts, when found and trimmed.
+    pub tso_pos: Option<usize>,
+    /// The TSO was found abutting the cDNA's 3' end and trimmed.
+    pub tso_trimmed: bool,
+}
+
+/// Where the reverse-complemented TSO starts, if this read carries one at the
+/// cDNA's 3' end.
+///
+/// **Anchored, never scanned.** The TSO can only sit immediately 5' of the
+/// read-through adapter, or run off the 3' end of a read that never reached one.
+/// Searching for it inside the cDNA would let a chance match truncate real
+/// sequence — and at 30 bp a partial match is not rare. The mismatch budget
+/// scales with the matched length (10%), mirroring [`find_adapter`].
+fn find_tso(seq: &[u8], cdna_start: usize, cdna_end: usize) -> Option<usize> {
+    let m = TSO_RC.len();
+    // Full-length TSO immediately before the adapter.
+    if cdna_end >= cdna_start + m {
+        let start = cdna_end - m;
+        if hamming_leq(&seq[start..cdna_end], TSO_RC, (m / 10) as u32) {
+            return Some(start);
+        }
+    }
+    // Partial TSO running off the 3' end: the read holds a prefix of it. Longest
+    // match wins, so a read that stopped mid-TSO still trims everything it saw.
+    if cdna_end == seq.len() {
+        let longest = (cdna_end - cdna_start).min(m - 1);
+        for len in (MIN_PARTIAL_TSO..=longest).rev() {
+            let start = cdna_end - len;
+            if hamming_leq(&seq[start..cdna_end], &TSO_RC[..len], (len / 10) as u32) {
+                return Some(start);
+            }
+        }
+    }
+    None
 }
 
 /// Extend the dT-primer run rightward from `approx_start` (tolerating isolated
 /// mismatches) and return the cDNA start = one past the run's last T. If no T is
 /// near `approx_start`, returns `approx_start` (run length 0 — polyT absent).
-fn dt_run_end(seq: &[u8], approx_start: usize) -> usize {
+pub fn dt_run_end(seq: &[u8], approx_start: usize) -> usize {
     let n = seq.len();
     // Probe for the run start at approx_start, then ±1 (boundary fuzz).
     let start = if approx_start < n && seq[approx_start] == b'T' {
@@ -90,7 +138,7 @@ const MIN_PARTIAL_ADAPTER: usize = 7;
 /// Trimming the adapter ourselves keeps cDNA out of downstream tools' adapter
 /// trimmers (10x reference mis-trims long reads that still carry the adapter).
 /// Allocation-free. The indel check runs only at a cheap 3 bp prefix anchor.
-fn find_adapter(seq: &[u8], from: usize, max_mm: u32) -> Option<usize> {
+pub fn find_adapter(seq: &[u8], from: usize, max_mm: u32) -> Option<usize> {
     let a = ILLUMINA_3P_ADAPTER;
     let m = a.len();
     let end = seq.len();
@@ -187,6 +235,8 @@ pub fn extract(
     let mut r2 = None;
     let mut adapter_pos = None;
     let mut adapter_trimmed = false;
+    let mut tso_pos = None;
+    let mut tso_trimmed = false;
 
     if let Some(pts) = polyt_start {
         let cdna_start = dt_run_end(seq, pts);
@@ -194,8 +244,18 @@ pub fn extract(
         polyt_end = Some(cdna_start);
 
         adapter_pos = find_adapter(seq, cdna_start, cfg.adapter_max_mm);
-        let cdna_end = adapter_pos.unwrap_or(seq.len());
+        let mut cdna_end = adapter_pos.unwrap_or(seq.len());
         adapter_trimmed = adapter_pos.is_some();
+        // The TSO sits between the cDNA and the adapter on any fragment that
+        // reached the cDNA's 5' end. Trim before the length gate, so a fragment
+        // that is *only* TSO is rejected rather than emitted as cDNA.
+        if cfg.trim_tso && cdna_end > cdna_start {
+            if let Some(pos) = find_tso(seq, cdna_start, cdna_end) {
+                tso_pos = Some(pos);
+                tso_trimmed = true;
+                cdna_end = pos;
+            }
+        }
         // Retain the WHOLE adapter-trimmed cDNA fragment here; any `--max-r2-len`
         // cap is applied at write time, after the fragment is reverse-complemented
         // into R2 orientation, so the cap keeps the bases the R2 primer would
@@ -212,6 +272,8 @@ pub fn extract(
         polyt_run_len,
         adapter_pos,
         adapter_trimmed,
+        tso_pos,
+        tso_trimmed,
     }
 }
 
@@ -270,10 +332,127 @@ mod tests {
         assert_eq!(find_adapter(s, 0, 2), None);
     }
 
+    /// Build a canonical read: CB+UMI | dT | rc(cDNA) | [rc(TSO)] | [adapter].
+    fn canonical(cdna: &[u8], with_tso: bool, with_adapter: bool) -> Vec<u8> {
+        // A cDNA ending in A makes revcomp start with T, which the dT-run walker
+        // legitimately absorbs — a fixture trap, not a bug. Refuse to build one.
+        assert_ne!(*cdna.last().unwrap(), b'A', "cDNA must not end in A");
+        let mut v = vec![b'A'; 28];
+        v.extend(std::iter::repeat_n(b'T', 30));
+        v.extend_from_slice(&revcomp(cdna));
+        if with_tso {
+            v.extend_from_slice(TSO_RC);
+        }
+        if with_adapter {
+            v.extend_from_slice(ILLUMINA_3P_ADAPTER);
+        }
+        v
+    }
+
+    fn tso_cfg() -> ExtractCfg {
+        ExtractCfg {
+            trim_tso: true,
+            ..ecfg()
+        }
+    }
+
+    #[test]
+    fn tso_rc_matches_the_declared_oligo() {
+        assert_eq!(TSO_RC, revcomp(crate::anchors::TSO).as_slice());
+    }
+
+    #[test]
+    fn trims_a_full_tso_between_cdna_and_adapter() {
+        let cdna = b"GCTAGCTAGCATCGATCGTAGCTAGCATCGATCGATGCTAGCTAGCATCG";
+        let seq = canonical(cdna, true, true);
+        let e = extract(&seq, Some((0, 28)), Some(28), &tso_cfg());
+        assert!(e.tso_trimmed);
+        let (s, t) = e.r2.unwrap();
+        assert_eq!(&seq[s..t], revcomp(cdna).as_slice());
+        assert_eq!(e.tso_pos, Some(t));
+    }
+
+    #[test]
+    fn leaves_the_tso_alone_by_default() {
+        let cdna = b"GCTAGCTAGCATCGATCGTAGCTAGCATCGATCGATGCTAGCTAGCATCG";
+        let seq = canonical(cdna, true, true);
+        let e = extract(&seq, Some((0, 28)), Some(28), &ecfg());
+        assert!(!e.tso_trimmed);
+        let (s, t) = e.r2.unwrap();
+        // The TSO is still sitting on the end of the "cDNA".
+        assert_eq!(t - s, cdna.len() + TSO_RC.len());
+    }
+
+    #[test]
+    fn trims_a_partial_tso_running_off_the_read_end() {
+        let cdna = b"GCTAGCTAGCATCGATCGTAGCTAGCATCGATCGATGCTAGCTAGCATCG";
+        let mut seq = canonical(cdna, false, false);
+        seq.extend_from_slice(&TSO_RC[..18]); // read stopped mid-TSO
+        let e = extract(&seq, Some((0, 28)), Some(28), &tso_cfg());
+        assert!(e.tso_trimmed);
+        let (s, t) = e.r2.unwrap();
+        assert_eq!(&seq[s..t], revcomp(cdna).as_slice());
+    }
+
+    #[test]
+    fn tolerates_mismatches_in_the_tso() {
+        let cdna = b"GCTAGCTAGCATCGATCGTAGCTAGCATCGATCGATGCTAGCTAGCATCG";
+        let mut seq = canonical(cdna, true, true);
+        let tso_at = seq.len() - ILLUMINA_3P_ADAPTER.len() - TSO_RC.len();
+        // 3 mismatches in 30 bp is inside the 10% budget.
+        for offset in [4usize, 11, 19] {
+            seq[tso_at + offset] = if seq[tso_at + offset] == b'A' {
+                b'C'
+            } else {
+                b'A'
+            };
+        }
+        assert!(extract(&seq, Some((0, 28)), Some(28), &tso_cfg()).tso_trimmed);
+
+        // 6 is not.
+        let mut seq = canonical(cdna, true, true);
+        for offset in [2usize, 6, 10, 14, 18, 22] {
+            seq[tso_at + offset] = if seq[tso_at + offset] == b'A' {
+                b'C'
+            } else {
+                b'A'
+            };
+        }
+        assert!(!extract(&seq, Some((0, 28)), Some(28), &tso_cfg()).tso_trimmed);
+    }
+
+    #[test]
+    fn does_not_trim_a_tso_buried_inside_the_cdna() {
+        // The oligo appears mid-cDNA, not abutting the adapter. Anchoring is what
+        // stops a chance match from truncating real sequence.
+        let mut cdna = b"GCTAGCTAGCATCGATCGTAGCTAGCATCG".to_vec();
+        cdna.extend_from_slice(&revcomp(TSO_RC));
+        cdna.extend_from_slice(b"ATCGATCGATGCTAGCTAGCATCGATCGTC");
+        let seq = canonical(&cdna, false, true);
+        let e = extract(&seq, Some((0, 28)), Some(28), &tso_cfg());
+        assert!(!e.tso_trimmed);
+        let (s, t) = e.r2.unwrap();
+        assert_eq!(&seq[s..t], revcomp(&cdna).as_slice());
+    }
+
+    #[test]
+    fn a_fragment_that_is_only_tso_yields_no_cdna() {
+        // Trimming happens before the length gate, so an adapter-dimer-like
+        // fragment is rejected rather than emitted as 30 bp of "cDNA".
+        let mut seq = vec![b'A'; 28];
+        seq.extend(std::iter::repeat_n(b'T', 30));
+        seq.extend_from_slice(TSO_RC);
+        seq.extend_from_slice(ILLUMINA_3P_ADAPTER);
+        let e = extract(&seq, Some((0, 28)), Some(28), &tso_cfg());
+        assert!(e.tso_trimmed);
+        assert!(e.r2.is_none());
+    }
+
     fn ecfg() -> ExtractCfg {
         ExtractCfg {
             min_cdna_len: 20,
             adapter_max_mm: 2,
+            trim_tso: false,
             max_r2_len: 0,
         }
     }

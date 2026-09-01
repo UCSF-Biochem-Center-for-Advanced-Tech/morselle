@@ -69,6 +69,7 @@ fn main() -> anyhow::Result<()> {
     let ecfg = ExtractCfg {
         min_cdna_len: 50,
         adapter_max_mm: 2,
+        trim_tso: false,
         max_r2_len: 0,
     };
 
