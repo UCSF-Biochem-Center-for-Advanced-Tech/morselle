@@ -16,8 +16,10 @@ pub mod extract;
 pub mod homopolymer;
 pub mod io;
 pub mod orient;
+pub mod overlap;
 pub mod pipeline;
 pub mod sample_sheet;
+pub mod yc;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
