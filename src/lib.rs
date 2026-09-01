@@ -37,7 +37,7 @@ use crate::barcode::Whitelist;
 use crate::config::Cli;
 use crate::demux::{index_anchor_starts, DemuxVia, Demuxer};
 use crate::extract::{extract, ExtractCfg};
-use crate::io::{discover_fastqs, PairShardWriter};
+use crate::io::{discover_fastqs, PairShardWriter, ShardWriter};
 use crate::orient::{orient, OrientCfg, OrientMode};
 use crate::pipeline::{CbStatus, Orientation, ReadClass};
 use crate::sample_sheet::SampleSheet;
@@ -80,6 +80,8 @@ struct Stats {
     cb_fail_confident: u64,
     // demux
     undetermined: u64,
+    /// Reads written to the `--failed-output` side channel.
+    failed_emitted: u64,
     via_dual: u64,
     via_i5: u64,
     via_i7: u64,
@@ -119,6 +121,7 @@ impl Stats {
         self.cb_located_confident += o.cb_located_confident;
         self.cb_fail_confident += o.cb_fail_confident;
         self.undetermined += o.undetermined;
+        self.failed_emitted += o.failed_emitted;
         self.via_dual += o.via_dual;
         self.via_i5 += o.via_i5;
         self.via_i7 += o.via_i7;
@@ -169,6 +172,8 @@ struct Shared<'a> {
     /// Add SBX processing provenance tags to R2 FASTQ comments.
     processing_tags: bool,
     targets: &'a [PairShardWriter],
+    /// Side channel for reads that never produce a pair. See `--failed-output`.
+    failed: Option<&'a ShardWriter>,
 }
 
 /// Entry point invoked by the binary. Orients each read to canonical P5→P7,
@@ -260,6 +265,12 @@ pub fn run(cli: &Cli) -> Result<()> {
     };
     let index_len = demuxer.as_ref().map_or(10, |d| d.index_len());
 
+    let failed_writer = cli
+        .params
+        .failed_output
+        .as_ref()
+        .map(|path| ShardWriter::create(path, glevel))
+        .transpose()?;
     let shared = Shared {
         orient_cfg,
         orient_mode: cli.params.orientation,
@@ -280,6 +291,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         minimap2: cli.params.minimap2,
         processing_tags: cli.params.processing_tags,
         targets: &targets,
+        failed: failed_writer.as_ref(),
     };
 
     // Process files in parallel — each plain-gzip file inflates serially on one
@@ -338,6 +350,9 @@ pub fn run(cli: &Cli) -> Result<()> {
 
     for t in &targets {
         t.finish()?;
+    }
+    if let Some(writer) = &failed_writer {
+        writer.finish()?;
     }
     let process_secs = t_proc.elapsed().as_secs_f64();
 
@@ -475,6 +490,17 @@ fn make_target_bufs(n_targets: usize) -> Vec<(Vec<u8>, Vec<u8>, u64)> {
         .collect()
 }
 
+/// Flush this worker's buffered failed reads to the side channel.
+fn flush_failed_buf(buf: &mut Vec<u8>, sh: &Shared) -> Result<()> {
+    if !buf.is_empty() {
+        if let Some(writer) = sh.failed {
+            writer.append(buf)?;
+        }
+        buf.clear();
+    }
+    Ok(())
+}
+
 /// Flush any records still buffered per target to this worker's `chunk` shard.
 fn flush_target_bufs(bufs: &[(Vec<u8>, Vec<u8>, u64)], sh: &Shared, chunk: usize) -> Result<()> {
     for (i, buf) in bufs.iter().enumerate() {
@@ -498,6 +524,7 @@ fn process_one(
     orient_cfg: &OrientCfg,
     sh: &Shared,
     bufs: &mut [(Vec<u8>, Vec<u8>, u64)],
+    failed_buf: &mut Vec<u8>,
     chunk: usize,
     stats: &mut Stats,
 ) -> Result<()> {
@@ -625,13 +652,45 @@ fn process_one(
             ReadClass::Unparseable => stats.class_unparseable += 1,
         }
 
+        // Emit the ORIGINAL read (pre-orientation, untrimmed) to the side
+        // channel on every path that does not produce a pair, so no input read
+        // is silently dropped.
+        let mut push_failed = |reason: &str, stats: &mut Stats| -> Result<()> {
+            if sh.failed.is_none() {
+                return Ok(());
+            }
+            stats.failed_emitted += 1;
+            failed_buf.push(b'@');
+            failed_buf.extend_from_slice(id);
+            failed_buf.extend_from_slice(format!("\tXF:Z:{reason}").as_bytes());
+            failed_buf.push(b'\n');
+            failed_buf.extend_from_slice(seq);
+            failed_buf.extend_from_slice(b"\n+\n");
+            failed_buf.extend_from_slice(qual);
+            failed_buf.push(b'\n');
+            if failed_buf.len() >= FLUSH_BYTES {
+                flush_failed_buf(failed_buf, sh)?;
+            }
+            Ok(())
+        };
+
         let (Some((r1s, r1e)), Some((r2s, r2e))) = (e.r1, e.r2) else {
-            return Ok(()); // need both R1 and R2 to emit a pair
+            // need both R1 and R2 to emit a pair
+            let reason = if o.orientation == Orientation::Unknown {
+                "unoriented"
+            } else if e.r1.is_none() {
+                "no_barcode"
+            } else {
+                "no_cdna"
+            };
+            push_failed(reason, stats)?;
+            return Ok(());
         };
 
         // Gate: drop CB-fail pairs that weren't rescued (unless gating is off).
         if sh.cb_gate && !cb_ok {
             stats.gated_out += 1;
+            push_failed("cb_fail", stats)?;
             return Ok(());
         }
 
@@ -792,6 +851,7 @@ fn process_file(input: &Path, sh: &Shared) -> Result<Stats> {
     let chunk = rayon::current_thread_index().unwrap_or(0) % sh.split;
     let n_targets = sh.targets.len() / sh.split;
     let mut bufs = make_target_bufs(n_targets);
+    let mut failed_buf = Vec::new();
 
     let mut reader = parse_fastx_file(input)?;
     while let Some(rec) = reader.next() {
@@ -803,11 +863,13 @@ fn process_file(input: &Path, sh: &Shared) -> Result<Stats> {
             &orient_cfg,
             sh,
             &mut bufs,
+            &mut failed_buf,
             chunk,
             &mut stats,
         )?;
     }
     flush_target_bufs(&bufs, sh, chunk)?;
+    flush_failed_buf(&mut failed_buf, sh)?;
     Ok(stats)
 }
 
@@ -889,6 +951,7 @@ fn worker_loop(worker_id: usize, sh: &Shared, rx: Receiver<Batch>) -> Result<Sta
     let chunk = worker_id % sh.split;
     let n_targets = sh.targets.len() / sh.split;
     let mut bufs = make_target_bufs(n_targets);
+    let mut failed_buf = Vec::new();
     let mut stats = Stats::new(sh.n_samples);
 
     while let Ok(batch) = rx.recv() {
@@ -902,12 +965,23 @@ fn worker_loop(worker_id: usize, sh: &Shared, rx: Receiver<Batch>) -> Result<Sta
             let id = &batch.ids[io..io + id_len];
             let seq = &batch.seqs[so..so + seq_len];
             let qual = &batch.quals[so..so + seq_len];
-            process_one(id, seq, qual, &orient_cfg, sh, &mut bufs, chunk, &mut stats)?;
+            process_one(
+                id,
+                seq,
+                qual,
+                &orient_cfg,
+                sh,
+                &mut bufs,
+                &mut failed_buf,
+                chunk,
+                &mut stats,
+            )?;
             io += id_len;
             so += seq_len;
         }
     }
     flush_target_bufs(&bufs, sh, chunk)?;
+    flush_failed_buf(&mut failed_buf, sh)?;
     Ok(stats)
 }
 
@@ -1043,6 +1117,7 @@ fn build_metrics(
         .into(),
         processing_tags,
         total_reads: stats.reads,
+        reads_failed: stats.failed_emitted,
         elapsed_secs: t.elapsed,
         load_secs: t.load_secs,
         process_secs: t.process_secs,

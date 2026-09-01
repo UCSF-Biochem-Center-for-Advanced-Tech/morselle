@@ -30,6 +30,9 @@ pub struct DemuxMetrics {
 /// Top-level run metrics, serialized to `metrics_summary.json`.
 #[derive(Serialize)]
 pub struct Metrics {
+    /// Reads written to the `--failed-output` side channel. When that option is
+    /// set, `total_reads == pairs_emitted + reads_failed` for every input.
+    pub reads_failed: u64,
     /// FASTQ layout selected for this run.
     pub output_mode: String,
     /// Whether SBX per-read processing provenance tags were emitted.

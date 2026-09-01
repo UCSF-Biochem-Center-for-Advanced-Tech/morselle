@@ -22,6 +22,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pairs (`lins`) fall back to the existing R1-barcode / R2-cDNA path unchanged.
   Insert-class counts and a cDNA-length histogram are logged and recorded in the
   metrics JSON.
+- `--failed-output` (both arms) emits every read that fails to produce a pair,
+  as the original untouched record with an `XF:Z:<reason>` tag appended, so no
+  input read is silently dropped. The SBX arm writes one gzipped FASTQ; the
+  Illumina arm writes `<prefix>_R1.fastq.gz` / `<prefix>_R2.fastq.gz` so the
+  failed pair stays re-runnable. With it set, `total_reads` equals emitted plus
+  failed exactly, and the per-reason breakdown is recorded in the metrics JSON.
 - `--trim-tso` (default off, both arms) trims the template-switch oligo where it
   sits between the cDNA and the 3' read-through adapter. Anchored rather than
   scanned, so a chance match inside the cDNA cannot truncate real sequence.

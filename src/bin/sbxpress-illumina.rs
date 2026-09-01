@@ -96,6 +96,13 @@ struct Cli {
     #[arg(long, default_value_t = 2)]
     adapter_max_mm: u32,
 
+    /// Emit every read that fails, as the original R1/R2 pair, to
+    /// `<prefix>_R1.fastq.gz` and `<prefix>_R2.fastq.gz`. Each record keeps its
+    /// original header and gains an `XF:Z:<reason>` tag. With this set,
+    /// `records_read == records_emitted + records_failed` exactly.
+    #[arg(long)]
+    failed_output: Option<PathBuf>,
+
     /// Trim the template-switch oligo from merged fragments. The TSO survives
     /// only on fragments that reached the cDNA's 5' end — the same ones short
     /// enough to overlap — so merged reads are enriched for it. Off by default.
@@ -133,6 +140,10 @@ struct Metrics {
     yc_unencodable: u64,
     /// Merged fragments whose TSO was found and trimmed (needs `--trim-tso`).
     tso_trimmed: u64,
+    /// Reads written to the failed-output side channel, by reason.
+    records_failed: u64,
+    failed_by_reason: BTreeMap<String, u64>,
+    failed_outputs: Vec<PathBuf>,
     /// cDNA length of each merged fragment, excluding CB+UMI+dT.
     insert_length_histogram: BTreeMap<usize, u64>,
     elapsed_secs: f64,
@@ -155,6 +166,8 @@ struct PairMetrics {
     yc_n_columns_coerced: u64,
     yc_unencodable: u64,
     tso_trimmed: u64,
+    records_failed: u64,
+    failed_by_reason: BTreeMap<String, u64>,
     insert_length_histogram: BTreeMap<usize, u64>,
 }
 
@@ -233,6 +246,66 @@ fn write_record(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Paths for a failed-pair shard: `<prefix>_R1.fastq.gz` / `<prefix>_R2.fastq.gz`,
+/// carrying the same `.shard-NNN` infix as the main output when sharded.
+fn failed_paths(prefix: &Path, index: usize, count: usize) -> (PathBuf, PathBuf) {
+    let text = prefix.as_os_str().to_string_lossy().into_owned();
+    let stem = if count == 1 {
+        text
+    } else {
+        format!("{text}.shard-{:03}", index + 1)
+    };
+    (
+        PathBuf::from(format!("{stem}_R1.fastq.gz")),
+        PathBuf::from(format!("{stem}_R2.fastq.gz")),
+    )
+}
+
+/// Both mates of a failed pair, written verbatim apart from an appended
+/// `XF:Z:<reason>` tag. Emitting the untouched reads keeps the side channel
+/// re-runnable through any other tool.
+struct FailedWriter {
+    r1: Box<dyn Write>,
+    r2: Box<dyn Write>,
+}
+
+impl FailedWriter {
+    fn create(r1_path: &Path, r2_path: &Path) -> Result<Self> {
+        let open = |path: &Path| -> Result<Box<dyn Write>> {
+            let file =
+                File::create(path).with_context(|| format!("cannot create {}", path.display()))?;
+            Ok(Box::new(GzEncoder::new(
+                BufWriter::new(file),
+                Compression::default(),
+            )))
+        };
+        Ok(FailedWriter {
+            r1: open(r1_path)?,
+            r2: open(r2_path)?,
+        })
+    }
+
+    fn write_pair(
+        &mut self,
+        reason: &str,
+        r1: (&[u8], &[u8], &[u8]),
+        r2: (&[u8], &[u8], &[u8]),
+    ) -> std::io::Result<()> {
+        for (out, (id, seq, qual)) in [(&mut self.r1, r1), (&mut self.r2, r2)] {
+            out.write_all(b"@")?;
+            out.write_all(id)?;
+            write!(out, "\tXF:Z:{reason}")?;
+            out.write_all(b"\n")?;
+            out.write_all(seq)?;
+            out.write_all(b"\n+\n")?;
+            out.write_all(qual)?;
+            out.write_all(b"\n")?;
+        }
+        Ok(())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn convert_pair(
     r1_path: &Path,
     r2_path: &Path,
@@ -242,6 +315,7 @@ fn convert_pair(
     overlap_cfg: Option<&OverlapCfg>,
     extract_cfg: &ExtractCfg,
     emit_yc: bool,
+    failed_paths: Option<(&Path, &Path)>,
 ) -> Result<PairMetrics> {
     let file = File::create(output_path)
         .with_context(|| format!("cannot create {}", output_path.display()))?;
@@ -256,6 +330,9 @@ fn convert_pair(
         .with_context(|| format!("cannot open R1 {}", r1_path.display()))?;
     let mut r2 = parse_fastx_file(r2_path)
         .with_context(|| format!("cannot open R2 {}", r2_path.display()))?;
+    let mut failed = failed_paths
+        .map(|(r1, r2)| FailedWriter::create(r1, r2))
+        .transpose()?;
     let mut pair_number = 0u64;
     let mut scratch = Scratch::default();
     loop {
@@ -291,6 +368,28 @@ fn convert_pair(
                     bail!("R2 record {} has no qualities", pair_number)
                 };
 
+                /// Record a failure, emit the untouched pair to the side channel,
+                /// and move on. Every `continue` below goes through this, so
+                /// `records_read == records_emitted + records_failed` holds.
+                macro_rules! fail_pair {
+                    ($reason:expr) => {{
+                        let reason: &str = $reason;
+                        metrics.records_failed += 1;
+                        *metrics
+                            .failed_by_reason
+                            .entry(reason.to_string())
+                            .or_insert(0) += 1;
+                        if let Some(w) = failed.as_mut() {
+                            w.write_pair(
+                                reason,
+                                (a.id(), &r1_seq[..], r1_qual),
+                                (b.id(), &r2_seq[..], r2_qual),
+                            )?;
+                        }
+                        continue;
+                    }};
+                }
+
                 // Step 1: try to reconstruct the whole fragment from the RAW
                 // mates. This must happen before anything is trimmed — the RT
                 // primer's dT block is the polyA complement, so R1 and rc(R2)
@@ -324,7 +423,7 @@ fn convert_pair(
                     if m.seq.len() < CB_LEN + UMI_LEN {
                         metrics.short_r1 += 1;
                         metrics.barcode_rejected += 1;
-                        continue;
+                        fail_pair!("merged_too_short");
                     }
 
                     let e = extract(
@@ -333,9 +432,12 @@ fn convert_pair(
                         Some(CB_LEN + UMI_LEN),
                         extract_cfg,
                     );
-                    let Some((cdna_start, cdna_end)) = e.r2 else {
-                        metrics.merged_without_cdna += 1;
-                        continue;
+                    let (cdna_start, cdna_end) = match e.r2 {
+                        Some(range) => range,
+                        None => {
+                            metrics.merged_without_cdna += 1;
+                            fail_pair!("no_cdna");
+                        }
                     };
                     if e.tso_trimmed {
                         metrics.tso_trimmed += 1;
@@ -369,7 +471,7 @@ fn convert_pair(
                     if r1_seq.len() < CB_LEN + UMI_LEN || r1_qual.len() < CB_LEN + UMI_LEN {
                         metrics.short_r1 += 1;
                         metrics.barcode_rejected += 1;
-                        continue;
+                        fail_pair!("short_r1");
                     }
                 }
 
@@ -395,7 +497,8 @@ fn convert_pair(
                     ),
                 };
 
-                let corrected = if encode16(raw_cb).is_none() {
+                let cb_invalid = encode16(raw_cb).is_none();
+                let corrected = if cb_invalid {
                     None
                 } else if whitelist.contains(raw_cb) {
                     metrics.barcode_exact += 1;
@@ -407,9 +510,16 @@ fn convert_pair(
                     }
                     value
                 };
-                let Some(corrected) = corrected else {
-                    metrics.barcode_rejected += 1;
-                    continue;
+                let corrected = match corrected {
+                    Some(value) => value,
+                    None => {
+                        metrics.barcode_rejected += 1;
+                        fail_pair!(if cb_invalid {
+                            "cb_invalid"
+                        } else {
+                            "cb_unmatched"
+                        });
+                    }
                 };
 
                 write_record(
@@ -466,6 +576,15 @@ fn run(cli: Cli) -> Result<()> {
     let output_shards = (0..cli.r1.len())
         .map(|index| shard_path(&cli.output, index, cli.r1.len()))
         .collect::<Vec<_>>();
+    let failed_shards: Vec<(PathBuf, PathBuf)> = cli
+        .failed_output
+        .as_ref()
+        .map(|prefix| {
+            (0..cli.r1.len())
+                .map(|index| failed_paths(prefix, index, cli.r1.len()))
+                .collect()
+        })
+        .unwrap_or_default();
     let mut metrics = Metrics {
         r1_files: cli.r1.clone(),
         r2_files: cli.r2.clone(),
@@ -475,6 +594,10 @@ fn run(cli: Cli) -> Result<()> {
         output_shards: output_shards.clone(),
         gem_group: cli.gem_group,
         overlap_enabled: cli.overlap,
+        failed_outputs: failed_shards
+            .iter()
+            .flat_map(|(r1, r2)| [r1.clone(), r2.clone()])
+            .collect(),
         ..Metrics::default()
     };
     let workers = if cli.threads == 0 {
@@ -508,6 +631,9 @@ fn run(cli: Cli) -> Result<()> {
                     overlap_cfg.as_ref(),
                     &extract_cfg,
                     emit_yc,
+                    failed_shards
+                        .get(index)
+                        .map(|(a, b)| (a.as_path(), b.as_path())),
                 );
                 if let Ok(value) = &result {
                     eprintln!(
@@ -543,6 +669,10 @@ fn run(cli: Cli) -> Result<()> {
         metrics.yc_n_columns_coerced += value.yc_n_columns_coerced;
         metrics.yc_unencodable += value.yc_unencodable;
         metrics.tso_trimmed += value.tso_trimmed;
+        metrics.records_failed += value.records_failed;
+        for (reason, count) in value.failed_by_reason {
+            *metrics.failed_by_reason.entry(reason).or_insert(0) += count;
+        }
         for (length, count) in value.insert_length_histogram {
             *metrics.insert_length_histogram.entry(length).or_insert(0) += count;
         }
@@ -559,6 +689,30 @@ fn run(cli: Cli) -> Result<()> {
         metrics.barcode_rejected,
         metrics_path.display()
     );
+    if !metrics.failed_outputs.is_empty() {
+        let reasons = metrics
+            .failed_by_reason
+            .iter()
+            .map(|(reason, count)| format!("{reason}={count}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        eprintln!(
+            "[sbxpress illumina] failed: {} pair(s) [{}] -> {}",
+            metrics.records_failed,
+            reasons,
+            metrics
+                .failed_outputs
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        // Every input record is now accounted for in exactly one place.
+        debug_assert_eq!(
+            metrics.records_read,
+            metrics.records_emitted + metrics.records_failed
+        );
+    }
     if metrics.overlap_enabled {
         let merged = metrics.overlap_short_sins + metrics.overlap_medium_mins;
         let considered = merged + metrics.overlap_long_lins;
@@ -655,6 +809,7 @@ mod tests {
             min_cdna_len: 50,
             adapter_max_mm: 2,
             trim_tso: false,
+            failed_output: None,
         }
     }
 
@@ -775,6 +930,73 @@ mod tests {
         assert!(metrics.contains("\"overlap_medium_mins\": 0"));
         assert!(metrics.contains("\"overlap_long_lins\": 0"));
         assert!(metrics.contains("\"82\": 1"), "insert histogram: {metrics}");
+    }
+
+    #[test]
+    fn failed_output_accounts_for_every_input_read() {
+        // The stock fixture has 3 pairs, one of which carries an unmatchable
+        // barcode. With --failed-output nothing may be silently dropped.
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let temp = tempfile::tempdir().unwrap();
+        let output = temp.path().join("tagged.fastq.gz");
+        let failed = temp.path().join("failed");
+        let mut cli = base_cli(&root, output.clone());
+        cli.failed_output = Some(failed.clone());
+        run(cli).unwrap();
+
+        let failed_r1 = temp.path().join("failed_R1.fastq.gz");
+        let failed_r2 = temp.path().join("failed_R2.fastq.gz");
+        assert!(failed_r1.is_file() && failed_r2.is_file());
+
+        let r1_text = read_gz(&failed_r1);
+        let r2_text = read_gz(&failed_r2);
+        // Both mates of the failed pair, with the reason and the original header.
+        assert!(r1_text.contains("@read_rejected"), "R1 was: {r1_text}");
+        assert!(r2_text.contains("@read_rejected"), "R2 was: {r2_text}");
+        assert!(r1_text.contains("XF:Z:cb_unmatched"));
+        assert_eq!(r1_text.lines().count(), 4);
+        assert_eq!(r2_text.lines().count(), 4);
+
+        let metrics: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(metrics_path(&output)).unwrap()).unwrap();
+        let read = metrics["records_read"].as_u64().unwrap();
+        let emitted = metrics["records_emitted"].as_u64().unwrap();
+        let failed_n = metrics["records_failed"].as_u64().unwrap();
+        assert_eq!(read, emitted + failed_n, "every read accounted for");
+        assert_eq!(failed_n, 1);
+        assert_eq!(metrics["failed_by_reason"]["cb_unmatched"], 1);
+    }
+
+    #[test]
+    fn failed_reads_are_emitted_verbatim() {
+        // The side channel must be re-runnable, so the mates come back byte for
+        // byte apart from the appended reason tag.
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let temp = tempfile::tempdir().unwrap();
+        let failed = temp.path().join("failed");
+        let mut cli = base_cli(&root, temp.path().join("tagged.fastq.gz"));
+        cli.failed_output = Some(failed);
+        run(cli).unwrap();
+
+        let source =
+            std::fs::read_to_string(root.join("tests/fixtures/illumina_R1.fastq")).unwrap();
+        let rejected: Vec<&str> = source
+            .lines()
+            .skip_while(|l| !l.starts_with("@read_rejected"))
+            .take(4)
+            .collect();
+        let emitted: Vec<String> = read_gz(&temp.path().join("failed_R1.fastq.gz"))
+            .lines()
+            .map(str::to_string)
+            .collect();
+        assert_eq!(emitted[1], rejected[1], "sequence unchanged");
+        assert_eq!(emitted[3], rejected[3], "qualities unchanged");
+        assert!(
+            emitted[0].starts_with(rejected[0]),
+            "header preserved, tag appended: {} vs {}",
+            emitted[0],
+            rejected[0]
+        );
     }
 
     #[test]

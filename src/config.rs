@@ -137,6 +137,12 @@ pub struct Params {
     #[arg(long, default_value_t = 2)]
     pub adapter_max_mm: u32,
 
+    /// Emit every read that fails to produce a pair to this gzipped FASTQ, as
+    /// the original (pre-orientation) read with an `XF:Z:<reason>` tag appended.
+    /// With this set, every input read is accounted for in exactly one place.
+    #[arg(long)]
+    pub failed_output: Option<PathBuf>,
+
     /// Trim the template-switch oligo when it sits between the cDNA and the 3'
     /// read-through adapter. A fragment carries the TSO only when it reached the
     /// cDNA's 5' end, so it is enriched in short fragments. Off by default:
