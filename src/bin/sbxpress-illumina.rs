@@ -4,19 +4,25 @@
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
+use crossbeam_channel::{bounded, Sender};
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use needletail::parse_fastx_file;
 use rayon::prelude::*;
 use sbx10x::barcode::{encode16, Whitelist};
+use sbx10x::gzin::{backend_description, open_fastx};
 use serde::Serialize;
 
 const CB_LEN: usize = 16;
 const UMI_LEN: usize = 12;
+/// Keep a few formatting batches queued for each compressor without letting a
+/// large split fan out into unbounded memory use.
+const WRITER_QUEUE_DEPTH: usize = 4;
+const WRITER_BATCH_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Parser)]
 #[command(about = "Convert paired Illumina 10x FASTQs to minimap2-tagged R2 FASTQ")]
@@ -48,6 +54,11 @@ struct Cli {
     /// Maximum number of R1/R2 file pairs converted concurrently.
     #[arg(short, long, default_value_t = 0)]
     threads: usize,
+
+    /// Split every input pair across N output files, each compressed by its own
+    /// writer thread. Use this to remove the single gzip-encoder bottleneck.
+    #[arg(long, default_value_t = 1)]
+    split: usize,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -58,6 +69,7 @@ struct Metrics {
     whitelist_size: usize,
     output: PathBuf,
     output_shards: Vec<PathBuf>,
+    split: usize,
     gem_group: u32,
     records_read: u64,
     records_emitted: u64,
@@ -107,119 +119,188 @@ fn shard_path(output: &Path, index: usize, count: usize) -> PathBuf {
     }
 }
 
+/// Owns one gzip encoder thread per output shard. The conversion loop only
+/// formats FASTQ records; compression proceeds concurrently behind bounded
+/// queues, so a single input pair can still use many output cores.
+struct ChunkedWriters {
+    senders: Vec<Sender<Vec<u8>>>,
+    workers: Vec<JoinHandle<Result<()>>>,
+}
+
+impl ChunkedWriters {
+    fn create(paths: &[PathBuf]) -> Result<Self> {
+        let mut senders = Vec::with_capacity(paths.len());
+        let mut workers = Vec::with_capacity(paths.len());
+        for path in paths {
+            let file =
+                File::create(path).with_context(|| format!("cannot create {}", path.display()))?;
+            let compressed = path.extension().is_some_and(|value| value == "gz");
+            let (sender, receiver) = bounded::<Vec<u8>>(WRITER_QUEUE_DEPTH);
+            workers.push(thread::spawn(move || -> Result<()> {
+                if compressed {
+                    let mut output = GzEncoder::new(BufWriter::new(file), Compression::new(4));
+                    for batch in receiver {
+                        output.write_all(&batch)?;
+                    }
+                    output.finish()?;
+                } else {
+                    let mut output = BufWriter::new(file);
+                    for batch in receiver {
+                        output.write_all(&batch)?;
+                    }
+                    output.flush()?;
+                }
+                Ok(())
+            }));
+            senders.push(sender);
+        }
+        Ok(Self { senders, workers })
+    }
+
+    fn send(&self, shard: usize, batch: Vec<u8>) -> Result<()> {
+        self.senders[shard]
+            .send(batch)
+            .map_err(|_| anyhow::anyhow!("output writer {shard} stopped unexpectedly"))
+    }
+
+    fn finish(self) -> Result<()> {
+        drop(self.senders);
+        for worker in self.workers {
+            worker
+                .join()
+                .map_err(|_| anyhow::anyhow!("output writer thread panicked"))??;
+        }
+        Ok(())
+    }
+}
+
 fn convert_pair(
     r1_path: &Path,
     r2_path: &Path,
-    output_path: &Path,
+    output_paths: &[PathBuf],
     whitelist: &Whitelist,
     gem_group: u32,
 ) -> Result<PairMetrics> {
-    let file = File::create(output_path)
-        .with_context(|| format!("cannot create {}", output_path.display()))?;
-    let gz = output_path.extension().is_some_and(|value| value == "gz");
-    let mut output: Box<dyn Write> = if gz {
-        Box::new(GzEncoder::new(BufWriter::new(file), Compression::default()))
-    } else {
-        Box::new(BufWriter::new(file))
-    };
+    let writers = ChunkedWriters::create(output_paths)?;
+    let mut buffers = (0..output_paths.len())
+        .map(|_| Vec::with_capacity(WRITER_BATCH_BYTES))
+        .collect::<Vec<_>>();
     let mut metrics = PairMetrics::default();
-    let mut r1 = parse_fastx_file(r1_path)
-        .with_context(|| format!("cannot open R1 {}", r1_path.display()))?;
-    let mut r2 = parse_fastx_file(r2_path)
-        .with_context(|| format!("cannot open R2 {}", r2_path.display()))?;
+    let mut r1 =
+        open_fastx(r1_path).with_context(|| format!("cannot open R1 {}", r1_path.display()))?;
+    let mut r2 =
+        open_fastx(r2_path).with_context(|| format!("cannot open R2 {}", r2_path.display()))?;
     let mut pair_number = 0u64;
-    loop {
-        let a = r1.next();
-        let b = r2.next();
-        match (a, b) {
-            (None, None) => break,
-            (None, Some(_)) | (Some(_), None) => bail!(
-                "R1/R2 record-count mismatch between {} and {} after {} pairs",
-                r1_path.display(),
-                r2_path.display(),
-                pair_number
-            ),
-            (Some(a), Some(b)) => {
-                let a = a.with_context(|| format!("invalid FASTQ in {}", r1_path.display()))?;
-                let b = b.with_context(|| format!("invalid FASTQ in {}", r2_path.display()))?;
-                pair_number += 1;
-                metrics.records_read += 1;
-                if canonical_id(a.id()) != canonical_id(b.id()) {
-                    bail!(
-                        "R1/R2 name mismatch at pair {}: '{}' versus '{}'",
-                        pair_number,
-                        String::from_utf8_lossy(a.id()),
-                        String::from_utf8_lossy(b.id())
-                    );
-                }
-                let r1_seq = a.seq();
-                let Some(r1_qual) = a.qual() else {
-                    bail!("R1 record {} has no qualities", pair_number)
-                };
-                let Some(r2_qual) = b.qual() else {
-                    bail!("R2 record {} has no qualities", pair_number)
-                };
-                if r1_seq.len() < CB_LEN + UMI_LEN || r1_qual.len() < CB_LEN + UMI_LEN {
-                    metrics.short_r1 += 1;
-                    metrics.barcode_rejected += 1;
-                    continue;
-                }
-                let raw_cb = &r1_seq[..CB_LEN];
-                let raw_umi = &r1_seq[CB_LEN..CB_LEN + UMI_LEN];
-                let corrected = if encode16(raw_cb).is_none() {
-                    None
-                } else if whitelist.contains(raw_cb) {
-                    metrics.barcode_exact += 1;
-                    whitelist.correct_within1(raw_cb)
-                } else {
-                    let value = whitelist.correct_within1(raw_cb);
-                    if value.is_some() {
-                        metrics.barcode_hamming1_corrected += 1;
+    let conversion = (|| -> Result<()> {
+        loop {
+            let a = r1.next();
+            let b = r2.next();
+            match (a, b) {
+                (None, None) => break,
+                (None, Some(_)) | (Some(_), None) => bail!(
+                    "R1/R2 record-count mismatch between {} and {} after {} pairs",
+                    r1_path.display(),
+                    r2_path.display(),
+                    pair_number
+                ),
+                (Some(a), Some(b)) => {
+                    let a = a.with_context(|| format!("invalid FASTQ in {}", r1_path.display()))?;
+                    let b = b.with_context(|| format!("invalid FASTQ in {}", r2_path.display()))?;
+                    pair_number += 1;
+                    metrics.records_read += 1;
+                    if canonical_id(a.id()) != canonical_id(b.id()) {
+                        bail!(
+                            "R1/R2 name mismatch at pair {}: '{}' versus '{}'",
+                            pair_number,
+                            String::from_utf8_lossy(a.id()),
+                            String::from_utf8_lossy(b.id())
+                        );
                     }
-                    value
-                };
-                let Some(corrected) = corrected else {
-                    metrics.barcode_rejected += 1;
-                    continue;
-                };
-                // Illumina FASTQ identifiers commonly include a whitespace-delimited
-                // mate/control/index comment (for example `2:N:0:...`). Minimap2 -y
-                // treats everything after the first whitespace as SAM-style auxiliary
-                // fields, so emit only the canonical cluster name before our tags.
-                write!(output, "@{}", String::from_utf8_lossy(canonical_id(b.id())))?;
-                write!(output, "\tCR:Z:{}", String::from_utf8_lossy(raw_cb))?;
-                write!(
-                    output,
-                    "\tCB:Z:{}-{}",
-                    String::from_utf8_lossy(&corrected),
-                    gem_group
-                )?;
-                write!(
-                    output,
-                    "\tUR:Z:{}\tUB:Z:{}",
-                    String::from_utf8_lossy(raw_umi),
-                    String::from_utf8_lossy(raw_umi)
-                )?;
-                write!(
-                    output,
-                    "\tCY:Z:{}",
-                    String::from_utf8_lossy(&r1_qual[..CB_LEN])
-                )?;
-                writeln!(
-                    output,
-                    "\tUY:Z:{}",
-                    String::from_utf8_lossy(&r1_qual[CB_LEN..CB_LEN + UMI_LEN])
-                )?;
-                output.write_all(&b.seq())?;
-                output.write_all(b"\n+\n")?;
-                output.write_all(r2_qual)?;
-                output.write_all(b"\n")?;
-                metrics.records_emitted += 1;
+                    let r1_seq = a.seq();
+                    let Some(r1_qual) = a.qual() else {
+                        bail!("R1 record {} has no qualities", pair_number)
+                    };
+                    let Some(r2_qual) = b.qual() else {
+                        bail!("R2 record {} has no qualities", pair_number)
+                    };
+                    if r1_seq.len() < CB_LEN + UMI_LEN || r1_qual.len() < CB_LEN + UMI_LEN {
+                        metrics.short_r1 += 1;
+                        metrics.barcode_rejected += 1;
+                        continue;
+                    }
+                    let raw_cb = &r1_seq[..CB_LEN];
+                    let raw_umi = &r1_seq[CB_LEN..CB_LEN + UMI_LEN];
+                    let corrected = if encode16(raw_cb).is_none() {
+                        None
+                    } else if whitelist.contains(raw_cb) {
+                        metrics.barcode_exact += 1;
+                        whitelist.correct_within1(raw_cb)
+                    } else {
+                        let value = whitelist.correct_within1(raw_cb);
+                        if value.is_some() {
+                            metrics.barcode_hamming1_corrected += 1;
+                        }
+                        value
+                    };
+                    let Some(corrected) = corrected else {
+                        metrics.barcode_rejected += 1;
+                        continue;
+                    };
+                    let shard = (metrics.records_emitted as usize) % buffers.len();
+                    {
+                        let output = &mut buffers[shard];
+                        // Illumina FASTQ identifiers commonly include a whitespace-delimited
+                        // mate/control/index comment (for example `2:N:0:...`). Minimap2 -y
+                        // treats everything after the first whitespace as SAM-style auxiliary
+                        // fields, so emit only the canonical cluster name before our tags.
+                        write!(output, "@{}", String::from_utf8_lossy(canonical_id(b.id())))?;
+                        write!(output, "\tCR:Z:{}", String::from_utf8_lossy(raw_cb))?;
+                        write!(
+                            output,
+                            "\tCB:Z:{}-{}",
+                            String::from_utf8_lossy(&corrected),
+                            gem_group
+                        )?;
+                        write!(
+                            output,
+                            "\tUR:Z:{}\tUB:Z:{}",
+                            String::from_utf8_lossy(raw_umi),
+                            String::from_utf8_lossy(raw_umi)
+                        )?;
+                        write!(
+                            output,
+                            "\tCY:Z:{}",
+                            String::from_utf8_lossy(&r1_qual[..CB_LEN])
+                        )?;
+                        writeln!(
+                            output,
+                            "\tUY:Z:{}",
+                            String::from_utf8_lossy(&r1_qual[CB_LEN..CB_LEN + UMI_LEN])
+                        )?;
+                        output.write_all(&b.seq())?;
+                        output.write_all(b"\n+\n")?;
+                        output.write_all(r2_qual)?;
+                        output.write_all(b"\n")?;
+                    }
+                    metrics.records_emitted += 1;
+                    if buffers[shard].len() >= WRITER_BATCH_BYTES {
+                        writers.send(shard, std::mem::take(&mut buffers[shard]))?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    })();
+    if conversion.is_ok() {
+        for (shard, buffer) in buffers.iter_mut().enumerate() {
+            if !buffer.is_empty() {
+                writers.send(shard, std::mem::take(buffer))?;
             }
         }
     }
-    output.flush()?;
-    drop(output);
+    let writer_result = writers.finish();
+    conversion?;
+    writer_result?;
     Ok(metrics)
 }
 
@@ -230,13 +311,16 @@ fn run(cli: Cli) -> Result<()> {
     if cli.gem_group == 0 {
         bail!("--gem-group must be greater than zero");
     }
+    if cli.split == 0 {
+        bail!("--split must be greater than zero");
+    }
     let started = Instant::now();
     let whitelist = Whitelist::load(&cli.whitelist)?;
     if whitelist.is_empty() {
         bail!("whitelist is empty: {}", cli.whitelist.display());
     }
-    let output_shards = (0..cli.r1.len())
-        .map(|index| shard_path(&cli.output, index, cli.r1.len()))
+    let output_shards = (0..cli.r1.len() * cli.split)
+        .map(|index| shard_path(&cli.output, index, cli.r1.len() * cli.split))
         .collect::<Vec<_>>();
     let mut metrics = Metrics {
         r1_files: cli.r1.clone(),
@@ -245,6 +329,7 @@ fn run(cli: Cli) -> Result<()> {
         whitelist_size: whitelist.len(),
         output: cli.output.clone(),
         output_shards: output_shards.clone(),
+        split: cli.split,
         gem_group: cli.gem_group,
         ..Metrics::default()
     };
@@ -259,6 +344,10 @@ fn run(cli: Cli) -> Result<()> {
         cli.r1.len(),
         workers
     );
+    eprintln!(
+        "[sbxpress illumina] gzip input decoder: {}",
+        backend_description()
+    );
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -267,18 +356,18 @@ fn run(cli: Cli) -> Result<()> {
         cli.r1
             .par_iter()
             .zip(cli.r2.par_iter())
-            .zip(output_shards.par_iter())
             .enumerate()
-            .map(|(index, ((r1, r2), output))| {
-                let result = convert_pair(r1, r2, output, &whitelist, cli.gem_group);
+            .map(|(index, (r1, r2))| {
+                let paths = &output_shards[index * cli.split..(index + 1) * cli.split];
+                let result = convert_pair(r1, r2, paths, &whitelist, cli.gem_group);
                 if let Ok(value) = &result {
                     eprintln!(
-                        "[sbxpress illumina] shard {}/{} complete: read={} emitted={} output={}",
+                        "[sbxpress illumina] input {}/{} complete: read={} emitted={} output_shards={}",
                         index + 1,
                         cli.r1.len(),
                         value.records_read,
                         value.records_emitted,
-                        output.display()
+                        paths.len()
                     );
                 }
                 result
@@ -338,6 +427,7 @@ mod tests {
             metrics: None,
             gem_group: 1,
             threads: 1,
+            split: 1,
         })
         .unwrap();
 
@@ -368,6 +458,7 @@ mod tests {
             metrics: None,
             gem_group: 1,
             threads: 2,
+            split: 1,
         })
         .unwrap();
 
@@ -377,5 +468,37 @@ mod tests {
         let metrics = std::fs::read_to_string(metrics_path(&output)).unwrap();
         assert!(metrics.contains("tagged.shard-001.fastq.gz"));
         assert!(metrics.contains("\"records_read\": 6"));
+    }
+
+    #[test]
+    fn splits_one_pair_across_parallel_gzip_outputs() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let temp = tempfile::tempdir().unwrap();
+        let output = temp.path().join("tagged.fastq.gz");
+        run(Cli {
+            r1: vec![root.join("tests/fixtures/illumina_R1.fastq")],
+            r2: vec![root.join("tests/fixtures/illumina_R2.fastq")],
+            whitelist: root.join("tests/fixtures/illumina_whitelist.txt"),
+            output: output.clone(),
+            metrics: None,
+            gem_group: 1,
+            threads: 1,
+            split: 2,
+        })
+        .unwrap();
+
+        assert!(!output.exists());
+        let mut text = String::new();
+        for index in 1..=2 {
+            let path = temp
+                .path()
+                .join(format!("tagged.shard-{index:03}.fastq.gz"));
+            MultiGzDecoder::new(File::open(path).unwrap())
+                .read_to_string(&mut text)
+                .unwrap();
+        }
+        assert_eq!(text.matches("\n+").count(), 2);
+        let metrics = std::fs::read_to_string(metrics_path(&output)).unwrap();
+        assert!(metrics.contains("\"split\": 2"));
     }
 }

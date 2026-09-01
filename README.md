@@ -399,16 +399,26 @@ sbxpress illumina \
   --r1 sample_L002_R1_001.fastq.gz --r2 sample_L002_R2_001.fastq.gz \
   --whitelist resources/10x_barcodes/3M-february-2018.txt.gz \
   --output sample.illumina.minimap.fastq.gz \
-  --threads 2
+  --threads 2 --split 4
 
 sbxpress minimap -a -x splice:sr --secondary=no -y reference.mmi \
   sample.illumina.minimap.shard-*.fastq.gz \
   | sbxpress annotate - --gtf genes.gtf --output -
 ```
 
-For one input pair, the requested output filename is retained. For multiple
-pairs, outputs are named `*.shard-001.fastq.gz`, `*.shard-002.fastq.gz`, and so
-on. Their comments carry `CR`, `CB`, `UR`, `UB`, `CY`, and `UY`. A combined JSON
+For one input pair with the default `--split 1`, the requested output filename
+is retained. Otherwise, outputs are named `*.shard-001.fastq.gz`,
+`*.shard-002.fastq.gz`, and so on. `--split N` routes records to N independent
+level-4 gzip writer threads per input pair, removing the single-encoder
+bottleneck for a large single lane. The files can all be passed directly to
+minimap2, as above. For maximum single-pair throughput, combine this with
+parallel gzip decode:
+
+```bash
+SBXPRESS_RAPIDGZIP=1 SBXPRESS_RAPIDGZIP_THREADS=32 SBXPRESS_RAPIDGZIP_POOL=32 \
+sbxpress illumina ... --threads 1 --split 8
+```
+Their comments carry `CR`, `CB`, `UR`, `UB`, `CY`, and `UY`. A combined JSON
 report lists every shard and is written to `<output>.metrics.json` unless
 `--metrics` specifies another path.
 
