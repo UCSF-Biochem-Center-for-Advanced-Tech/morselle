@@ -11,11 +11,11 @@ use anyhow::{bail, Context, Result};
 use clap::Parser;
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use needletail::parse_fastx_file;
 use rayon::prelude::*;
 use sbx10x::anchors::revcomp;
 use sbx10x::barcode::{encode16, Whitelist};
 use sbx10x::extract::{extract, ExtractCfg};
+use sbx10x::gzin::{backend_description, open_fastx};
 use sbx10x::overlap::{overlap_in, InsertClass, Merged, OverlapCfg, Scratch};
 use sbx10x::yc::YcTag;
 use serde::Serialize;
@@ -276,7 +276,7 @@ impl FailedWriter {
                 File::create(path).with_context(|| format!("cannot create {}", path.display()))?;
             Ok(Box::new(GzEncoder::new(
                 BufWriter::new(file),
-                Compression::default(),
+                Compression::new(4),
             )))
         };
         Ok(FailedWriter {
@@ -321,15 +321,15 @@ fn convert_pair(
         .with_context(|| format!("cannot create {}", output_path.display()))?;
     let gz = output_path.extension().is_some_and(|value| value == "gz");
     let mut output: Box<dyn Write> = if gz {
-        Box::new(GzEncoder::new(BufWriter::new(file), Compression::default()))
+        Box::new(GzEncoder::new(BufWriter::new(file), Compression::new(4)))
     } else {
         Box::new(BufWriter::new(file))
     };
     let mut metrics = PairMetrics::default();
-    let mut r1 = parse_fastx_file(r1_path)
-        .with_context(|| format!("cannot open R1 {}", r1_path.display()))?;
-    let mut r2 = parse_fastx_file(r2_path)
-        .with_context(|| format!("cannot open R2 {}", r2_path.display()))?;
+    let mut r1 =
+        open_fastx(r1_path).with_context(|| format!("cannot open R1 {}", r1_path.display()))?;
+    let mut r2 =
+        open_fastx(r2_path).with_context(|| format!("cannot open R2 {}", r2_path.display()))?;
     let mut failed = failed_paths
         .map(|(r1, r2)| FailedWriter::create(r1, r2))
         .transpose()?;
@@ -610,6 +610,10 @@ fn run(cli: Cli) -> Result<()> {
         "[sbxpress illumina] converting {} pair(s) with {} worker(s)",
         cli.r1.len(),
         workers
+    );
+    eprintln!(
+        "[sbxpress illumina] gzip input decoder: {}",
+        backend_description()
     );
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
