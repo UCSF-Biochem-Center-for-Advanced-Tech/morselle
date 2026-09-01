@@ -137,6 +137,19 @@ pub struct Params {
     #[arg(long, default_value_t = 2)]
     pub adapter_max_mm: u32,
 
+    /// Emit every read that fails to produce a pair to this gzipped FASTQ, as
+    /// the original (pre-orientation) read with an `XF:Z:<reason>` tag appended.
+    /// With this set, every input read is accounted for in exactly one place.
+    #[arg(long)]
+    pub failed_output: Option<PathBuf>,
+
+    /// Trim the template-switch oligo when it sits between the cDNA and the 3'
+    /// read-through adapter. A fragment carries the TSO only when it reached the
+    /// cDNA's 5' end, so it is enriched in short fragments. Off by default:
+    /// enabling it changes emitted cDNA, so measure the delta before adopting.
+    #[arg(long, default_value_t = false)]
+    pub trim_tso: bool,
+
     /// gzip compression level (0–9) for output FASTQs. Each file is written as a
     /// single gzip member (10x reference mis-frames records at multi-member gzip
     /// boundaries). Lower is faster but larger; the default (4) favors throughput,
@@ -225,6 +238,7 @@ impl Params {
         ExtractCfg {
             min_cdna_len: self.min_cdna_len,
             adapter_max_mm: self.adapter_max_mm,
+            trim_tso: self.trim_tso,
             max_r2_len: self.max_r2_len,
         }
     }

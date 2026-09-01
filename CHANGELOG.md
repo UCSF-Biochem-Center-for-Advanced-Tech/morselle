@@ -6,24 +6,31 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.3.6] — 2026-08-26
-
 ### Added
-- Opt-in parallel gzip input decoding via `SBXPRESS_RAPIDGZIP=1`, using
-  [`rapidgzip-core`](https://crates.io/crates/rapidgzip-core) in place of the
-  serial flate2 reader. `SBXPRESS_RAPIDGZIP_THREADS` sets the per-file decoder
-  budget and `SBXPRESS_RAPIDGZIP_POOL` caps process-wide decode slots so the
-  one-file-per-thread path cannot oversubscribe the machine. Decode-only: output
-  writers are unchanged and every emitted FASTQ is still a single gzip member.
-  The gain depends on input framing (BGZF and `pigz --independent` parallelize
-  well; `pigz`'s default dependent-block framing does not), so it is off by
-  default and intended to be measured per dataset.
-
-### Fixed
-- Documented that the pipelined path's output is not byte-reproducible between
-  runs. Record order there depends on worker scheduling, with the serial reader
-  as much as the parallel one; the per-file path remains byte-reproducible. Both
-  paths keep R1/R2 mate ordering.
+- `sbx10x::yc` encodes and decodes the Roche SBX `YC` duplex-consensus tag,
+  written from the published XOOS specification (not derived from Roche's
+  reference implementation, whose licence restricts derivatives to Roche
+  instrument data). Covers parse/serialise, reverse-complement, trim, and
+  per-position provenance, with the four published worked examples as fixtures.
+- `sbx10x::overlap` merges overlapping Illumina mates into the full fragment — a
+  port of HTStream's `hts_Overlapper` adapted to 10x geometry. Merges the *raw*
+  mates before any trimming, which is what makes the alignment gapless, and
+  removes adapter read-through by geometry rather than sequence matching.
+- `sbxpress illumina --overlap` (default off) reconstructs the fragment before
+  extraction. Merged pairs (`sins`/`mins`) carry the same canonical layout as an
+  SBX read and go through the same `extract`, gaining a `YC:Z:` tag; unmerged
+  pairs (`lins`) fall back to the existing R1-barcode / R2-cDNA path unchanged.
+  Insert-class counts and a cDNA-length histogram are logged and recorded in the
+  metrics JSON.
+- `--failed-output` (both arms) emits every read that fails to produce a pair,
+  as the original untouched record with an `XF:Z:<reason>` tag appended, so no
+  input read is silently dropped. The SBX arm writes one gzipped FASTQ; the
+  Illumina arm writes `<prefix>_R1.fastq.gz` / `<prefix>_R2.fastq.gz` so the
+  failed pair stays re-runnable. With it set, `total_reads` equals emitted plus
+  failed exactly, and the per-reason breakdown is recorded in the metrics JSON.
+- `--trim-tso` (default off, both arms) trims the template-switch oligo where it
+  sits between the cDNA and the 3' read-through adapter. Anchored rather than
+  scanned, so a chance match inside the cDNA cannot truncate real sequence.
 
 ## [0.3.5] — 2026-07-16
 

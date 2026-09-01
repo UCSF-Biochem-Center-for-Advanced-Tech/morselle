@@ -129,6 +129,53 @@ impl PairWriter {
 /// boundary mis-framing some readers (10x reference) exhibit. Compression happens
 /// under the lock; with a fast zlib backend it keeps up with the per-target data
 /// rate, so the lock is rarely contended.
+/// A thread-safe append-only gzip FASTQ writer for a single stream.
+///
+/// Used for the `--failed-output` side channel, where every worker appends into
+/// one file. Failures are a minority of reads and each worker appends a whole
+/// buffered batch under one lock, so the contention is negligible and the output
+/// stays a single valid gzip member.
+pub struct ShardWriter {
+    inner: Mutex<GzEncoder<BufWriter<File>>>,
+}
+
+impl ShardWriter {
+    pub fn create(path: &Path, level: u32) -> Result<Self> {
+        if let Some(dir) = path.parent() {
+            if !dir.as_os_str().is_empty() {
+                fs::create_dir_all(dir)
+                    .with_context(|| format!("cannot create dir {}", dir.display()))?;
+            }
+        }
+        let file = File::create(path)
+            .with_context(|| format!("cannot create output {}", path.display()))?;
+        Ok(ShardWriter {
+            inner: Mutex::new(GzEncoder::new(
+                BufWriter::new(file),
+                Compression::new(level),
+            )),
+        })
+    }
+
+    /// Append a pre-formatted batch of FASTQ bytes.
+    pub fn append(&self, raw: &[u8]) -> Result<()> {
+        if raw.is_empty() {
+            return Ok(());
+        }
+        let mut w = self.inner.lock().expect("shard writer lock poisoned");
+        w.write_all(raw)?;
+        Ok(())
+    }
+
+    /// Finish the gzip member (final deflate block + trailer) and flush.
+    pub fn finish(&self) -> Result<()> {
+        let mut w = self.inner.lock().expect("shard writer lock poisoned");
+        w.try_finish().context("gzip finish failed-output")?;
+        w.get_mut().flush().context("flush failed-output")?;
+        Ok(())
+    }
+}
+
 pub struct PairShardWriter {
     inner: Mutex<Pair>,
 }
