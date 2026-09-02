@@ -7,6 +7,7 @@ use std::time::Instant;
 use anyhow::{bail, Context, Result};
 use clap::{CommandFactory, FromArgMatches, Parser};
 use flate2::{write::GzEncoder, Compression};
+use rayon::prelude::*;
 use rust_htslib::bam::{self, record::Aux, Read};
 use serde::Serialize;
 use tracing::info;
@@ -30,6 +31,13 @@ struct Cli {
     /// BAM compression/decompression threads.
     #[arg(long, default_value_t = 4)]
     threads: usize,
+    /// Number of indexed BAM-region workers for the evidence pass. One retains
+    /// the single-reader implementation; values above one require a .bai/.csi.
+    #[arg(long, default_value_t = 1)]
+    evidence_workers: usize,
+    /// Genomic width of a work item for parallel indexed evidence collection.
+    #[arg(long, default_value_t = 10_000_000, hide = true)]
+    evidence_chunk_bases: u64,
     /// Write an order-independent sequencing-saturation curve as a gzip TSV.
     /// Rows are emitted for the whole run and every observed cell barcode.
     #[arg(long)]
@@ -400,6 +408,181 @@ fn collect_evidence(
     Ok((evidence, genes, gene_ids))
 }
 
+struct RegionEvidence {
+    evidence: HashMap<RawKey, Evidence>,
+    genes: Vec<String>,
+    records: u64,
+    eligible_records: u64,
+}
+
+fn merge_item(target: &mut Evidence, source: Evidence) {
+    target.reads += source.reads;
+    target.min_read_hash = target.min_read_hash.min(source.min_read_hash);
+    if source.best_mapq > target.best_mapq
+        || (source.best_mapq == target.best_mapq
+            && (source.best_aligned > target.best_aligned
+                || (source.best_aligned == target.best_aligned
+                    && source.best_ordinal < target.best_ordinal)))
+    {
+        target.best_ordinal = source.best_ordinal;
+        target.best_mapq = source.best_mapq;
+        target.best_aligned = source.best_aligned;
+    }
+}
+
+fn record_identity(record: &bam::Record) -> u64 {
+    // A deterministic representative tie-breaker for independently fetched
+    // regions. QNAMEs are unique for this input; coordinates/flags make the
+    // identity robust if a producer reuses names.
+    let mut value = 0xcbf29ce484222325u64;
+    for part in [
+        record.qname(),
+        &record.tid().to_le_bytes(),
+        &record.pos().to_le_bytes(),
+        &record.flags().to_le_bytes(),
+    ] {
+        for &byte in part {
+            value ^= byte as u64;
+            value = value.wrapping_mul(0x100000001b3);
+        }
+    }
+    value
+}
+
+fn collect_region(path: &Path, tid: u32, start: u64, end: u64) -> Result<RegionEvidence> {
+    let mut reader = bam::IndexedReader::from_path(path)
+        .with_context(|| format!("opening indexed {}", path.display()))?;
+    reader
+        .fetch((tid, start, end))
+        .with_context(|| format!("fetching tid {tid}:{start}-{end}"))?;
+    let mut evidence = HashMap::<RawKey, Evidence>::new();
+    let mut genes = Vec::<String>::new();
+    let mut gene_ids = HashMap::<String, u32>::new();
+    let mut records = 0_u64;
+    let mut eligible_records = 0_u64;
+    for result in reader.records() {
+        let record = result.context("reading BAM region in evidence pass")?;
+        // An indexed query can return an alignment overlapping its left edge.
+        // Assign by alignment start so adjacent work items never double-count.
+        if record.tid() != tid as i32 || record.pos() < start as i64 || record.pos() >= end as i64 {
+            continue;
+        }
+        records += 1;
+        if record.is_unmapped() || record.is_secondary() || record.is_supplementary() {
+            continue;
+        }
+        let Some(cell) = aux_string(&record, b"CB").and_then(|v| Dna::pack(&v)) else {
+            continue;
+        };
+        let Some(umi) = aux_string(&record, b"UR")
+            .or_else(|| aux_string(&record, b"UB"))
+            .and_then(|v| Dna::pack(&v))
+        else {
+            continue;
+        };
+        let Some((gene, _name)) = choose_gene(&record) else {
+            continue;
+        };
+        let gene = if let Some(&id) = gene_ids.get(&gene) {
+            id
+        } else {
+            let id = genes.len() as u32;
+            genes.push(gene.clone());
+            gene_ids.insert(gene, id);
+            id
+        };
+        eligible_records += 1;
+        let key = RawKey { cell, gene, umi };
+        let candidate = Evidence {
+            reads: 1,
+            best_ordinal: record_identity(&record),
+            best_mapq: record.mapq(),
+            best_aligned: aligned_bases(&record),
+            min_read_hash: read_hash(record.qname()),
+        };
+        evidence
+            .entry(key)
+            .and_modify(|item| merge_item(item, candidate))
+            .or_insert(candidate);
+    }
+    Ok(RegionEvidence {
+        evidence,
+        genes,
+        records,
+        eligible_records,
+    })
+}
+
+fn indexed_regions(path: &Path, chunk_bases: u64) -> Result<Vec<(u32, u64, u64)>> {
+    let reader = bam::IndexedReader::from_path(path)
+        .with_context(|| format!("opening indexed {}", path.display()))?;
+    let header = reader.header();
+    let mut regions = Vec::new();
+    for tid in 0..header.target_count() {
+        let length = header.target_len(tid).unwrap_or(0);
+        for start in (0..length).step_by(chunk_bases as usize) {
+            regions.push((tid, start, (start + chunk_bases).min(length)));
+        }
+    }
+    Ok(regions)
+}
+
+fn collect_evidence_indexed(
+    path: &Path,
+    workers: usize,
+    chunk_bases: u64,
+    metrics: &mut Metrics,
+) -> Result<(HashMap<RawKey, Evidence>, Vec<String>, HashMap<String, u32>)> {
+    if chunk_bases == 0 {
+        bail!("--evidence-chunk-bases must be greater than zero");
+    }
+    let regions = indexed_regions(path, chunk_bases)?;
+    info!(
+        workers,
+        regions = regions.len(),
+        chunk_bases,
+        "dispatching indexed evidence regions"
+    );
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()?;
+    let parts: Vec<RegionEvidence> = pool.install(|| {
+        regions
+            .par_iter()
+            .map(|&(tid, start, end)| collect_region(path, tid, start, end))
+            .collect::<Result<Vec<_>>>()
+    })?;
+    let mut evidence = HashMap::<RawKey, Evidence>::new();
+    let mut genes = Vec::<String>::new();
+    let mut gene_ids = HashMap::<String, u32>::new();
+    for part in parts {
+        metrics.records += part.records;
+        metrics.eligible_records += part.eligible_records;
+        let remap: Vec<u32> = part
+            .genes
+            .into_iter()
+            .map(|gene| {
+                if let Some(&id) = gene_ids.get(&gene) {
+                    id
+                } else {
+                    let id = genes.len() as u32;
+                    gene_ids.insert(gene.clone(), id);
+                    genes.push(gene);
+                    id
+                }
+            })
+            .collect();
+        for (mut key, item) in part.evidence {
+            key.gene = remap[key.gene as usize];
+            evidence
+                .entry(key)
+                .and_modify(|current| merge_item(current, item))
+                .or_insert(item);
+        }
+    }
+    Ok((evidence, genes, gene_ids))
+}
+
 fn build_decisions(
     evidence: &HashMap<RawKey, Evidence>,
     metrics: &mut Metrics,
@@ -607,8 +790,11 @@ fn write_output(
                 replace_string(&mut record, b"GX", selected)?;
                 replace_string(&mut record, b"GN", &selected_name)?;
             }
-            let representative = decision.representative == ordinal as u64
-                && matches!(decision.outcome, Outcome::Unique | Outcome::Won);
+            let representative = (if cli.evidence_workers > 1 {
+                decision.representative == record_identity(&record)
+            } else {
+                decision.representative == ordinal as u64
+            }) && matches!(decision.outcome, Outcome::Unique | Outcome::Won);
             record.push_aux(b"xf", Aux::I32(if representative { 25 } else { 17 }))?;
             record.push_aux(b"XV", Aux::U32(decision.collision_degree))?;
             record.push_aux(
@@ -647,7 +833,20 @@ fn main() -> Result<()> {
         output_bam: cli.output.display().to_string(),
         ..Default::default()
     };
-    let (evidence, genes, gene_ids) = collect_evidence(&cli.bam, cli.threads, &mut metrics)?;
+    let (evidence, genes, gene_ids) = if cli.evidence_workers > 1 {
+        info!(
+            workers = cli.evidence_workers,
+            "collecting evidence from indexed BAM regions"
+        );
+        collect_evidence_indexed(
+            &cli.bam,
+            cli.evidence_workers,
+            cli.evidence_chunk_bases,
+            &mut metrics,
+        )?
+    } else {
+        collect_evidence(&cli.bam, cli.threads, &mut metrics)?
+    };
     if cli.saturation_interval == 0 {
         bail!("--saturation-interval must be greater than zero");
     }
@@ -775,5 +974,73 @@ mod tests {
         assert!(contents.contains("run\t.\t5\t0.5\t1\t1\t1\t1"));
         assert!(contents.contains("run\t.\t10\t1\t1\t1\t0\t0"));
         assert_eq!(contents.lines().count(), 5); // header, two run, two cell rows
+    }
+
+    #[test]
+    fn indexed_regions_collect_each_alignment_once() {
+        use rust_htslib::bam::{header::HeaderRecord, record::Cigar, record::CigarString};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("input.bam");
+        let mut header = bam::Header::new();
+        header.push_record(
+            HeaderRecord::new(b"SQ")
+                .push_tag(b"SN", "chr1")
+                .push_tag(b"LN", 100),
+        );
+        let mut writer = bam::Writer::from_path(&path, &header, bam::Format::Bam).unwrap();
+        let cigar = CigarString(vec![Cigar::Match(20)]);
+        for (name, pos, umi) in [
+            ("a", 1, "AAAAAAAAAAAA"),
+            ("b", 9, "AAAAAAAAAAAA"),
+            ("c", 10, "CCCCCCCCCCCC"),
+        ] {
+            let mut record = bam::Record::new();
+            record.set(
+                name.as_bytes(),
+                Some(&cigar),
+                b"ACGTACGTACGTACGTACGT",
+                &[30; 20],
+            );
+            record.set_tid(0);
+            record.set_pos(pos);
+            record.set_flags(0);
+            record
+                .push_aux(b"CB", Aux::String("AACCGGTTAACCGGTT"))
+                .unwrap();
+            record.push_aux(b"UR", Aux::String(umi)).unwrap();
+            record.push_aux(b"GX", Aux::String("ENSG1")).unwrap();
+            writer.write(&record).unwrap();
+        }
+        drop(writer);
+        bam::index::build(&path, None, bam::index::Type::Bai, 1).unwrap();
+        assert_eq!(indexed_regions(&path, 10).unwrap().len(), 10);
+        assert_eq!(collect_region(&path, 0, 0, 10).unwrap().eligible_records, 2);
+
+        let mut serial_metrics = Metrics::default();
+        let (serial, _, _) = collect_evidence(&path, 1, &mut serial_metrics).unwrap();
+        let mut parallel_metrics = Metrics::default();
+        let (parallel, _, _) =
+            collect_evidence_indexed(&path, 2, 10, &mut parallel_metrics).unwrap();
+        assert_eq!(serial_metrics.eligible_records, 3);
+        assert_eq!(parallel_metrics.eligible_records, 3);
+        assert_eq!(serial.len(), 2);
+        assert_eq!(parallel.len(), 2);
+        assert_eq!(
+            serial.values().map(|item| item.reads as u64).sum::<u64>(),
+            3
+        );
+        assert_eq!(
+            parallel.values().map(|item| item.reads as u64).sum::<u64>(),
+            3
+        );
+        let mut serial_decision_metrics = Metrics::default();
+        let mut parallel_decision_metrics = Metrics::default();
+        let _ = build_decisions(&serial, &mut serial_decision_metrics, None);
+        let _ = build_decisions(&parallel, &mut parallel_decision_metrics, None);
+        assert_eq!(
+            serial_decision_metrics.molecules_counted,
+            parallel_decision_metrics.molecules_counted
+        );
     }
 }

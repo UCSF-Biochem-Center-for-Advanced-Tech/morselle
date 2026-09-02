@@ -212,6 +212,7 @@ read support, and marks exactly one counted representative per resolved molecule
 ```bash
 sbxpress molecules sample.annotated.coordinate.bam \
   --output sample.molecules.coordinate.bam --threads 8 \
+  --evidence-workers 16 \
   --saturation sample.saturation.tsv.gz --saturation-interval 1000000
 samtools index -@ 8 sample.molecules.coordinate.bam
 ```
@@ -226,6 +227,11 @@ whole run (`scope=run`) and each observed cell barcode (`scope=cell`). The
 `molecules` values are gene-aware, UMI-corrected, collision-resolved molecules;
 `genes` is the number of detected genes. Read names are stably hashed before
 downsampling, so coordinate-sorted input cannot bias the nested curve.
+
+For an indexed coordinate BAM, `--evidence-workers 16` partitions the first
+evidence pass into disjoint genomic ranges. The raw UMI evidence is merged before
+correction, so molecule counts remain global and exact. Start with 16 workers;
+raising this to 32 requires substantially more transient RAM during the merge.
 
 Audit a molecule BAM with comparison-ready mapping, annotation, collision, UMI,
 and sensitivity metrics:
