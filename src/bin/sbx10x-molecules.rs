@@ -430,6 +430,23 @@ fn merge_item(target: &mut Evidence, source: Evidence) {
     }
 }
 
+fn merge_evidence_maps(
+    mut left: HashMap<RawKey, Evidence>,
+    mut right: HashMap<RawKey, Evidence>,
+) -> HashMap<RawKey, Evidence> {
+    // Keeping the larger allocation avoids repeated hash-table growth during
+    // the parallel reduction tree.
+    if left.len() < right.len() {
+        std::mem::swap(&mut left, &mut right);
+    }
+    for (key, item) in right {
+        left.entry(key)
+            .and_modify(|current| merge_item(current, item))
+            .or_insert(item);
+    }
+    left
+}
+
 fn record_identity(record: &bam::Record) -> u64 {
     // A deterministic representative tie-breaker for independently fetched
     // regions. QNAMEs are unique for this input; coordinates/flags make the
@@ -552,41 +569,96 @@ fn collect_evidence_indexed(
             .map(|&(tid, start, end)| collect_region(path, tid, start, end))
             .collect::<Result<Vec<_>>>()
     })?;
-    let mut evidence = HashMap::<RawKey, Evidence>::new();
     let mut genes = Vec::<String>::new();
     let mut gene_ids = HashMap::<String, u32>::new();
-    for part in parts {
+    let mut remaps = Vec::with_capacity(parts.len());
+    for part in &parts {
         metrics.records += part.records;
         metrics.eligible_records += part.eligible_records;
         let remap: Vec<u32> = part
             .genes
-            .into_iter()
+            .iter()
             .map(|gene| {
-                if let Some(&id) = gene_ids.get(&gene) {
+                if let Some(&id) = gene_ids.get(gene) {
                     id
                 } else {
                     let id = genes.len() as u32;
                     gene_ids.insert(gene.clone(), id);
-                    genes.push(gene);
+                    genes.push(gene.clone());
                     id
                 }
             })
             .collect();
-        for (mut key, item) in part.evidence {
-            key.gene = remap[key.gene as usize];
-            evidence
-                .entry(key)
-                .and_modify(|current| merge_item(current, item))
-                .or_insert(item);
-        }
+        remaps.push(remap);
     }
+    let maps: Vec<HashMap<RawKey, Evidence>> = pool.install(|| {
+        parts
+            .into_par_iter()
+            .zip(remaps.into_par_iter())
+            .map(|(part, remap)| {
+                let mut map = HashMap::with_capacity(part.evidence.len());
+                for (mut key, item) in part.evidence {
+                    key.gene = remap[key.gene as usize];
+                    map.entry(key)
+                        .and_modify(|current| merge_item(current, item))
+                        .or_insert(item);
+                }
+                map
+            })
+            .collect()
+    });
+    let evidence = pool.install(|| {
+        maps.into_par_iter()
+            .reduce_with(merge_evidence_maps)
+            .unwrap_or_default()
+    });
     Ok((evidence, genes, gene_ids))
+}
+
+fn correct_group(
+    mut keys: Vec<RawKey>,
+    evidence: &HashMap<RawKey, Evidence>,
+) -> HashMap<RawKey, RawKey> {
+    keys.sort_by_key(|key| (std::cmp::Reverse(evidence[key].reads), key.umi));
+    let mut roots = HashMap::with_capacity(keys.len());
+    for &child in &keys {
+        let mut parent = child;
+        for &candidate in &keys {
+            if candidate == child
+                || evidence[&candidate].reads
+                    < evidence[&child].reads.saturating_mul(2).saturating_sub(1)
+            {
+                continue;
+            }
+            if child.umi.hamming(candidate.umi) == Some(1)
+                && (evidence[&candidate].reads, std::cmp::Reverse(candidate.umi))
+                    > (evidence[&parent].reads, std::cmp::Reverse(parent.umi))
+            {
+                parent = candidate;
+            }
+        }
+        let root = roots.get(&parent).copied().unwrap_or(parent);
+        roots.insert(child, root);
+    }
+    roots
+}
+
+fn merge_roots(
+    mut left: HashMap<RawKey, RawKey>,
+    mut right: HashMap<RawKey, RawKey>,
+) -> HashMap<RawKey, RawKey> {
+    if left.len() < right.len() {
+        std::mem::swap(&mut left, &mut right);
+    }
+    left.extend(right.drain());
+    left
 }
 
 fn build_decisions(
     evidence: &HashMap<RawKey, Evidence>,
     metrics: &mut Metrics,
     saturation_interval: Option<u64>,
+    workers: usize,
 ) -> (HashMap<RawKey, Decision>, Option<Saturation>) {
     let mut groups = HashMap::<(Dna, u32), Vec<RawKey>>::new();
     for &key in evidence.keys() {
@@ -604,29 +676,28 @@ fn build_decisions(
             curve.add_cell_gene(cell, gene, min_hash);
         }
     }
-    let mut roots = HashMap::<RawKey, RawKey>::new();
-    for keys in groups.values_mut() {
-        keys.sort_by_key(|key| (std::cmp::Reverse(evidence[key].reads), key.umi));
-        for &child in keys.iter() {
-            let mut parent = child;
-            for &candidate in keys.iter() {
-                if candidate == child
-                    || evidence[&candidate].reads
-                        < evidence[&child].reads.saturating_mul(2).saturating_sub(1)
-                {
-                    continue;
-                }
-                if child.umi.hamming(candidate.umi) == Some(1)
-                    && (evidence[&candidate].reads, std::cmp::Reverse(candidate.umi))
-                        > (evidence[&parent].reads, std::cmp::Reverse(parent.umi))
-                {
-                    parent = candidate;
-                }
-            }
-            let root = roots.get(&parent).copied().unwrap_or(parent);
-            roots.insert(child, root);
-        }
-    }
+    let roots = if workers > 1 {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .expect("creating UMI-correction worker pool");
+        info!(
+            workers,
+            groups = groups.len(),
+            "correcting UMI groups in parallel"
+        );
+        pool.install(|| {
+            groups
+                .into_par_iter()
+                .map(|(_, keys)| correct_group(keys, evidence))
+                .reduce(HashMap::new, merge_roots)
+        })
+    } else {
+        groups
+            .into_values()
+            .map(|keys| correct_group(keys, evidence))
+            .fold(HashMap::new(), merge_roots)
+    };
     metrics.raw_cell_gene_umis = evidence.len() as u64;
     metrics.umi_nodes_collapsed = roots
         .iter()
@@ -850,10 +921,14 @@ fn main() -> Result<()> {
     if cli.saturation_interval == 0 {
         bail!("--saturation-interval must be greater than zero");
     }
+    if cli.evidence_workers == 0 {
+        bail!("--evidence-workers must be greater than zero");
+    }
     let (decisions, saturation) = build_decisions(
         &evidence,
         &mut metrics,
         cli.saturation.as_ref().map(|_| cli.saturation_interval),
+        cli.evidence_workers,
     );
     if let (Some(curve), Some(path)) = (saturation, cli.saturation.as_deref()) {
         metrics.saturation = Some(curve.write(path)?);
@@ -925,7 +1000,7 @@ mod tests {
         input.insert(gene1_major, evidence(3, 2));
 
         let mut metrics = Metrics::default();
-        let (decisions, _) = build_decisions(&input, &mut metrics, None);
+        let (decisions, _) = build_decisions(&input, &mut metrics, None, 1);
         assert_eq!(decisions[&gene0_error].corrected, major);
         assert_eq!(decisions[&gene0_major].outcome, Outcome::Won);
         assert_eq!(decisions[&gene0_error].outcome, Outcome::Won);
@@ -933,6 +1008,16 @@ mod tests {
         assert_eq!(metrics.umi_nodes_collapsed, 1);
         assert_eq!(metrics.collision_groups, 1);
         assert_eq!(metrics.molecules_counted, 1);
+
+        let mut parallel_metrics = Metrics::default();
+        let (parallel, _) = build_decisions(&input, &mut parallel_metrics, None, 2);
+        assert_eq!(parallel[&gene0_error].corrected, major);
+        assert_eq!(parallel[&gene0_major].outcome, Outcome::Won);
+        assert_eq!(parallel[&gene1_major].outcome, Outcome::Lost);
+        assert_eq!(
+            parallel_metrics.molecules_counted,
+            metrics.molecules_counted
+        );
     }
 
     #[test]
@@ -943,7 +1028,7 @@ mod tests {
         let b = RawKey { cell, gene: 1, umi };
         let input = HashMap::from([(a, evidence(2, 0)), (b, evidence(2, 1))]);
         let mut metrics = Metrics::default();
-        let (decisions, _) = build_decisions(&input, &mut metrics, None);
+        let (decisions, _) = build_decisions(&input, &mut metrics, None, 1);
         assert_eq!(decisions[&a].outcome, Outcome::Tie);
         assert_eq!(decisions[&b].outcome, Outcome::Tie);
         assert_eq!(metrics.molecules_counted, 0);
@@ -1036,8 +1121,8 @@ mod tests {
         );
         let mut serial_decision_metrics = Metrics::default();
         let mut parallel_decision_metrics = Metrics::default();
-        let _ = build_decisions(&serial, &mut serial_decision_metrics, None);
-        let _ = build_decisions(&parallel, &mut parallel_decision_metrics, None);
+        let _ = build_decisions(&serial, &mut serial_decision_metrics, None, 2);
+        let _ = build_decisions(&parallel, &mut parallel_decision_metrics, None, 2);
         assert_eq!(
             serial_decision_metrics.molecules_counted,
             parallel_decision_metrics.molecules_counted
