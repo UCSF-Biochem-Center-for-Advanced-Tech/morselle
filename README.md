@@ -211,13 +211,21 @@ read support, and marks exactly one counted representative per resolved molecule
 
 ```bash
 sbxpress molecules sample.annotated.coordinate.bam \
-  --output sample.molecules.coordinate.bam --threads 8
+  --output sample.molecules.coordinate.bam --threads 8 \
+  --saturation sample.saturation.tsv.gz --saturation-interval 1000000
 samtools index -@ 8 sample.molecules.coordinate.bam
 ```
 
 Eligible reads receive `xf=17`; the selected representative receives `xf=25`
 (10x reference bit 8). `XV` records the molecule-level gene collision degree and
 `XW` records `U`nique, `W`inner, `L`oser, or unresolved `T`ie. Ties are not counted.
+
+`--saturation` is collected during the molecule evidence pass (it does not add a
+BAM pass). Its gzip TSV has one row per requested eligible-read depth for the
+whole run (`scope=run`) and each observed cell barcode (`scope=cell`). The
+`molecules` values are gene-aware, UMI-corrected, collision-resolved molecules;
+`genes` is the number of detected genes. Read names are stably hashed before
+downsampling, so coordinate-sorted input cannot bias the nested curve.
 
 Audit a molecule BAM with comparison-ready mapping, annotation, collision, UMI,
 and sensitivity metrics:
