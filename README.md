@@ -211,13 +211,27 @@ read support, and marks exactly one counted representative per resolved molecule
 
 ```bash
 sbxpress molecules sample.annotated.coordinate.bam \
-  --output sample.molecules.coordinate.bam --threads 8
+  --output sample.molecules.coordinate.bam --threads 8 \
+  --evidence-workers 16 \
+  --saturation sample.saturation.tsv.gz --saturation-interval 1000000
 samtools index -@ 8 sample.molecules.coordinate.bam
 ```
 
 Eligible reads receive `xf=17`; the selected representative receives `xf=25`
 (10x reference bit 8). `XV` records the molecule-level gene collision degree and
 `XW` records `U`nique, `W`inner, `L`oser, or unresolved `T`ie. Ties are not counted.
+
+`--saturation` is collected during the molecule evidence pass (it does not add a
+BAM pass). Its gzip TSV has one row per requested eligible-read depth for the
+whole run (`scope=run`) and each observed cell barcode (`scope=cell`). The
+`molecules` values are gene-aware, UMI-corrected, collision-resolved molecules;
+`genes` is the number of detected genes. Read names are stably hashed before
+downsampling, so coordinate-sorted input cannot bias the nested curve.
+
+For an indexed coordinate BAM, `--evidence-workers 16` partitions the first
+evidence pass into disjoint genomic ranges. The raw UMI evidence is merged before
+correction, so molecule counts remain global and exact. Start with 16 workers;
+raising this to 32 requires substantially more transient RAM during the merge.
 
 Audit a molecule BAM with comparison-ready mapping, annotation, collision, UMI,
 and sensitivity metrics:
@@ -321,6 +335,18 @@ orientations; orientation is auto-detected and enforced per file).
 | `--split` | 1 | Split each sample across N gzip files (`_001`..`_00N`) so N threads compress one sample in parallel. |
 | `--reader-threads` | 0 (auto) | I/O parallelism. Auto uses every core even for a single input file (see below); `N>0` forces the pipelined path with N readers. |
 
+**Parallel gzip input decode (experimental, opt-in).** `SBXPRESS_RAPIDGZIP=1`
+decodes each gzip input across many threads via
+[rapidgzip-core](https://crates.io/crates/rapidgzip-core) instead of the serial
+flate2 reader, lifting the single-file ceiling described below. See
+[Input parallelism](#architecture) for when it helps and what it costs.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SBXPRESS_RAPIDGZIP` | off | `1`/`true`/`on`/`yes` enables parallel input decode |
+| `SBXPRESS_RAPIDGZIP_THREADS` | worker count | Decoder threads per input file |
+| `SBXPRESS_RAPIDGZIP_POOL` | worker count | Process-wide ceiling on decode slots |
+
 Run `sbxpress extract --help` for extraction options. Set `RUST_LOG=debug` for verbose logging.
 
 ### 10x reference compatibility
@@ -387,16 +413,26 @@ sbxpress illumina \
   --r1 sample_L002_R1_001.fastq.gz --r2 sample_L002_R2_001.fastq.gz \
   --whitelist resources/10x_barcodes/3M-february-2018.txt.gz \
   --output sample.illumina.minimap.fastq.gz \
-  --threads 2
+  --threads 2 --split 4
 
 sbxpress minimap -a -x splice:sr --secondary=no -y reference.mmi \
   sample.illumina.minimap.shard-*.fastq.gz \
   | sbxpress annotate - --gtf genes.gtf --output -
 ```
 
-For one input pair, the requested output filename is retained. For multiple
-pairs, outputs are named `*.shard-001.fastq.gz`, `*.shard-002.fastq.gz`, and so
-on. Their comments carry `CR`, `CB`, `UR`, `UB`, `CY`, and `UY`. A combined JSON
+For one input pair with the default `--split 1`, the requested output filename
+is retained. Otherwise, outputs are named `*.shard-001.fastq.gz`,
+`*.shard-002.fastq.gz`, and so on. `--split N` routes records to N independent
+level-4 gzip writer threads per input pair, removing the single-encoder
+bottleneck for a large single lane. The files can all be passed directly to
+minimap2, as above. For maximum single-pair throughput, combine this with
+parallel gzip decode:
+
+```bash
+SBXPRESS_RAPIDGZIP=1 SBXPRESS_RAPIDGZIP_THREADS=32 SBXPRESS_RAPIDGZIP_POOL=32 \
+sbxpress illumina ... --threads 1 --split 8
+```
+Their comments carry `CR`, `CB`, `UR`, `UB`, `CY`, and `UY`. A combined JSON
 report lists every shard and is written to `<output>.metrics.json` unless
 `--metrics` specifies another path.
 
@@ -454,8 +490,25 @@ adapts to the file count (override with `--reader-threads`):
   channel to the full worker pool, so even a single-file run saturates every core.
   A single huge file is then bounded only by serial gzip inflate throughput.
 
+That last ceiling is real: one flate2 reader sustains roughly 0.9M reads/s, and
+per-read processing runs about 39k reads/s per core, so a single-file run stops
+scaling near two dozen workers no matter how many cores the node has. Setting
+`SBXPRESS_RAPIDGZIP=1` decodes one gzip member across many threads and moves that
+ceiling out, but the gain depends entirely on how the input was framed — BGZF and
+`pigz --independent` parallelize very well, a plain `gzip` stream moderately, and
+`pigz`'s default dependent-block framing not at all. Measure your own inputs
+before relying on it; on a small node, or when files ≥ workers (where the per-file
+path already decodes many files at once), it changes little.
+
+The feature is decode-only — output writers are untouched, and every emitted FASTQ
+remains a single gzip member. Enabling it does not change which records are
+emitted, and on the per-file path output stays byte-identical; on the pipelined
+path record order varies between runs with either decoder (see below).
+
 Output stays mate-ordered (the Nth R1 record is always the mate of the Nth R2) in
-both modes; the pipelined path does not preserve input record order across the file.
+both modes; the pipelined path does not preserve input record order across the
+file, and because record order there depends on worker scheduling, its output is
+not byte-reproducible between runs. The per-file path is byte-reproducible.
 
 ---
 

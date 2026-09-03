@@ -1,6 +1,6 @@
 [package]
 name = "sbxpress"
-version = "0.3.5"
+version = "0.3.7"
 edition = "2021"
 description = "Convert raw Roche SBX reads into per-sample 10x-style FASTQs and expression matrices"
 
@@ -35,6 +35,7 @@ path = "src/bin/sbxpress-cells.rs"
 [dependencies]
 needletail = "0.5"
 flate2 = { version = "1.0", features = ["zlib"] }
+rapidgzip-core = "0.3"
 triple_accel = "0.4"
 rayon = "1.10"
 rustc-hash = "2"

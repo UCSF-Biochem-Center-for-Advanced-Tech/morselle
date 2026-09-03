@@ -5,23 +5,27 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
+use crossbeam_channel::{bounded, Sender};
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use needletail::parse_fastx_file;
 use rayon::prelude::*;
 use sbx10x::anchors::revcomp;
 use sbx10x::barcode::{encode16, Whitelist};
 use sbx10x::extract::{extract, ExtractCfg};
+use sbx10x::gzin::{backend_description, open_fastx};
 use sbx10x::overlap::{overlap_in, InsertClass, Merged, OverlapCfg, Scratch};
 use sbx10x::yc::YcTag;
 use serde::Serialize;
 
 const CB_LEN: usize = 16;
 const UMI_LEN: usize = 12;
+const WRITER_QUEUE_DEPTH: usize = 4;
+const WRITER_BATCH_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Parser)]
 #[command(about = "Convert paired Illumina 10x FASTQs to minimap2-tagged R2 FASTQ")]
@@ -53,6 +57,10 @@ struct Cli {
     /// Maximum number of R1/R2 file pairs converted concurrently.
     #[arg(short, long, default_value_t = 0)]
     threads: usize,
+
+    /// Total gzip shard budget, apportioned across all active output targets.
+    #[arg(long, default_value_t = 1)]
+    split: usize,
 
     /// Merge overlapping mates into the full fragment before extraction. Pairs
     /// that merge are processed exactly like an SBX full-length fragment; pairs
@@ -118,6 +126,7 @@ struct Metrics {
     whitelist_size: usize,
     output: PathBuf,
     output_shards: Vec<PathBuf>,
+    split: usize,
     gem_group: u32,
     records_read: u64,
     records_emitted: u64,
@@ -200,6 +209,94 @@ fn shard_path(output: &Path, index: usize, count: usize) -> PathBuf {
     }
 }
 
+/// Evenly apportion a total shard budget among logical output targets. Earlier
+/// targets receive the one-slot remainder deterministically.
+fn shard_allocation(total: usize, targets: usize) -> Result<Vec<usize>> {
+    if total < targets {
+        bail!("--split ({total}) must be at least the number of active output targets ({targets})");
+    }
+    Ok((0..targets)
+        .map(|i| total / targets + usize::from(i < total % targets))
+        .collect())
+}
+
+struct AsyncWriter {
+    sender: Sender<Vec<u8>>,
+    join: JoinHandle<Result<()>>,
+}
+
+impl AsyncWriter {
+    fn create(path: &Path) -> Result<Self> {
+        let file =
+            File::create(path).with_context(|| format!("cannot create {}", path.display()))?;
+        let (sender, receiver) = bounded::<Vec<u8>>(WRITER_QUEUE_DEPTH);
+        let join = thread::spawn(move || -> Result<()> {
+            let mut output = GzEncoder::new(BufWriter::new(file), Compression::new(4));
+            for bytes in receiver {
+                output.write_all(&bytes)?;
+            }
+            output.finish()?;
+            Ok(())
+        });
+        Ok(Self { sender, join })
+    }
+    fn finish(self) -> Result<()> {
+        drop(self.sender);
+        self.join
+            .join()
+            .map_err(|_| anyhow::anyhow!("gzip writer panicked"))?
+    }
+}
+
+struct AsyncFailedWriter {
+    sender: Sender<(Vec<u8>, Vec<u8>)>,
+    join: JoinHandle<Result<()>>,
+}
+
+impl AsyncFailedWriter {
+    fn create(r1_path: &Path, r2_path: &Path) -> Result<Self> {
+        let r1 = File::create(r1_path)
+            .with_context(|| format!("cannot create {}", r1_path.display()))?;
+        let r2 = File::create(r2_path)
+            .with_context(|| format!("cannot create {}", r2_path.display()))?;
+        let (sender, receiver) = bounded::<(Vec<u8>, Vec<u8>)>(WRITER_QUEUE_DEPTH);
+        let join = thread::spawn(move || -> Result<()> {
+            let mut r1 = GzEncoder::new(BufWriter::new(r1), Compression::new(4));
+            let mut r2 = GzEncoder::new(BufWriter::new(r2), Compression::new(4));
+            for (a, b) in receiver {
+                r1.write_all(&a)?;
+                r2.write_all(&b)?;
+            }
+            r1.finish()?;
+            r2.finish()?;
+            Ok(())
+        });
+        Ok(Self { sender, join })
+    }
+    fn finish(self) -> Result<()> {
+        drop(self.sender);
+        self.join
+            .join()
+            .map_err(|_| anyhow::anyhow!("failed writer panicked"))?
+    }
+}
+
+fn write_failed_record(
+    out: &mut Vec<u8>,
+    reason: &str,
+    id: &[u8],
+    seq: &[u8],
+    qual: &[u8],
+) -> std::io::Result<()> {
+    out.write_all(b"@")?;
+    out.write_all(id)?;
+    write!(out, "\tXF:Z:{reason}\n")?;
+    out.write_all(seq)?;
+    out.write_all(b"\n+\n")?;
+    out.write_all(qual)?;
+    out.write_all(b"\n")
+}
+
 /// Append one tagged FASTQ record. `seq`/`qual` are already in R2 (sense)
 /// orientation; `yc` describes the merge in that same orientation.
 #[allow(clippy::too_many_arguments)]
@@ -261,78 +358,42 @@ fn failed_paths(prefix: &Path, index: usize, count: usize) -> (PathBuf, PathBuf)
     )
 }
 
-/// Both mates of a failed pair, written verbatim apart from an appended
-/// `XF:Z:<reason>` tag. Emitting the untouched reads keeps the side channel
-/// re-runnable through any other tool.
-struct FailedWriter {
-    r1: Box<dyn Write>,
-    r2: Box<dyn Write>,
-}
-
-impl FailedWriter {
-    fn create(r1_path: &Path, r2_path: &Path) -> Result<Self> {
-        let open = |path: &Path| -> Result<Box<dyn Write>> {
-            let file =
-                File::create(path).with_context(|| format!("cannot create {}", path.display()))?;
-            Ok(Box::new(GzEncoder::new(
-                BufWriter::new(file),
-                Compression::default(),
-            )))
-        };
-        Ok(FailedWriter {
-            r1: open(r1_path)?,
-            r2: open(r2_path)?,
-        })
-    }
-
-    fn write_pair(
-        &mut self,
-        reason: &str,
-        r1: (&[u8], &[u8], &[u8]),
-        r2: (&[u8], &[u8], &[u8]),
-    ) -> std::io::Result<()> {
-        for (out, (id, seq, qual)) in [(&mut self.r1, r1), (&mut self.r2, r2)] {
-            out.write_all(b"@")?;
-            out.write_all(id)?;
-            write!(out, "\tXF:Z:{reason}")?;
-            out.write_all(b"\n")?;
-            out.write_all(seq)?;
-            out.write_all(b"\n+\n")?;
-            out.write_all(qual)?;
-            out.write_all(b"\n")?;
-        }
-        Ok(())
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 fn convert_pair(
     r1_path: &Path,
     r2_path: &Path,
-    output_path: &Path,
+    output_paths: &[PathBuf],
     whitelist: &Whitelist,
     gem_group: u32,
     overlap_cfg: Option<&OverlapCfg>,
     extract_cfg: &ExtractCfg,
     emit_yc: bool,
-    failed_paths: Option<(&Path, &Path)>,
+    failed_paths: &[(PathBuf, PathBuf)],
 ) -> Result<PairMetrics> {
-    let file = File::create(output_path)
-        .with_context(|| format!("cannot create {}", output_path.display()))?;
-    let gz = output_path.extension().is_some_and(|value| value == "gz");
-    let mut output: Box<dyn Write> = if gz {
-        Box::new(GzEncoder::new(BufWriter::new(file), Compression::default()))
-    } else {
-        Box::new(BufWriter::new(file))
-    };
+    let writers = output_paths
+        .iter()
+        .map(|p| AsyncWriter::create(p))
+        .collect::<Result<Vec<_>>>()?;
+    let failed_writers = failed_paths
+        .iter()
+        .map(|(a, b)| AsyncFailedWriter::create(a, b))
+        .collect::<Result<Vec<_>>>()?;
+    let mut buffers = (0..writers.len())
+        .map(|_| Vec::with_capacity(WRITER_BATCH_BYTES))
+        .collect::<Vec<_>>();
+    let mut failed_buffers = (0..failed_writers.len())
+        .map(|_| {
+            (
+                Vec::with_capacity(WRITER_BATCH_BYTES),
+                Vec::with_capacity(WRITER_BATCH_BYTES),
+            )
+        })
+        .collect::<Vec<_>>();
     let mut metrics = PairMetrics::default();
-    let mut r1 = parse_fastx_file(r1_path)
-        .with_context(|| format!("cannot open R1 {}", r1_path.display()))?;
-    let mut r2 = parse_fastx_file(r2_path)
-        .with_context(|| format!("cannot open R2 {}", r2_path.display()))?;
-    let mut failed = failed_paths
-        .map(|(r1, r2)| FailedWriter::create(r1, r2))
-        .transpose()?;
+    let mut r1 =
+        open_fastx(r1_path).with_context(|| format!("cannot open R1 {}", r1_path.display()))?;
+    let mut r2 =
+        open_fastx(r2_path).with_context(|| format!("cannot open R2 {}", r2_path.display()))?;
     let mut pair_number = 0u64;
     let mut scratch = Scratch::default();
     loop {
@@ -379,12 +440,33 @@ fn convert_pair(
                             .failed_by_reason
                             .entry(reason.to_string())
                             .or_insert(0) += 1;
-                        if let Some(w) = failed.as_mut() {
-                            w.write_pair(
+                        if !failed_writers.is_empty() {
+                            let shard =
+                                (metrics.records_failed as usize - 1) % failed_writers.len();
+                            write_failed_record(
+                                &mut failed_buffers[shard].0,
                                 reason,
-                                (a.id(), &r1_seq[..], r1_qual),
-                                (b.id(), &r2_seq[..], r2_qual),
+                                a.id(),
+                                &r1_seq,
+                                r1_qual,
                             )?;
+                            write_failed_record(
+                                &mut failed_buffers[shard].1,
+                                reason,
+                                b.id(),
+                                &r2_seq,
+                                r2_qual,
+                            )?;
+                            if failed_buffers[shard].0.len() >= WRITER_BATCH_BYTES {
+                                let batch = (
+                                    std::mem::take(&mut failed_buffers[shard].0),
+                                    std::mem::take(&mut failed_buffers[shard].1),
+                                );
+                                failed_writers[shard]
+                                    .sender
+                                    .send(batch)
+                                    .map_err(|_| anyhow::anyhow!("failed writer stopped"))?;
+                            }
                         }
                         continue;
                     }};
@@ -522,8 +604,9 @@ fn convert_pair(
                     }
                 };
 
+                let shard = metrics.records_emitted as usize % writers.len();
                 write_record(
-                    &mut output,
+                    &mut buffers[shard],
                     b.id(),
                     raw_cb,
                     raw_umi,
@@ -536,11 +619,37 @@ fn convert_pair(
                     merged_tag.as_ref(),
                 )?;
                 metrics.records_emitted += 1;
+                if buffers[shard].len() >= WRITER_BATCH_BYTES {
+                    writers[shard]
+                        .sender
+                        .send(std::mem::take(&mut buffers[shard]))
+                        .map_err(|_| anyhow::anyhow!("output writer stopped"))?;
+                }
             }
         }
     }
-    output.flush()?;
-    drop(output);
+    for (i, buf) in buffers.iter_mut().enumerate() {
+        if !buf.is_empty() {
+            writers[i]
+                .sender
+                .send(std::mem::take(buf))
+                .map_err(|_| anyhow::anyhow!("output writer stopped"))?;
+        }
+    }
+    for (i, (a, b)) in failed_buffers.iter_mut().enumerate() {
+        if !a.is_empty() {
+            failed_writers[i]
+                .sender
+                .send((std::mem::take(a), std::mem::take(b)))
+                .map_err(|_| anyhow::anyhow!("failed writer stopped"))?;
+        }
+    }
+    for w in writers {
+        w.finish()?;
+    }
+    for w in failed_writers {
+        w.finish()?;
+    }
     Ok(metrics)
 }
 
@@ -550,6 +659,9 @@ fn run(cli: Cli) -> Result<()> {
     }
     if cli.gem_group == 0 {
         bail!("--gem-group must be greater than zero");
+    }
+    if cli.split == 0 {
+        bail!("--split must be greater than zero");
     }
     let started = Instant::now();
     let overlap_cfg = cli.overlap.then_some(OverlapCfg {
@@ -573,18 +685,65 @@ fn run(cli: Cli) -> Result<()> {
     if whitelist.is_empty() {
         bail!("whitelist is empty: {}", cli.whitelist.display());
     }
-    let output_shards = (0..cli.r1.len())
-        .map(|index| shard_path(&cli.output, index, cli.r1.len()))
+    let targets_per_input = 1 + usize::from(cli.failed_output.is_some());
+    // Preserve the historical default: every target gets one writer even when
+    // the caller leaves --split at 1. Explicit larger values are a total budget.
+    let allocation = shard_allocation(
+        cli.split.max(cli.r1.len() * targets_per_input),
+        cli.r1.len() * targets_per_input,
+    )?;
+    let main_counts = (0..cli.r1.len())
+        .map(|i| allocation[i * targets_per_input])
         .collect::<Vec<_>>();
-    let failed_shards: Vec<(PathBuf, PathBuf)> = cli
+    let total_main: usize = main_counts.iter().sum();
+    let failed_counts = (0..cli.r1.len())
+        .map(|i| {
+            if targets_per_input == 2 {
+                allocation[i * 2 + 1]
+            } else {
+                0
+            }
+        })
+        .collect::<Vec<_>>();
+    let total_failed: usize = failed_counts.iter().sum();
+    let mut main_offset = 0usize;
+    let per_input_outputs = (0..cli.r1.len())
+        .map(|input| {
+            let n = main_counts[input];
+            let start = main_offset;
+            main_offset += n;
+            (0..n)
+                .map(|i| shard_path(&cli.output, start + i, total_main))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let per_input_failed = cli
         .failed_output
         .as_ref()
         .map(|prefix| {
+            let mut failed_offset = 0usize;
             (0..cli.r1.len())
-                .map(|index| failed_paths(prefix, index, cli.r1.len()))
-                .collect()
+                .map(|input| {
+                    let n = failed_counts[input];
+                    let start = failed_offset;
+                    failed_offset += n;
+                    (0..n)
+                        .map(|i| failed_paths(prefix, start + i, total_failed))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    let output_shards = per_input_outputs
+        .iter()
+        .flatten()
+        .cloned()
+        .collect::<Vec<_>>();
+    let failed_shards = per_input_failed
+        .iter()
+        .flatten()
+        .cloned()
+        .collect::<Vec<_>>();
     let mut metrics = Metrics {
         r1_files: cli.r1.clone(),
         r2_files: cli.r2.clone(),
@@ -592,6 +751,7 @@ fn run(cli: Cli) -> Result<()> {
         whitelist_size: whitelist.len(),
         output: cli.output.clone(),
         output_shards: output_shards.clone(),
+        split: cli.split,
         gem_group: cli.gem_group,
         overlap_enabled: cli.overlap,
         failed_outputs: failed_shards
@@ -611,6 +771,10 @@ fn run(cli: Cli) -> Result<()> {
         cli.r1.len(),
         workers
     );
+    eprintln!(
+        "[sbxpress illumina] gzip input decoder: {}",
+        backend_description()
+    );
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -619,21 +783,21 @@ fn run(cli: Cli) -> Result<()> {
         cli.r1
             .par_iter()
             .zip(cli.r2.par_iter())
-            .zip(output_shards.par_iter())
             .enumerate()
-            .map(|(index, ((r1, r2), output))| {
+            .map(|(index, (r1, r2))| {
                 let result = convert_pair(
                     r1,
                     r2,
-                    output,
+                    &per_input_outputs[index],
                     &whitelist,
                     cli.gem_group,
                     overlap_cfg.as_ref(),
                     &extract_cfg,
                     emit_yc,
-                    failed_shards
+                    per_input_failed
                         .get(index)
-                        .map(|(a, b)| (a.as_path(), b.as_path())),
+                        .map(Vec::as_slice)
+                        .unwrap_or(&[]),
                 );
                 if let Ok(value) = &result {
                     eprintln!(
@@ -646,7 +810,7 @@ fn run(cli: Cli) -> Result<()> {
                         value.overlap_short,
                         value.overlap_medium,
                         value.overlap_long,
-                        output.display()
+                        cli.output.display()
                     );
                 }
                 result
@@ -798,6 +962,7 @@ mod tests {
             metrics: None,
             gem_group: 1,
             threads: 1,
+            split: 1,
             overlap: false,
             overlap_min_overlap: 20,
             overlap_kmer: 8,

@@ -6,6 +6,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.7] — 2026-09-03
+
 ### Added
 - `sbx10x::yc` encodes and decodes the Roche SBX `YC` duplex-consensus tag,
   written from the published XOOS specification (not derived from Roche's
@@ -31,6 +33,27 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `--trim-tso` (default off, both arms) trims the template-switch oligo where it
   sits between the cDNA and the 3' read-through adapter. Anchored rather than
   scanned, so a chance match inside the cDNA cannot truncate real sequence.
+- `SBXPRESS_RAPIDGZIP=1` enables parallel `rapidgzip` input decoding for
+  `sbxpress illumina`; `SBXPRESS_RAPIDGZIP_THREADS` and
+  `SBXPRESS_RAPIDGZIP_POOL` tune decoder workers and pooled input slots.
+- `sbxpress illumina --split N` uses a total logical gzip-writer budget across
+  all main and failed-output classes, producing disjoint numbered shards for
+  parallel compression.
+- `sbxpress molecules --saturation <path>` emits an order-independent,
+  one-evidence-pass gzip TSV saturation curve at configurable eligible-read
+  intervals. It includes run-wide and per-cell detected genes and resolved,
+  gene-aware molecules.
+- `sbxpress molecules --evidence-workers N` uses a BAM index to collect
+  disjoint genomic regions concurrently, then merges evidence before global UMI
+  correction and gene-collision resolution. Independent `(CB, gene)` UMI groups
+  and regional-map reduction are parallelized as well.
+- Molecule-stage stderr checkpoints now report evidence, merge, UMI correction,
+  collision resolution, saturation, and BAM-writing progress without requiring
+  `RUST_LOG` configuration.
+
+### Changed
+- Illumina main and failed FASTQ gzip writers use compression level 4 for higher
+  throughput.
 
 ## [0.3.5] — 2026-07-16
 
