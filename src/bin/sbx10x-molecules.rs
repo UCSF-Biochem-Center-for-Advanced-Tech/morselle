@@ -2,6 +2,10 @@ use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 use std::time::Instant;
 
 use anyhow::{bail, Context, Result};
@@ -357,9 +361,16 @@ fn collect_evidence(
     let mut evidence = HashMap::<RawKey, Evidence>::new();
     let mut genes = Vec::<String>::new();
     let mut gene_ids = HashMap::<String, u32>::new();
+    eprintln!("[sbxpress molecules] phase=evidence_collect mode=serial start");
     for (ordinal, result) in reader.records().enumerate() {
         let record = result.context("reading BAM in evidence pass")?;
         metrics.records += 1;
+        if metrics.records % 25_000_000 == 0 {
+            eprintln!(
+                "[sbxpress molecules] phase=evidence_collect mode=serial records={} eligible={}",
+                metrics.records, metrics.eligible_records
+            );
+        }
         if record.is_unmapped() || record.is_secondary() || record.is_supplementary() {
             continue;
         }
@@ -405,6 +416,12 @@ fn collect_evidence(
                 min_read_hash: read_hash(record.qname()),
             });
     }
+    eprintln!(
+        "[sbxpress molecules] phase=evidence_collect mode=serial complete records={} eligible={} raw_nodes={}",
+        metrics.records,
+        metrics.eligible_records,
+        evidence.len()
+    );
     Ok((evidence, genes, gene_ids))
 }
 
@@ -563,12 +580,31 @@ fn collect_evidence_indexed(
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()?;
+    eprintln!(
+        "[sbxpress molecules] phase=evidence_collect mode=indexed start workers={} regions={} chunk_bases={}",
+        workers,
+        regions.len(),
+        chunk_bases
+    );
+    let completed = Arc::new(AtomicUsize::new(0));
+    let checkpoint = (regions.len() / 100).max(1);
+    let total_regions = regions.len();
     let parts: Vec<RegionEvidence> = pool.install(|| {
         regions
             .par_iter()
-            .map(|&(tid, start, end)| collect_region(path, tid, start, end))
+            .map(|&(tid, start, end)| {
+                let result = collect_region(path, tid, start, end);
+                let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                if done % checkpoint == 0 || done == total_regions {
+                    eprintln!(
+                        "[sbxpress molecules] phase=evidence_collect mode=indexed regions={done}/{total_regions}"
+                    );
+                }
+                result
+            })
             .collect::<Result<Vec<_>>>()
     })?;
+    eprintln!("[sbxpress molecules] phase=evidence_collect mode=indexed complete");
     let mut genes = Vec::<String>::new();
     let mut gene_ids = HashMap::<String, u32>::new();
     let mut remaps = Vec::with_capacity(parts.len());
@@ -591,6 +627,12 @@ fn collect_evidence_indexed(
             .collect();
         remaps.push(remap);
     }
+    eprintln!(
+        "[sbxpress molecules] phase=evidence_remap start regions={} records={} eligible={}",
+        parts.len(),
+        metrics.records,
+        metrics.eligible_records
+    );
     let maps: Vec<HashMap<RawKey, Evidence>> = pool.install(|| {
         parts
             .into_par_iter()
@@ -607,11 +649,16 @@ fn collect_evidence_indexed(
             })
             .collect()
     });
+    eprintln!("[sbxpress molecules] phase=evidence_remap complete; phase=evidence_merge start");
     let evidence = pool.install(|| {
         maps.into_par_iter()
             .reduce_with(merge_evidence_maps)
             .unwrap_or_default()
     });
+    eprintln!(
+        "[sbxpress molecules] phase=evidence_merge complete raw_nodes={}",
+        evidence.len()
+    );
     Ok((evidence, genes, gene_ids))
 }
 
@@ -664,6 +711,11 @@ fn build_decisions(
     for &key in evidence.keys() {
         groups.entry((key.cell, key.gene)).or_default().push(key);
     }
+    eprintln!(
+        "[sbxpress molecules] phase=umi_group_index complete groups={} raw_nodes={}",
+        groups.len(),
+        evidence.len()
+    );
     let mut saturation =
         saturation_interval.map(|interval| Saturation::new(metrics.eligible_records, interval));
     if let Some(curve) = saturation.as_mut() {
@@ -686,18 +738,43 @@ fn build_decisions(
             groups = groups.len(),
             "correcting UMI groups in parallel"
         );
+        eprintln!(
+            "[sbxpress molecules] phase=umi_correct start workers={} groups={}",
+            workers,
+            groups.len()
+        );
+        let total_groups = groups.len();
+        let completed = Arc::new(AtomicUsize::new(0));
+        let checkpoint = (total_groups / 100).max(1_000);
         pool.install(|| {
             groups
                 .into_par_iter()
-                .map(|(_, keys)| correct_group(keys, evidence))
+                .map(|(_, keys)| {
+                    let roots = correct_group(keys, evidence);
+                    let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                    if done % checkpoint == 0 || done == total_groups {
+                        eprintln!(
+                            "[sbxpress molecules] phase=umi_correct groups={done}/{total_groups}"
+                        );
+                    }
+                    roots
+                })
                 .reduce(HashMap::new, merge_roots)
         })
     } else {
+        eprintln!(
+            "[sbxpress molecules] phase=umi_correct mode=serial start groups={}",
+            groups.len()
+        );
         groups
             .into_values()
             .map(|keys| correct_group(keys, evidence))
             .fold(HashMap::new(), merge_roots)
     };
+    eprintln!(
+        "[sbxpress molecules] phase=umi_correct complete roots={}",
+        roots.len()
+    );
     metrics.raw_cell_gene_umis = evidence.len() as u64;
     metrics.umi_nodes_collapsed = roots
         .iter()
@@ -714,6 +791,7 @@ fn build_decisions(
         best_rank: u32,
         min_read_hash: u32,
     }
+    eprintln!("[sbxpress molecules] phase=molecule_aggregate start");
     let mut molecules = HashMap::<RawKey, Molecule>::new();
     for (&key, item) in evidence {
         let root = roots[&key];
@@ -737,7 +815,12 @@ fn build_decisions(
     }
     metrics.corrected_umi_nodes = molecules.len() as u64;
     metrics.molecules_before_gene_resolution = molecules.len() as u64;
+    eprintln!(
+        "[sbxpress molecules] phase=molecule_aggregate complete corrected_nodes={}",
+        molecules.len()
+    );
 
+    eprintln!("[sbxpress molecules] phase=gene_collision_index start");
     let mut collisions = HashMap::<(Dna, Dna), Vec<RawKey>>::new();
     for &root in molecules.keys() {
         collisions
@@ -745,6 +828,11 @@ fn build_decisions(
             .or_default()
             .push(root);
     }
+    eprintln!(
+        "[sbxpress molecules] phase=gene_collision_index complete collision_keys={}",
+        collisions.len()
+    );
+    eprintln!("[sbxpress molecules] phase=gene_collision_resolve start");
     let mut root_outcomes = HashMap::<RawKey, (Outcome, u32)>::new();
     for roots_for_umi in collisions.values() {
         let degree = roots_for_umi.len() as u32;
@@ -782,6 +870,10 @@ fn build_decisions(
             }
         }
     }
+    eprintln!(
+        "[sbxpress molecules] phase=gene_collision_resolve complete molecules={} collision_groups={}",
+        metrics.molecules_counted, metrics.collision_groups
+    );
     if let Some(curve) = saturation.as_mut() {
         for (&root, molecule) in &molecules {
             let (outcome, _) = root_outcomes[&root];
@@ -790,7 +882,8 @@ fn build_decisions(
             }
         }
     }
-    let decisions = evidence
+    eprintln!("[sbxpress molecules] phase=decision_materialize start");
+    let decisions: HashMap<RawKey, Decision> = evidence
         .keys()
         .map(|&key| {
             let root = roots[&key];
@@ -806,6 +899,10 @@ fn build_decisions(
             )
         })
         .collect();
+    eprintln!(
+        "[sbxpress molecules] phase=decision_materialize complete decisions={}",
+        decisions.len()
+    );
     (decisions, saturation)
 }
 
@@ -822,11 +919,13 @@ fn write_output(
     gene_ids: &HashMap<String, u32>,
     metrics: &mut Metrics,
 ) -> Result<()> {
+    eprintln!("[sbxpress molecules] phase=bam_write start");
     let mut reader = bam::Reader::from_path(&cli.bam)?;
     reader.set_threads(cli.threads)?;
     let header = bam::Header::from_template(reader.header());
     let mut writer = bam::Writer::from_path(&cli.output, &header, bam::Format::Bam)?;
     writer.set_threads(cli.threads)?;
+    let mut written_records = 0_u64;
     for (ordinal, result) in reader.records().enumerate() {
         let mut record = result?;
         let key = if !record.is_unmapped() && !record.is_secondary() && !record.is_supplementary() {
@@ -882,7 +981,18 @@ fn write_output(
             }
         }
         writer.write(&record)?;
+        written_records += 1;
+        if written_records % 25_000_000 == 0 {
+            eprintln!(
+                "[sbxpress molecules] phase=bam_write records={} representatives={}",
+                written_records, metrics.representatives_tagged
+            );
+        }
     }
+    eprintln!(
+        "[sbxpress molecules] phase=bam_write complete records={} representatives={}",
+        written_records, metrics.representatives_tagged
+    );
     Ok(())
 }
 
@@ -918,6 +1028,11 @@ fn main() -> Result<()> {
     } else {
         collect_evidence(&cli.bam, cli.threads, &mut metrics)?
     };
+    eprintln!(
+        "[sbxpress molecules] phase=evidence_ready raw_nodes={} eligible={}",
+        evidence.len(),
+        metrics.eligible_records
+    );
     if cli.saturation_interval == 0 {
         bail!("--saturation-interval must be greater than zero");
     }
@@ -931,7 +1046,12 @@ fn main() -> Result<()> {
         cli.evidence_workers,
     );
     if let (Some(curve), Some(path)) = (saturation, cli.saturation.as_deref()) {
+        eprintln!(
+            "[sbxpress molecules] phase=saturation_write start output={}",
+            path.display()
+        );
         metrics.saturation = Some(curve.write(path)?);
+        eprintln!("[sbxpress molecules] phase=saturation_write complete");
     }
     write_output(&cli, &decisions, &genes, &gene_ids, &mut metrics)?;
     metrics.elapsed_secs = started.elapsed().as_secs_f64();
