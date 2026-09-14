@@ -87,3 +87,49 @@ Do this once per stage binary (`sbx10x`, `sbx10x-annotate`,
 `sbxpress-probe-demux`) against a representative-sized real input (a handful
 of the CAT06 shards, not the full 754-file run) to find that stage's actual
 hot spots.
+
+**Headless viewing note**: `samply load` only serves an interactive browser
+UI (Firefox Profiler) and needs `--no-open`/a forwarded port on a headless
+box. Symbol names are *not* baked into the saved `.json.gz` — the UI
+resolves them lazily. To get a text report without a browser, resolve
+addresses yourself with `addr2line` against the exact binary path recorded
+in the profile's `libs` table (each `frameTable.address` is already a
+file-relative offset, no ASLR-base subtraction needed) and aggregate by leaf
+frame for self-time. Recipe (used to produce the finding below, not checked
+in — ~50 lines, easy to rewrite): load the profile JSON, walk
+`threads[].samples.stack -> stackTable.frame -> frameTable.{address,func} ->
+funcTable.resource -> resourceTable.lib -> libs[].path`, batch-call
+`addr2line -e <path> -f -C <hex addrs...>`, and `Counter()` the results.
+
+**Watch out for thread-count fragmentation.** This box has 512 logical
+CPUs, so `rayon`'s default thread pool spins up 512 OS threads — on a small
+input, samples end up spread so thin across threads that there's nothing to
+aggregate. Cap threads for a profiling run (`--threads 32`–`64`) and use a
+few-million-read slice, not a tiny sample and not a full 2GB shard (the
+extra wall-clock isn't worth it for a stable profile).
+
+### Real finding (2026-09-14): `extract` is gzip-bound, not algorithm-bound
+
+First real flamegraph run — `sbx10x extract --minimap2
+--probe-barcode-whitelist flex-v2-384.txt` on a 2M-read CAT06 slice,
+`--threads 64`, 37,613 samples aggregated across all threads:
+
+| category | share |
+|---|---|
+| zlib (gzip **output** compression — `deflate_slow`/`longest_match`/`slide_hash`) | **53.9%** |
+| core algorithm (`orient`/`extract`/`anchors`/`homopolymer`) | 18.0% |
+| libc (syscalls, `write`, malloc) | 9.1% |
+| pipeline glue (`lib.rs::process_one`, emit) | 4.5% |
+| Rust std/alloc internals (inlined into hot loops) | ~8.9% |
+| demux + probe-barcode matching (this session's whole Phase 0/1 addition) | **0.12%** |
+
+**Takeaway**: over half of extract's CPU time is spent compressing the
+output FASTQ, not in any biology/matching code — confirming in hard numbers
+what `config.rs`'s own `--gzip-level` doc comment already suspected
+("output compression is the run's wall-clock floor at scale"). This
+session's whole Flex addition (probe-barcode locate/tag) is immaterial to
+throughput (0.12%) — there was never a real risk of it being a bottleneck.
+The two existing levers worth tuning first, before touching any algorithm
+code: `--gzip-level` (lower = faster, larger files) and `--split N`
+(parallelizes one sample's compression across N writer threads). Neither
+has been benchmarked against this profile yet — natural next step.
