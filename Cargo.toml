@@ -61,3 +61,18 @@ statrs = "0.18"
 
 [dev-dependencies]
 tempfile = "3"
+criterion = "0.5"
+
+[[bench]]
+name = "pipeline_hot_paths"
+harness = false
+
+[profile.profiling]
+# Same codegen as release (full optimizations), plus debug symbols so a
+# sampling profiler (perf/samply) or gdb can resolve real function/line names.
+# Kept as a separate profile so normal `--release` builds (what gets
+# installed) stay lean. Build with `cargo build --profile profiling`. See
+# PROFILING.md.
+inherits = "release"
+debug = true
+strip = false
