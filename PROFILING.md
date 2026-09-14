@@ -170,3 +170,39 @@ a mapper-fed run, `--no-gzip` (+ a named pipe, if avoiding the intermediate
 file matters) should be the default choice going forward — this is now
 standard practice for extract runs in this session, and worth adopting
 generally.
+
+### Full chain (2026-09-14): the win survives past mapping too
+
+Ran the real production shape — `extract` → `minimap2` (splice:sr,
+real GRCh38 + GENCODE v44 index/junctions reused from the CAT02 project,
+same reference the README documents) → `annotate` → `samtools sort` →
+`molecules` → `matrix` → `cells` — on the same 2M-read CAT06 slice, gzip
+vs. `--no-gzip`, `--threads 64` throughout:
+
+| stage | gzip | `--no-gzip` | speedup |
+|---|---|---|---|
+| extract | 17.4s | 2.4s | **7.3x** |
+| `minimap2 \| annotate \| sort` (one pipe) | 45.3s | 25.6s | **1.8x** |
+| **extract + map/annotate/sort total** | **62.7s** | **28.0s** | **2.2x** |
+
+Both variants produced byte-identical downstream results (1,649,018 records
+in both `annotated.bam`s, same `annotate` metrics) — `--no-gzip` changes
+speed, not output. The mapping-stage win is real, not noise: minimap2's own
+reported "Real time" dropped 44.2s → 24.5s in lockstep with the pipe's wall
+time, meaning a large chunk of minimap2's own runtime was previously spent
+inflating our gzip output on the way in — `--no-gzip` removes a
+compress/decompress round trip on *both* ends of that handoff, not just the
+encode side.
+
+Molecules/matrix/cells ran clean end-to-end too (`sbx10x-molecules` →
+`cr-bam-to-mtx` → `sbxpress-cells`, no errors), but surfaced something
+independently worth knowing, unrelated to compression: only 59 of the
+1,649,018 records were real countable molecules (55 genes, 59 barcodes).
+That's expected, not a bug — CAT06 is 10x Flex/CRISPR data, whose R2 is a
+probe-barcode + probe/guide payload (see FLEX_SUPPORT_PLAN.md), not free
+poly-dT cDNA, so splice-aware whole-genome alignment of that payload
+finding almost nothing real is exactly what the architecture predicts.
+This run confirms the mechanics of the full binary chain on real data, but
+is **not** the "real annotated+molecule GEX BAM" Phase 2/3 are still
+waiting on — that needs Flex's actual probe-set-reference alignment
+strategy, not standard genome mapping, and is Phase 6 territory.
