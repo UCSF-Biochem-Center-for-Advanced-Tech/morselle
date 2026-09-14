@@ -19,6 +19,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   there. Verified end-to-end: `extract --no-gzip` writing into a named pipe,
   read directly by `minimap2` with no intermediate file on either end, all
   1,649,018 records and their `CR`/`CB`/`UR`/`UB` tags surviving intact.
+- `matrix --cell-barcodes`/`--barcodes` accepts an unlisted counted barcode
+  without erroring via `--skip-unlisted-barcodes` (default off, existing
+  strict behavior unchanged) — for splitting one pooled multi-sample BAM
+  per sample, where every per-sample `matrix` call legitimately sees other
+  samples' barcodes too.
+- `matrix --cell-barcodes` now accepts a barcode list whose entries already
+  carry a gem-group suffix (e.g. copied from a real `barcodes.tsv.gz` or
+  `filtered_barcodes.csv`, not just a bare 10x whitelist), matching
+  `cells --tagseq-barcodes`'s existing tolerance — `--gem-group` is always
+  what's actually applied, so an existing suffix is optional, never
+  required, and never silently wins over the flag.
 
 ## [0.3.8] — 2026-09-14
 

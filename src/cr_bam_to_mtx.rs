@@ -222,6 +222,14 @@ fn read_barcodes(path: &Path) -> Result<Vec<String>> {
         .collect::<std::io::Result<Vec<_>>>()?)
 }
 
+/// A bare barcode (10x's own whitelist files, e.g. `3M-february-2018.txt`,
+/// are the typical `--cell-barcodes` shape) or one that already carries a
+/// gem-group suffix (as real exported barcode lists do — `barcodes.tsv.gz`,
+/// `filtered_barcodes.csv`, or our own `probe-demux`'s CB values) are both
+/// accepted; either way `--gem-group` is what actually gets applied, so an
+/// existing suffix is optional input, never required, and never silently
+/// overrides the flag. Mirrors `cell_calling.rs`'s `resolve_tagseq_barcodes`,
+/// which tolerates the same ambiguity for the same reason.
 fn read_cell_barcodes(path: &Path, gem_group: u32) -> Result<Vec<String>> {
     text_reader(path)?
         .lines()
@@ -232,7 +240,8 @@ fn read_cell_barcodes(path: &Path, gem_group: u32) -> Result<Vec<String>> {
             if barcode.is_empty() {
                 bail!("empty barcode at {}:{}", path.display(), index + 1);
             }
-            if !barcode
+            let bare = barcode.split('-').next().unwrap_or(barcode);
+            if !bare
                 .bytes()
                 .all(|base| matches!(base, b'A' | b'C' | b'G' | b'T'))
             {
@@ -242,7 +251,7 @@ fn read_cell_barcodes(path: &Path, gem_group: u32) -> Result<Vec<String>> {
                     index + 1
                 );
             }
-            Ok(format!("{barcode}-{gem_group}"))
+            Ok(format!("{bare}-{gem_group}"))
         })
         .collect()
 }
@@ -512,6 +521,21 @@ mod tests {
         assert_eq!(
             read_cell_barcodes(&path, 2).unwrap(),
             ["AACCGGTT-2", "TTGGCCAA-2"]
+        );
+    }
+
+    #[test]
+    fn an_existing_gem_group_suffix_is_accepted_but_gem_group_flag_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("barcodes.txt");
+        // Shape of a real exported barcode list (barcodes.tsv.gz,
+        // filtered_barcodes.csv, or probe-demux's CB values) -- note the
+        // second line's "-2" doesn't match the requested --gem-group 3, and
+        // --gem-group wins rather than the file's own suffix.
+        fs::write(&path, "AACCGGTT-1\nTTGGCCAA-2\n").unwrap();
+        assert_eq!(
+            read_cell_barcodes(&path, 3).unwrap(),
+            ["AACCGGTT-3", "TTGGCCAA-3"]
         );
     }
 

@@ -279,6 +279,19 @@ binaries together end-to-end on a small synthetic BAM (built with
    `metrics_summary.json`. New tests: `unlisted_barcode_errors_by_default`,
    `skip_unlisted_barcodes_drops_them_instead_of_erroring`.
 
+**Follow-up (2026-09-14)**: asked whether `-1` is actually the typical
+`--cell-barcodes` input shape, since Phase 2's bug (above) was about
+stripping it. Answer: no, one input source (10x's own raw whitelist files,
+e.g. `3M-february-2018.txt`) is bare; but another very plausible one
+(a barcode list exported from a real run — `barcodes.tsv.gz`,
+`filtered_barcodes.csv`, or our own `probe-demux`'s CB values before this
+session's fix) legitimately carries the suffix. `read_cell_barcodes`
+previously hard-rejected the latter. Made it tolerate both — mirroring
+`cell_calling.rs`'s pre-existing `resolve_tagseq_barcodes`, which already
+handles this same ambiguity the same way — so `--gem-group` is always what
+gets applied regardless of what the input file happened to contain. New
+test: `an_existing_gem_group_suffix_is_accepted_but_gem_group_flag_wins`.
+
 With both fixed, ran the real chain — `sbxpress probe-demux` →
 `sbxpress matrix --skip-unlisted-barcodes` → `sbxpress cells` — through the
 actual compiled binaries (not library calls) against a synthetic 2-sample,
