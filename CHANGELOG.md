@@ -6,6 +6,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `sbxpress extract --no-gzip` writes plain, uncompressed FASTQ instead of
+  gzip. Profiling `extract` (see `PROFILING.md`) found gzip output
+  compression consuming 54% of its CPU time — worse, since every worker
+  thread shares one mutex-protected encoder per output target, it's a
+  serialization point, not just added work. Measured on a 2M-read run:
+  19.1s → 2.4s (~8x), far more than the 54% CPU share alone would predict,
+  confirming the lock-contention effect. Meant for the common case where
+  `extract`'s output is about to be read once by a co-located process
+  (typically a mapper) rather than stored — compression is pure overhead
+  there. Verified end-to-end: `extract --no-gzip` writing into a named pipe,
+  read directly by `minimap2` with no intermediate file on either end, all
+  1,649,018 records and their `CR`/`CB`/`UR`/`UB` tags surviving intact.
+
 ## [0.3.8] — 2026-09-14
 
 ### Added

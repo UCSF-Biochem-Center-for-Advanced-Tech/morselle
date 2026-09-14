@@ -129,7 +129,44 @@ what `config.rs`'s own `--gzip-level` doc comment already suspected
 ("output compression is the run's wall-clock floor at scale"). This
 session's whole Flex addition (probe-barcode locate/tag) is immaterial to
 throughput (0.12%) — there was never a real risk of it being a bottleneck.
-The two existing levers worth tuning first, before touching any algorithm
-code: `--gzip-level` (lower = faster, larger files) and `--split N`
-(parallelizes one sample's compression across N writer threads). Neither
-has been benchmarked against this profile yet — natural next step.
+
+### Follow-up (2026-09-14): added `--no-gzip`, measured an 8x win
+
+Acted on the finding above rather than just tuning `--gzip-level`/`--split`:
+`extract`'s typical next pipeline step is a mapper reading the FASTQ once,
+not long-term storage, so compression there is close to pure waste. Added
+`--no-gzip` (writes plain `.fastq`; `io.rs`'s `ShardSink` now wraps either a
+`GzEncoder` or a plain `BufWriter`, `level: Option<u32>` — `None` means
+uncompressed, not "level 0 gzip"). Measured on the same 2M-read slice,
+`--threads 64`:
+
+| | elapsed | reads/sec |
+|---|---|---|
+| gzip (default, level 4) | 19.1s | 104,888 |
+| `--no-gzip` | 2.4s | 837,694 |
+
+**~8x, not the ~2.2x the 54% CPU share alone would predict.** The extra
+speedup is lock contention, not just CPU: every worker thread shares one
+mutex-protected encoder per output target (`PairShardWriter`), so with gzip
+on, only one thread can be deflating at a time while the rest queue up
+behind that lock — removing the encoder removes a true serialization point,
+not just work.
+
+Verified this is a real, usable capability, not just a raw-throughput
+number: piped `extract --no-gzip`'s output through a named pipe
+(`mkfifo`) straight into `minimap2` with no intermediate file on either
+end — `minimap2` read all 1,649,018 records with zero loss, and the
+`CR`/`CB`/`UR`/`UB` tags survived through minimap2's `-y` untouched:
+
+```sh
+mkfifo out/sbxpress_S1_L001_R2_001.fastq
+sbx10x --fastqs in.fastq.gz -o out --minimap2 --no-gzip &
+minimap2 -a -y ref.mmi out/sbxpress_S1_L001_R2_001.fastq > aligned.sam
+```
+
+`--gzip-level`/`--split` are still there for when the output genuinely needs
+to be stored (e.g. `--cellranger` compatibility mode, or archiving), but for
+a mapper-fed run, `--no-gzip` (+ a named pipe, if avoiding the intermediate
+file matters) should be the default choice going forward — this is now
+standard practice for extract runs in this session, and worth adopting
+generally.

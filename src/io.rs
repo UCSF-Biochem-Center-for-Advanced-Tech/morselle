@@ -1,13 +1,69 @@
 //! FASTQ input discovery/reading and gzip-compressed output writers.
 
 use std::fs::{self, File};
-use std::io::{BufWriter, Write};
+use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 use flate2::write::GzEncoder;
 use flate2::Compression;
+
+/// A shard output stream, gzip-compressed or plain. `None` for `level`
+/// (rather than a separate bool) makes "uncompressed" a real absence of a
+/// compression level, not a footgun default-level-0 gzip stream.
+///
+/// Exists because gzip encoding is real, measured CPU cost (~54% of
+/// `extract`'s time in a profiled run — see PROFILING.md) that's pure waste
+/// when the output is about to be read once by a co-located process (a
+/// mapper) rather than stored: `sbxpress extract --no-gzip` into a named
+/// pipe lets `minimap2` read raw FASTQ directly with no compress/decompress
+/// round trip on either end.
+enum ShardSink {
+    Gz(GzEncoder<BufWriter<File>>),
+    Plain(BufWriter<File>),
+}
+
+impl ShardSink {
+    fn create(path: &Path, level: Option<u32>) -> Result<Self> {
+        let file = File::create(path)
+            .with_context(|| format!("cannot create output {}", path.display()))?;
+        Ok(match level {
+            Some(level) => ShardSink::Gz(GzEncoder::new(BufWriter::new(file), Compression::new(level))),
+            None => ShardSink::Plain(BufWriter::new(file)),
+        })
+    }
+
+    fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
+        match self {
+            ShardSink::Gz(w) => w.write_all(buf),
+            ShardSink::Plain(w) => w.write_all(buf),
+        }
+    }
+
+    /// Finish the stream (gzip trailer, if any) and flush.
+    fn finish(&mut self) -> Result<()> {
+        match self {
+            ShardSink::Gz(w) => {
+                w.try_finish().context("gzip finish")?;
+                w.get_mut().flush().context("flush")?;
+            }
+            ShardSink::Plain(w) => w.flush().context("flush")?,
+        }
+        Ok(())
+    }
+}
+
+/// FASTQ filename extension for a given compression level (`.fastq.gz` vs
+/// `.fastq`) — content must match extension, or a downstream reader that
+/// infers compression from the name (most of them) breaks.
+fn fastq_ext(level: Option<u32>) -> &'static str {
+    if level.is_some() {
+        "fastq.gz"
+    } else {
+        "fastq"
+    }
+}
 
 /// Expand the `--fastqs` arguments into a concrete, sorted list of FASTQ files.
 ///
@@ -136,24 +192,19 @@ impl PairWriter {
 /// buffered batch under one lock, so the contention is negligible and the output
 /// stays a single valid gzip member.
 pub struct ShardWriter {
-    inner: Mutex<GzEncoder<BufWriter<File>>>,
+    inner: Mutex<ShardSink>,
 }
 
 impl ShardWriter {
-    pub fn create(path: &Path, level: u32) -> Result<Self> {
+    pub fn create(path: &Path, level: Option<u32>) -> Result<Self> {
         if let Some(dir) = path.parent() {
             if !dir.as_os_str().is_empty() {
                 fs::create_dir_all(dir)
                     .with_context(|| format!("cannot create dir {}", dir.display()))?;
             }
         }
-        let file = File::create(path)
-            .with_context(|| format!("cannot create output {}", path.display()))?;
         Ok(ShardWriter {
-            inner: Mutex::new(GzEncoder::new(
-                BufWriter::new(file),
-                Compression::new(level),
-            )),
+            inner: Mutex::new(ShardSink::create(path, level)?),
         })
     }
 
@@ -167,12 +218,10 @@ impl ShardWriter {
         Ok(())
     }
 
-    /// Finish the gzip member (final deflate block + trailer) and flush.
+    /// Finish the stream (gzip trailer, if any) and flush.
     pub fn finish(&self) -> Result<()> {
         let mut w = self.inner.lock().expect("shard writer lock poisoned");
-        w.try_finish().context("gzip finish failed-output")?;
-        w.get_mut().flush().context("flush failed-output")?;
-        Ok(())
+        w.finish()
     }
 }
 
@@ -181,31 +230,26 @@ pub struct PairShardWriter {
 }
 
 struct Pair {
-    r1: Option<GzEncoder<BufWriter<File>>>,
-    r2: GzEncoder<BufWriter<File>>,
+    r1: Option<ShardSink>,
+    r2: ShardSink,
 }
 
 impl PairShardWriter {
     /// `chunk` is the 1-based file-set number in the 10x reference name (`_001`…).
+    /// `level: None` writes plain, uncompressed `.fastq` (see [`ShardSink`]).
     pub fn create(
         dir: &Path,
         prefix: &str,
         s_num: usize,
         chunk: usize,
-        level: u32,
+        level: Option<u32>,
         emit_r1: bool,
     ) -> Result<Self> {
         fs::create_dir_all(dir).with_context(|| format!("cannot create dir {}", dir.display()))?;
-        let enc = |read: u8| -> Result<GzEncoder<BufWriter<File>>> {
-            let path = dir.join(format!(
-                "{prefix}_S{s_num}_L001_R{read}_{chunk:03}.fastq.gz"
-            ));
-            let file = File::create(&path)
-                .with_context(|| format!("cannot create output {}", path.display()))?;
-            Ok(GzEncoder::new(
-                BufWriter::new(file),
-                Compression::new(level),
-            ))
+        let ext = fastq_ext(level);
+        let enc = |read: u8| -> Result<ShardSink> {
+            let path = dir.join(format!("{prefix}_S{s_num}_L001_R{read}_{chunk:03}.{ext}"));
+            ShardSink::create(&path, level)
         };
         Ok(PairShardWriter {
             inner: Mutex::new(Pair {
@@ -229,15 +273,59 @@ impl PairShardWriter {
         Ok(())
     }
 
-    /// Finish both gzip members (write the final deflate block + trailer) and flush.
+    /// Finish both streams (gzip trailer, if any) and flush.
     pub fn finish(&self) -> Result<()> {
         let mut p = self.inner.lock().expect("pair writer lock poisoned");
         if let Some(r1) = &mut p.r1 {
-            r1.try_finish().context("gzip finish R1")?;
-            r1.get_mut().flush().context("flush R1")?;
+            r1.finish()?;
         }
-        p.r2.try_finish().context("gzip finish R2")?;
-        p.r2.get_mut().flush().context("flush R2")?;
-        Ok(())
+        p.r2.finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flate2::read::MultiGzDecoder;
+    use std::io::Read as _;
+
+    #[test]
+    fn no_gzip_writes_plain_readable_fastq_with_plain_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let w = PairShardWriter::create(dir.path(), "S", 1, 1, None, true).unwrap();
+        w.append(b"@r1\nACGT\n+\nIIII\n", b"@r2\nTTTT\n+\nIIII\n", 1).unwrap();
+        w.finish().unwrap();
+
+        let r1_path = dir.path().join("S_S1_L001_R1_001.fastq");
+        let r2_path = dir.path().join("S_S1_L001_R2_001.fastq");
+        assert!(r1_path.exists(), "expected a plain .fastq file, not .fastq.gz");
+        assert_eq!(fs::read(&r1_path).unwrap(), b"@r1\nACGT\n+\nIIII\n");
+        assert_eq!(fs::read(&r2_path).unwrap(), b"@r2\nTTTT\n+\nIIII\n");
+    }
+
+    #[test]
+    fn gzip_level_writes_valid_gzip_with_gz_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let w = PairShardWriter::create(dir.path(), "S", 1, 1, Some(4), true).unwrap();
+        w.append(b"@r1\nACGT\n+\nIIII\n", b"@r2\nTTTT\n+\nIIII\n", 1).unwrap();
+        w.finish().unwrap();
+
+        let r2_path = dir.path().join("S_S1_L001_R2_001.fastq.gz");
+        assert!(r2_path.exists(), "expected a .fastq.gz file");
+        let mut decoded = String::new();
+        MultiGzDecoder::new(File::open(&r2_path).unwrap())
+            .read_to_string(&mut decoded)
+            .unwrap();
+        assert_eq!(decoded, "@r2\nTTTT\n+\nIIII\n");
+    }
+
+    #[test]
+    fn shard_writer_no_gzip_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("failed.fastq");
+        let w = ShardWriter::create(&path, None).unwrap();
+        w.append(b"@r\nACGT\n+\nIIII\n").unwrap();
+        w.finish().unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"@r\nACGT\n+\nIIII\n");
     }
 }

@@ -157,6 +157,14 @@ pub struct Params {
     #[arg(long, default_value_t = 4)]
     pub gzip_level: u32,
 
+    /// Write plain, uncompressed FASTQ instead of gzip (overrides
+    /// --gzip-level). Measured to remove ~54% of extract's CPU time (see
+    /// PROFILING.md) — gzip encoding is pure overhead when the output is
+    /// about to be read once by a co-located process (e.g. piped straight
+    /// into a mapper via a named pipe) rather than stored.
+    #[arg(long, default_value_t = false)]
+    pub no_gzip: bool,
+
     /// Split each sample's output across N gzip files (10x reference reads them all:
     /// `_001`..`_00N`). N>1 lets N writer threads compress one sample in parallel,
     /// removing the single-encoder bottleneck on hot samples. Keep N ≤ --threads
@@ -266,6 +274,12 @@ impl Params {
             index_max_mm: self.index_max_mm,
             allow_single_index: self.single_index,
         }
+    }
+
+    /// Effective output compression level: `None` (plain, uncompressed
+    /// `.fastq`) when `--no-gzip` is set, else `Some(--gzip-level)`.
+    pub fn output_gzip_level(&self) -> Option<u32> {
+        (!self.no_gzip).then_some(self.gzip_level)
     }
 }
 

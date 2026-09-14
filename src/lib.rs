@@ -261,7 +261,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         .as_ref()
         .map(|s| Demuxer::new(s, cli.params.demux_cfg()));
     let n_samples = demuxer.as_ref().map_or(1, |d| d.sample_ids().len());
-    let glevel = cli.params.gzip_level;
+    let glevel = cli.params.output_gzip_level();
     let split = cli.params.split.max(1);
     // Each logical target gets `split` chunk files (_001.._00N). Layout is
     // [target0 chunk0..N-1][target1 chunk0..N-1]...; physical = t*split + c.
