@@ -49,6 +49,18 @@ struct Cli {
     /// Eligible-read interval between saturation observations.
     #[arg(long, default_value_t = 1_000_000)]
     saturation_interval: u64,
+    /// Pooled-sample mode: a barcode is a whole sample sequenced far deeper
+    /// than a single cell, not a droplet. At that depth, cross-gene UMI
+    /// collisions (the same (cell, UMI) independently drawn by two
+    /// unrelated genes) become common rather than rare, so the default
+    /// single-cell policy of keeping only the higher-support gene and
+    /// discarding the rest silently throws away real molecules from
+    /// genuinely distinct genes. `--tagseq` counts every gene's corrected
+    /// UMI nodes independently instead, tagging shared ones as `Outcome::Shared`
+    /// rather than adjudicating a winner. Leaves single-cell runs (the
+    /// default) unchanged.
+    #[arg(long)]
+    tagseq: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Ord, PartialOrd)]
@@ -91,6 +103,21 @@ impl Dna {
         Some(distance)
     }
 
+    /// All sequences at Hamming distance exactly 1 (single-base substitution).
+    fn one_mismatch_neighbors(self) -> impl Iterator<Item = Dna> {
+        let len = self.len();
+        let base = self.0;
+        let len_tag = (len as u64) << 56;
+        (0..len).flat_map(move |pos| {
+            let shift = 2 * (len - 1 - pos);
+            let orig = (base >> shift) & 3;
+            (0..4u64).filter(move |&b| b != orig).map(move |b| {
+                let cleared = base & !(3u64 << shift);
+                Dna((cleared | (b << shift)) | len_tag)
+            })
+        })
+    }
+
     fn unpack(self) -> String {
         let len = self.len();
         let mut out = vec![b'A'; len];
@@ -127,6 +154,10 @@ enum Outcome {
     Won,
     Lost,
     Tie,
+    /// --tagseq only: this (cell, UMI) was independently claimed by more
+    /// than one gene and every claimant was counted, rather than picking a
+    /// single winner.
+    Shared,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -141,6 +172,7 @@ struct Decision {
 struct Metrics {
     input_bam: String,
     output_bam: String,
+    tagseq: bool,
     records: u64,
     eligible_records: u64,
     raw_cell_gene_umis: u64,
@@ -152,6 +184,9 @@ struct Metrics {
     collision_molecules_won: u64,
     collision_molecules_lost: u64,
     collision_ties: u64,
+    /// --tagseq only: collision-group members counted independently instead
+    /// of adjudicated. 0 under the default single-cell policy.
+    collision_molecules_shared: u64,
     representatives_tagged: u64,
     saturation: Option<SaturationMetrics>,
     elapsed_secs: f64,
@@ -667,19 +702,27 @@ fn correct_group(
     evidence: &HashMap<RawKey, Evidence>,
 ) -> HashMap<RawKey, RawKey> {
     keys.sort_by_key(|key| (std::cmp::Reverse(evidence[key].reads), key.umi));
+    // Every raw UMI in a (cell, gene) group is already distinct (RawKey
+    // includes the UMI, and `evidence` is keyed on the full RawKey), so
+    // indexing by UMI once and generating each child's 3*len single-mismatch
+    // neighbors directly replaces an O(n^2) all-pairs Hamming scan with O(n)
+    // hash lookups. This matters because raw UMI diversity per (cell, gene)
+    // is heavily skewed toward highly expressed genes, where n^2 previously
+    // dominated the whole molecules stage.
+    let by_umi: HashMap<Dna, RawKey> = keys.iter().map(|&k| (k.umi, k)).collect();
     let mut roots = HashMap::with_capacity(keys.len());
     for &child in &keys {
         let mut parent = child;
-        for &candidate in &keys {
-            if candidate == child
-                || evidence[&candidate].reads
-                    < evidence[&child].reads.saturating_mul(2).saturating_sub(1)
-            {
+        let threshold = evidence[&child].reads.saturating_mul(2).saturating_sub(1);
+        for neighbor in child.umi.one_mismatch_neighbors() {
+            let Some(&candidate) = by_umi.get(&neighbor) else {
+                continue;
+            };
+            if evidence[&candidate].reads < threshold {
                 continue;
             }
-            if child.umi.hamming(candidate.umi) == Some(1)
-                && (evidence[&candidate].reads, std::cmp::Reverse(candidate.umi))
-                    > (evidence[&parent].reads, std::cmp::Reverse(parent.umi))
+            if (evidence[&candidate].reads, std::cmp::Reverse(candidate.umi))
+                > (evidence[&parent].reads, std::cmp::Reverse(parent.umi))
             {
                 parent = candidate;
             }
@@ -706,6 +749,7 @@ fn build_decisions(
     metrics: &mut Metrics,
     saturation_interval: Option<u64>,
     workers: usize,
+    tagseq: bool,
 ) -> (HashMap<RawKey, Decision>, Option<Saturation>) {
     let mut groups = HashMap::<(Dna, u32), Vec<RawKey>>::new();
     for &key in evidence.keys() {
@@ -728,7 +772,23 @@ fn build_decisions(
             curve.add_cell_gene(cell, gene, min_hash);
         }
     }
-    let roots = if workers > 1 {
+    let roots = if tagseq {
+        // Pooled-sample mode: directional UMI correction assumes a
+        // low-count 1-mismatch neighbor is a sequencing error of a nearby
+        // high-count node. At pooled-sample UMI diversity that assumption
+        // breaks down the same way cross-gene collision does -- two
+        // genuinely distinct molecules can land 1 Hamming-distance apart
+        // in a 12bp space purely by chance and get merged into one. Skip
+        // correction entirely: every raw (already exact-duplicate-collapsed)
+        // node is its own molecule. Trade-off: genuine 1bp sequencing
+        // errors in the UMI itself are no longer corrected either, so
+        // molecule counts trend slightly high rather than slightly low.
+        eprintln!(
+            "[sbxpress molecules] phase=umi_correct skipped (--tagseq) raw_nodes={}",
+            evidence.len()
+        );
+        evidence.keys().map(|&key| (key, key)).collect()
+    } else if workers > 1 {
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
             .build()
@@ -842,6 +902,19 @@ fn build_decisions(
             continue;
         }
         metrics.collision_groups += 1;
+        if tagseq {
+            // Pooled-sample mode: at this depth a shared UMI is usually two
+            // genuinely distinct genes' molecules colliding by chance in a
+            // 12bp UMI space, not a mapping artifact -- count every
+            // claimant instead of discarding all but the highest-support
+            // one.
+            for &root in roots_for_umi {
+                root_outcomes.insert(root, (Outcome::Shared, degree));
+                metrics.collision_molecules_shared += 1;
+                metrics.molecules_counted += 1;
+            }
+            continue;
+        }
         let best = roots_for_umi
             .iter()
             .map(|root| molecules[root].support)
@@ -877,7 +950,7 @@ fn build_decisions(
     if let Some(curve) = saturation.as_mut() {
         for (&root, molecule) in &molecules {
             let (outcome, _) = root_outcomes[&root];
-            if matches!(outcome, Outcome::Unique | Outcome::Won) {
+            if matches!(outcome, Outcome::Unique | Outcome::Won | Outcome::Shared) {
                 curve.add_molecule(root.cell, molecule.min_read_hash);
             }
         }
@@ -964,7 +1037,10 @@ fn write_output(
                 decision.representative == record_identity(&record)
             } else {
                 decision.representative == ordinal as u64
-            }) && matches!(decision.outcome, Outcome::Unique | Outcome::Won);
+            }) && matches!(
+                decision.outcome,
+                Outcome::Unique | Outcome::Won | Outcome::Shared
+            );
             record.push_aux(b"xf", Aux::I32(if representative { 25 } else { 17 }))?;
             record.push_aux(b"XV", Aux::U32(decision.collision_degree))?;
             record.push_aux(
@@ -974,6 +1050,7 @@ fn write_output(
                     Outcome::Won => b'W',
                     Outcome::Lost => b'L',
                     Outcome::Tie => b'T',
+                    Outcome::Shared => b'S',
                 }),
             )?;
             if representative {
@@ -1012,6 +1089,7 @@ fn main() -> Result<()> {
     let mut metrics = Metrics {
         input_bam: cli.bam.display().to_string(),
         output_bam: cli.output.display().to_string(),
+        tagseq: cli.tagseq,
         ..Default::default()
     };
     let (evidence, genes, gene_ids) = if cli.evidence_workers > 1 {
@@ -1044,6 +1122,7 @@ fn main() -> Result<()> {
         &mut metrics,
         cli.saturation.as_ref().map(|_| cli.saturation_interval),
         cli.evidence_workers,
+        cli.tagseq,
     );
     if let (Some(curve), Some(path)) = (saturation, cli.saturation.as_deref()) {
         eprintln!(
@@ -1084,6 +1163,40 @@ mod tests {
         assert_eq!(std::mem::size_of::<Evidence>(), 24);
     }
 
+    #[test]
+    fn one_mismatch_neighbors_match_brute_force_hamming() {
+        use rand::{Rng, SeedableRng};
+        let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(42);
+        let bases = [b'A', b'C', b'G', b'T'];
+        for _ in 0..200 {
+            let seq: String = (0..12)
+                .map(|_| bases[rng.gen_range(0..4)] as char)
+                .collect();
+            let target = Dna::pack(&seq).unwrap();
+
+            let neighbors: std::collections::HashSet<Dna> =
+                target.one_mismatch_neighbors().collect();
+            assert_eq!(neighbors.len(), 36, "3*len distinct neighbors for {seq}");
+            assert!(!neighbors.contains(&target));
+            for &n in &neighbors {
+                assert_eq!(target.hamming(n), Some(1));
+            }
+
+            // Cross-check against brute-force scan over random candidates:
+            // membership in the neighbor set must agree with hamming == 1.
+            for _ in 0..50 {
+                let candidate_seq: String = (0..12)
+                    .map(|_| bases[rng.gen_range(0..4)] as char)
+                    .collect();
+                let candidate = Dna::pack(&candidate_seq).unwrap();
+                assert_eq!(
+                    neighbors.contains(&candidate),
+                    target.hamming(candidate) == Some(1)
+                );
+            }
+        }
+    }
+
     fn evidence(reads: u32, ordinal: u64) -> Evidence {
         Evidence {
             reads,
@@ -1120,7 +1233,7 @@ mod tests {
         input.insert(gene1_major, evidence(3, 2));
 
         let mut metrics = Metrics::default();
-        let (decisions, _) = build_decisions(&input, &mut metrics, None, 1);
+        let (decisions, _) = build_decisions(&input, &mut metrics, None, 1, false);
         assert_eq!(decisions[&gene0_error].corrected, major);
         assert_eq!(decisions[&gene0_major].outcome, Outcome::Won);
         assert_eq!(decisions[&gene0_error].outcome, Outcome::Won);
@@ -1130,10 +1243,74 @@ mod tests {
         assert_eq!(metrics.molecules_counted, 1);
 
         let mut parallel_metrics = Metrics::default();
-        let (parallel, _) = build_decisions(&input, &mut parallel_metrics, None, 2);
+        let (parallel, _) = build_decisions(&input, &mut parallel_metrics, None, 2, false);
         assert_eq!(parallel[&gene0_error].corrected, major);
         assert_eq!(parallel[&gene0_major].outcome, Outcome::Won);
         assert_eq!(parallel[&gene1_major].outcome, Outcome::Lost);
+        assert_eq!(
+            parallel_metrics.molecules_counted,
+            metrics.molecules_counted
+        );
+    }
+
+    #[test]
+    fn tagseq_counts_every_gene_in_a_collision_instead_of_picking_a_winner() {
+        // Same raw evidence as corrects_within_gene_then_resolves_cross_gene_collision,
+        // but under --tagseq: UMI correction is also skipped (pooled-sample UMI
+        // diversity makes the 1-mismatch "sequencing error" assumption unsafe
+        // the same way winner-take-all collision resolution is unsafe), so
+        // gene0's "error" UMI no longer merges into "major" -- it stands as
+        // its own uncollided molecule. gene0_major and gene1_major still
+        // collide on the shared "major" UMI, and --tagseq keeps both instead
+        // of picking a winner.
+        let cell = Dna::pack("AACCGGTTAACCGGTT").unwrap();
+        let major = Dna::pack("AAAAAAAAAAAA").unwrap();
+        let error = Dna::pack("AAAAAAAAAAAC").unwrap();
+        let mut input = HashMap::new();
+        let gene0_major = RawKey {
+            cell,
+            gene: 0,
+            umi: major,
+        };
+        let gene0_error = RawKey {
+            cell,
+            gene: 0,
+            umi: error,
+        };
+        let gene1_major = RawKey {
+            cell,
+            gene: 1,
+            umi: major,
+        };
+        input.insert(gene0_major, evidence(10, 0));
+        input.insert(gene0_error, evidence(2, 1));
+        input.insert(gene1_major, evidence(3, 2));
+
+        let mut metrics = Metrics::default();
+        let (decisions, _) = build_decisions(&input, &mut metrics, None, 1, true);
+        // No UMI correction under --tagseq: "error" stays uncorrected and
+        // uncollided (no other gene/UMI shares it).
+        assert_eq!(decisions[&gene0_error].corrected, error);
+        assert_eq!(decisions[&gene0_error].outcome, Outcome::Unique);
+        // "major" is shared by two genes -- both kept, neither discarded.
+        assert_eq!(decisions[&gene0_major].outcome, Outcome::Shared);
+        assert_eq!(decisions[&gene1_major].outcome, Outcome::Shared);
+        assert_eq!(decisions[&gene0_major].collision_degree, 2);
+        assert_eq!(decisions[&gene1_major].collision_degree, 2);
+        assert_eq!(metrics.umi_nodes_collapsed, 0);
+        // Diagnostics still reflect that a collision happened...
+        assert_eq!(metrics.collision_groups, 1);
+        // ...but nothing is discarded: all three raw nodes are counted.
+        assert_eq!(metrics.collision_molecules_shared, 2);
+        assert_eq!(metrics.collision_molecules_won, 0);
+        assert_eq!(metrics.collision_molecules_lost, 0);
+        assert_eq!(metrics.molecules_counted, 3);
+
+        let mut parallel_metrics = Metrics::default();
+        let (parallel, _) = build_decisions(&input, &mut parallel_metrics, None, 2, true);
+        assert_eq!(parallel[&gene0_error].corrected, error);
+        assert_eq!(parallel[&gene0_major].outcome, Outcome::Shared);
+        assert_eq!(parallel[&gene1_major].outcome, Outcome::Shared);
         assert_eq!(
             parallel_metrics.molecules_counted,
             metrics.molecules_counted
@@ -1148,7 +1325,7 @@ mod tests {
         let b = RawKey { cell, gene: 1, umi };
         let input = HashMap::from([(a, evidence(2, 0)), (b, evidence(2, 1))]);
         let mut metrics = Metrics::default();
-        let (decisions, _) = build_decisions(&input, &mut metrics, None, 1);
+        let (decisions, _) = build_decisions(&input, &mut metrics, None, 1, false);
         assert_eq!(decisions[&a].outcome, Outcome::Tie);
         assert_eq!(decisions[&b].outcome, Outcome::Tie);
         assert_eq!(metrics.molecules_counted, 0);
@@ -1241,8 +1418,8 @@ mod tests {
         );
         let mut serial_decision_metrics = Metrics::default();
         let mut parallel_decision_metrics = Metrics::default();
-        let _ = build_decisions(&serial, &mut serial_decision_metrics, None, 2);
-        let _ = build_decisions(&parallel, &mut parallel_decision_metrics, None, 2);
+        let _ = build_decisions(&serial, &mut serial_decision_metrics, None, 2, false);
+        let _ = build_decisions(&parallel, &mut parallel_decision_metrics, None, 2, false);
         assert_eq!(
             serial_decision_metrics.molecules_counted,
             parallel_decision_metrics.molecules_counted

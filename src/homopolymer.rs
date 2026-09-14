@@ -59,6 +59,42 @@ pub fn poly_a_t(seq: &[u8]) -> (Option<Run>, Option<Run>) {
     (longest_run(seq, b'A'), longest_run(seq, b'T'))
 }
 
+/// Leftmost run of `base` at least `min_len` long (same isolated-mismatch
+/// tolerance as [`longest_run`]), or `None` if no run reaches the threshold.
+///
+/// Unlike `longest_run`, this stops at the first qualifying run instead of
+/// scanning for the overall longest. For locating where real sequence ends
+/// and a homopolymer tail (e.g. read-through into a poly-A tail) begins, the
+/// leftmost qualifying run is the one that marks the boundary — a longer run
+/// further along could be coincidental downstream sequence.
+pub fn first_run_at_least(seq: &[u8], base: u8, min_len: usize) -> Option<Run> {
+    let n = seq.len();
+    let mut i = 0;
+    while i < n {
+        if seq[i] != base {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        let mut last_match = i;
+        let mut k = i + 1;
+        while k < n {
+            if seq[k] == base {
+                last_match = k;
+            } else if seq[k - 1] != base {
+                break;
+            }
+            k += 1;
+        }
+        let len = last_match - start + 1;
+        if len >= min_len {
+            return Some(Run { start, len });
+        }
+        i = last_match + 1;
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,5 +136,28 @@ mod tests {
         let (a, t) = poly_a_t(s);
         assert_eq!(a.unwrap().len, 6);
         assert_eq!(t.unwrap().len, 9);
+    }
+
+    #[test]
+    fn first_run_at_least_finds_leftmost_qualifying_run_not_the_longest() {
+        // Two qualifying A-runs (len 8 and len 16); must return the first.
+        let s = b"ACGTAAAAAAAAGGGGAAAAAAAAAAAAAAAA";
+        let r = first_run_at_least(s, b'A', 8).unwrap();
+        assert_eq!(r.start, 4);
+        assert_eq!(r.len, 8);
+    }
+
+    #[test]
+    fn first_run_at_least_returns_none_below_threshold() {
+        let s = b"ACGTAAAGGGG";
+        assert_eq!(first_run_at_least(s, b'A', 8), None);
+    }
+
+    #[test]
+    fn first_run_at_least_tolerates_isolated_mismatch() {
+        let s = b"GGAAAAACAAAAAGG";
+        let r = first_run_at_least(s, b'A', 10).unwrap();
+        assert_eq!(r.start, 2);
+        assert_eq!(r.len, 11);
     }
 }

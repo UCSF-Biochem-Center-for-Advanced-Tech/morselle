@@ -18,6 +18,7 @@ use sbx10x::anchors::revcomp;
 use sbx10x::barcode::{encode16, Whitelist};
 use sbx10x::extract::{extract, ExtractCfg};
 use sbx10x::gzin::{backend_description, open_fastx};
+use sbx10x::homopolymer;
 use sbx10x::overlap::{overlap_in, InsertClass, Merged, OverlapCfg, Scratch};
 use sbx10x::yc::YcTag;
 use serde::Serialize;
@@ -96,7 +97,8 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     no_emit_yc: bool,
 
-    /// Minimum cDNA length to emit from a merged fragment.
+    /// Minimum cDNA length to emit: from a merged fragment, or (with
+    /// --trim-r2-polya) from a non-merged R2 after trimming read-through.
     #[arg(long, default_value_t = 50)]
     min_cdna_len: usize,
 
@@ -116,6 +118,22 @@ struct Cli {
     /// enough to overlap — so merged reads are enriched for it. Off by default.
     #[arg(long, default_value_t = false)]
     trim_tso: bool,
+
+    /// Trim poly-A read-through in a non-merged R2 (the pair either was not
+    /// offered to --overlap, or failed to merge). On a fragment shorter than
+    /// R2's read length, R2 reads past the cDNA insert into the poly-A tail
+    /// and, past that, into the reverse-complemented UMI/CB/primer — sequence
+    /// that should never reach the aligner. --overlap already catches this by
+    /// reconstructing the fragment from both mates; this is the same check
+    /// for reads that never get that treatment. Off by default: enabling it
+    /// changes emitted cDNA.
+    #[arg(long, default_value_t = false)]
+    trim_r2_polya: bool,
+
+    /// Shortest poly-A run in R2 that counts as tail read-through rather than
+    /// coincidental internal sequence.
+    #[arg(long, default_value_t = 12)]
+    r2_polya_min_run: usize,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -149,6 +167,14 @@ struct Metrics {
     yc_unencodable: u64,
     /// Merged fragments whose TSO was found and trimmed (needs `--trim-tso`).
     tso_trimmed: u64,
+    /// Non-merged R2 reads trimmed at a detected poly-A read-through (needs
+    /// `--trim-r2-polya`).
+    r2_polya_trimmed: u64,
+    /// Of those, the cDNA remaining before the poly-A run was below
+    /// `--min-cdna-len`, so the pair was discarded instead of emitted (see
+    /// `r2_polya_short` in `failed_by_reason`).
+    r2_polya_discarded: u64,
+    r2_polya_bases_trimmed: u64,
     /// Reads written to the failed-output side channel, by reason.
     records_failed: u64,
     failed_by_reason: BTreeMap<String, u64>,
@@ -175,6 +201,9 @@ struct PairMetrics {
     yc_n_columns_coerced: u64,
     yc_unencodable: u64,
     tso_trimmed: u64,
+    r2_polya_trimmed: u64,
+    r2_polya_discarded: u64,
+    r2_polya_bases_trimmed: u64,
     records_failed: u64,
     failed_by_reason: BTreeMap<String, u64>,
     insert_length_histogram: BTreeMap<usize, u64>,
@@ -368,6 +397,7 @@ fn convert_pair(
     overlap_cfg: Option<&OverlapCfg>,
     extract_cfg: &ExtractCfg,
     emit_yc: bool,
+    r2_polya_min_run: Option<usize>,
     failed_paths: &[(PathBuf, PathBuf)],
 ) -> Result<PairMetrics> {
     let writers = output_paths
@@ -484,6 +514,9 @@ fn convert_pair(
                 let mut merged_seq: Vec<u8> = Vec::new();
                 let mut merged_qual: Vec<u8> = Vec::new();
                 let mut merged_tag: Option<YcTag> = None;
+                // Non-merged path only: end of the emitted R2 window, trimmed
+                // back from r2_seq.len() when --trim-r2-polya finds read-through.
+                let mut r2_trim_end = r2_seq.len();
 
                 if let Some(m) = &merged {
                     // (a) sins / mins. The merged molecule is
@@ -555,6 +588,24 @@ fn convert_pair(
                         metrics.barcode_rejected += 1;
                         fail_pair!("short_r1");
                     }
+                    // R2 alone can still read through a short fragment into its
+                    // poly-A tail (and beyond, into the reverse-complemented
+                    // UMI/CB/primer) even when there is no R1 to merge against.
+                    // --overlap catches this by reconstructing the fragment from
+                    // both mates; this is the same check for reads that never
+                    // get that treatment.
+                    if let Some(min_run) = r2_polya_min_run {
+                        if let Some(run) = homopolymer::first_run_at_least(&r2_seq, b'A', min_run)
+                        {
+                            metrics.r2_polya_bases_trimmed += (r2_seq.len() - run.start) as u64;
+                            r2_trim_end = run.start;
+                            if r2_trim_end < extract_cfg.min_cdna_len {
+                                metrics.r2_polya_discarded += 1;
+                                fail_pair!("r2_polya_short");
+                            }
+                            metrics.r2_polya_trimmed += 1;
+                        }
+                    }
                 }
 
                 // The barcode comes from the merged molecule when we have one —
@@ -574,8 +625,8 @@ fn convert_pair(
                         &r1_seq[CB_LEN..CB_LEN + UMI_LEN],
                         &r1_qual[..CB_LEN],
                         &r1_qual[CB_LEN..CB_LEN + UMI_LEN],
-                        &r2_seq[..],
-                        r2_qual,
+                        &r2_seq[..r2_trim_end],
+                        &r2_qual[..r2_trim_end],
                     ),
                 };
 
@@ -681,6 +732,7 @@ fn run(cli: Cli) -> Result<()> {
     };
     let emit_yc = !cli.no_emit_yc;
     let cli_trim_tso = cli.trim_tso;
+    let r2_polya_min_run = cli.trim_r2_polya.then_some(cli.r2_polya_min_run);
     let whitelist = Whitelist::load(&cli.whitelist)?;
     if whitelist.is_empty() {
         bail!("whitelist is empty: {}", cli.whitelist.display());
@@ -794,6 +846,7 @@ fn run(cli: Cli) -> Result<()> {
                     overlap_cfg.as_ref(),
                     &extract_cfg,
                     emit_yc,
+                    r2_polya_min_run,
                     per_input_failed
                         .get(index)
                         .map(Vec::as_slice)
@@ -833,6 +886,9 @@ fn run(cli: Cli) -> Result<()> {
         metrics.yc_n_columns_coerced += value.yc_n_columns_coerced;
         metrics.yc_unencodable += value.yc_unencodable;
         metrics.tso_trimmed += value.tso_trimmed;
+        metrics.r2_polya_trimmed += value.r2_polya_trimmed;
+        metrics.r2_polya_discarded += value.r2_polya_discarded;
+        metrics.r2_polya_bases_trimmed += value.r2_polya_bases_trimmed;
         metrics.records_failed += value.records_failed;
         for (reason, count) in value.failed_by_reason {
             *metrics.failed_by_reason.entry(reason).or_insert(0) += count;
@@ -931,6 +987,12 @@ fn run(cli: Cli) -> Result<()> {
             );
         }
     }
+    if cli.trim_r2_polya {
+        eprintln!(
+            "[sbxpress illumina] r2 poly-A trim: trimmed={} discarded={} bases_trimmed={}",
+            metrics.r2_polya_trimmed, metrics.r2_polya_discarded, metrics.r2_polya_bases_trimmed,
+        );
+    }
     Ok(())
 }
 
@@ -974,6 +1036,8 @@ mod tests {
             min_cdna_len: 50,
             adapter_max_mm: 2,
             trim_tso: false,
+            trim_r2_polya: false,
+            r2_polya_min_run: 12,
             failed_output: None,
         }
     }
@@ -1226,5 +1290,97 @@ mod tests {
         assert!(metrics.contains("\"overlap_short_sins\": 0"));
         assert!(metrics.contains("\"overlap_medium_mins\": 0"));
         assert!(metrics.contains("\"overlap_long_lins\": 3"));
+    }
+
+    /// A short-R1 (28 bp CB+UMI only, no overlap possible) pair whose R2 reads
+    /// past a `cdna_len`-bp insert into a 15 bp poly-A tail and 10 bp of junk
+    /// beyond it — the shape a short fragment takes on a standard 10x-style
+    /// read layout, where nothing merges because R1 never reaches the cDNA.
+    fn write_r2_readthrough_fixture(dir: &Path, cdna_len: usize) -> (PathBuf, PathBuf, Vec<u8>) {
+        const CB: &[u8] = b"AAACCCAAGAAACACT";
+        const UMI: &[u8] = b"ACGTACGTACGT";
+        let mut r1 = CB.to_vec();
+        r1.extend_from_slice(UMI);
+        assert_eq!(r1.len(), 28);
+
+        let mut cdna: Vec<u8> = b"CTGATCGATCGTAGCTAGCATCGATCGTAGCTAGCATCGATCGATGC"
+            .iter()
+            .cycle()
+            .take(cdna_len)
+            .copied()
+            .collect();
+        // End on C: the pattern can land on A at an arbitrary cdna_len, which
+        // would abut the poly-A block appended below and shift the run's true
+        // start one base earlier than intended.
+        if let Some(last) = cdna.last_mut() {
+            *last = b'C';
+        }
+        let mut r2 = cdna.clone();
+        r2.extend(std::iter::repeat_n(b'A', 15));
+        r2.extend_from_slice(b"GGCGTAGCTA");
+
+        let write = |name: &str, seq: &[u8]| -> PathBuf {
+            let path = dir.join(name);
+            let text = format!(
+                "@short_frag 1:N:0:1\n{}\n+\n{}\n",
+                String::from_utf8_lossy(seq),
+                "I".repeat(seq.len())
+            );
+            std::fs::write(&path, text).unwrap();
+            path
+        };
+        (write("rt_R1.fastq", &r1), write("rt_R2.fastq", &r2), cdna)
+    }
+
+    #[test]
+    fn trim_r2_polya_trims_readthrough_when_cdna_survives_min_len() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let temp = tempfile::tempdir().unwrap();
+        let (r1, r2, cdna) = write_r2_readthrough_fixture(temp.path(), 60);
+
+        // Without the flag: R2 is emitted verbatim, poly-A and junk included.
+        let plain_out = temp.path().join("plain.fastq.gz");
+        let mut cli = base_cli(&root, plain_out.clone());
+        cli.r1 = vec![r1.clone()];
+        cli.r2 = vec![r2.clone()];
+        run(cli).unwrap();
+        let plain_seq = read_gz(&plain_out).lines().nth(1).unwrap().to_string();
+        assert!(plain_seq.len() > cdna.len(), "untrimmed R2 carries the tail");
+
+        // With the flag: R2 is cut back to just the cDNA before the poly-A run.
+        let trimmed_out = temp.path().join("trimmed.fastq.gz");
+        let mut cli = base_cli(&root, trimmed_out.clone());
+        cli.r1 = vec![r1];
+        cli.r2 = vec![r2];
+        cli.trim_r2_polya = true;
+        run(cli).unwrap();
+        let trimmed_seq = read_gz(&trimmed_out).lines().nth(1).unwrap().to_string();
+        assert_eq!(trimmed_seq.as_bytes(), &cdna[..]);
+
+        let metrics = std::fs::read_to_string(metrics_path(&trimmed_out)).unwrap();
+        assert!(metrics.contains("\"r2_polya_trimmed\": 1"), "{metrics}");
+        assert!(metrics.contains("\"r2_polya_discarded\": 0"), "{metrics}");
+    }
+
+    #[test]
+    fn trim_r2_polya_discards_when_cdna_left_is_too_short() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let temp = tempfile::tempdir().unwrap();
+        // 20 bp of cDNA before the poly-A run, below the default 50 bp min.
+        let (r1, r2, _cdna) = write_r2_readthrough_fixture(temp.path(), 20);
+
+        let output = temp.path().join("tagged.fastq.gz");
+        let failed = temp.path().join("failed");
+        let mut cli = base_cli(&root, output.clone());
+        cli.r1 = vec![r1];
+        cli.r2 = vec![r2];
+        cli.trim_r2_polya = true;
+        cli.failed_output = Some(failed);
+        run(cli).unwrap();
+
+        let metrics = std::fs::read_to_string(metrics_path(&output)).unwrap();
+        assert!(metrics.contains("\"records_emitted\": 0"), "{metrics}");
+        assert!(metrics.contains("\"r2_polya_discarded\": 1"), "{metrics}");
+        assert!(metrics.contains("\"r2_polya_short\": 1"), "{metrics}");
     }
 }

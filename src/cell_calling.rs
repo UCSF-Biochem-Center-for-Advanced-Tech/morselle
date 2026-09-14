@@ -39,6 +39,19 @@ pub struct Cli {
     #[arg(long, conflicts_with = "expect_cells")]
     pub force_cells: Option<usize>,
 
+    /// Skip OrdMag and EmptyDrops entirely and call exactly these barcodes
+    /// as cells: one per line, matching the extraction whitelist format
+    /// (a gem-group "-1" suffix, if present, is ignored). OrdMag's
+    /// order-of-magnitude knee and EmptyDrops' ambient-profile test are
+    /// both shaped around droplet single-cell data -- a few real cells
+    /// against a large background of empty droplets with a shared ambient
+    /// RNA noise profile. A pooled tag-seq run has a different noise
+    /// mechanism (index hopping into a small closed barcode whitelist) and
+    /// the real barcodes are already known from the experiment design, so
+    /// there's nothing to infer statistically.
+    #[arg(long, conflicts_with_all = ["expect_cells", "force_cells"])]
+    pub tagseq_barcodes: Option<PathBuf>,
+
     /// First barcode rank used for the ambient background (NextGEM default).
     #[arg(long, default_value_t = 45_000)]
     pub ambient_lower: usize,
@@ -95,6 +108,44 @@ struct Metrics {
     filtered_cells: usize,
     filtered_molecules: u64,
     elapsed_secs: f64,
+}
+
+/// Resolve a --tagseq-barcodes file into raw-matrix column indices. The
+/// gem-group suffix ("-1") that the matrix carries but a plain whitelist
+/// file doesn't is ignored on both sides of the match.
+fn resolve_tagseq_barcodes(path: &Path, barcodes: &[String]) -> Result<Vec<usize>> {
+    let by_prefix: HashMap<&str, usize> = barcodes
+        .iter()
+        .enumerate()
+        .map(|(i, bc)| (bc.split('-').next().unwrap_or(bc.as_str()), i))
+        .collect();
+    let text = fs::read_to_string(path)
+        .with_context(|| format!("reading --tagseq-barcodes {}", path.display()))?;
+    let mut indices = Vec::new();
+    for (lineno, line) in text.lines().enumerate() {
+        let bc = line.trim();
+        if bc.is_empty() {
+            continue;
+        }
+        let bare = bc.split('-').next().unwrap_or(bc);
+        let &index = by_prefix.get(bare).with_context(|| {
+            format!(
+                "{}:{}: barcode {bare} is not present in the raw matrix",
+                path.display(),
+                lineno + 1
+            )
+        })?;
+        indices.push(index);
+    }
+    if indices.is_empty() {
+        bail!(
+            "--tagseq-barcodes {} contained no barcodes",
+            path.display()
+        );
+    }
+    indices.sort_unstable();
+    indices.dedup();
+    Ok(indices)
 }
 
 fn resolve_h5(path: &Path) -> PathBuf {
@@ -527,7 +578,15 @@ pub fn run(cli: &Cli) -> Result<()> {
     let totals = totals(&raw);
     let nonzero = totals.iter().filter(|&&x| x > 0).count();
     let mut rng = ChaCha8Rng::seed_from_u64(cli.seed);
-    let (ordmag_calls, recovered, cutoff) = if let Some(force) = cli.force_cells {
+    let tagseq_calls: Option<Vec<usize>> = cli
+        .tagseq_barcodes
+        .as_ref()
+        .map(|path| resolve_tagseq_barcodes(path, &raw.barcodes))
+        .transpose()?;
+    let (ordmag_calls, recovered, cutoff) = if let Some(calls) = &tagseq_calls {
+        let cutoff = calls.iter().map(|&bc| totals[bc]).min().unwrap_or(0);
+        (calls.clone(), calls.len(), cutoff)
+    } else if let Some(force) = cli.force_cells {
         let mut ranked: Vec<usize> = (0..totals.len()).filter(|&i| totals[i] > 0).collect();
         ranked.sort_by_key(|&i| (std::cmp::Reverse(totals[i]), i));
         let n = force.min(ranked.len());
@@ -537,7 +596,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         ordmag(&totals, cli.expect_cells, &mut rng, cli.ambient_lower)
     };
     let (empty_calls, diagnostics, ambient_n, max_ambient, ed_threshold) =
-        if cli.force_cells.is_some() {
+        if tagseq_calls.is_some() || cli.force_cells.is_some() {
             (Vec::new(), Vec::new(), 0, 0, cli.emptydrops_minimum_umis)
         } else {
             emptydrops(&raw, &totals, &ordmag_calls, cli, &mut rng)
@@ -561,7 +620,9 @@ pub fn run(cli: &Cli) -> Result<()> {
     let mut calls = fs::File::create(cli.output.join("cell_calls.csv"))?;
     writeln!(calls, "barcode,total_umis,call,pvalue,adjusted_pvalue")?;
     for &bc in &selected {
-        let call = if cli.force_cells.is_some() {
+        let call = if tagseq_calls.is_some() {
+            "tagseq"
+        } else if cli.force_cells.is_some() {
             "forced"
         } else if ordmag_set.contains(&bc) {
             "ordmag"
@@ -586,7 +647,11 @@ pub fn run(cli: &Cli) -> Result<()> {
         writeln!(filtered_barcodes, "{},{}", raw.genome, raw.barcodes[bc])?;
     }
     let metrics = Metrics {
-        algorithm: "OrdMag + multinomial EmptyDrops",
+        algorithm: if tagseq_calls.is_some() {
+            "explicit tag-seq sample list"
+        } else {
+            "OrdMag + multinomial EmptyDrops"
+        },
         raw_matrix: input.display().to_string(),
         filtered_h5: h5.display().to_string(),
         raw_barcodes: raw.barcodes.len(),
@@ -660,6 +725,7 @@ mod tests {
             output: output.clone(),
             expect_cells: None,
             force_cells: Some(1),
+            tagseq_barcodes: None,
             ambient_lower: 1,
             ambient_upper: 2,
             emptydrops_minimum_umis: 1,
@@ -673,5 +739,87 @@ mod tests {
             fs::read_to_string(output.join("filtered_barcodes.csv")).unwrap(),
             "genome,barcode\nGRCh38,bc1-1\n"
         );
+    }
+
+    #[test]
+    fn tagseq_barcodes_selects_exact_list_ignoring_umi_rank() {
+        let temp = tempfile::tempdir().unwrap();
+        let raw_path = temp.path().join("raw.h5");
+        let matrix = Matrix {
+            features: vec![Feature {
+                id: "g1".into(),
+                name: "G1".into(),
+            }],
+            barcodes: vec!["bc1-1".into(), "bc2-1".into()],
+            // bc1 has far more UMIs than bc2 -- OrdMag/force_cells would
+            // pick bc1, proving a --tagseq-barcodes selection of bc2 alone
+            // comes from the list, not the counts.
+            counts: [((0, 0), 10), ((1, 0), 2)].into_iter().collect(),
+            records: 0,
+            molecules: 12,
+        };
+        write_h5(&matrix, &raw_path, "GRCh38").unwrap();
+        let barcodes_path = temp.path().join("samples.txt");
+        // Bare barcode, no gem-group suffix, matching the whitelist format.
+        fs::write(&barcodes_path, "bc2\n").unwrap();
+        let output = temp.path().join("outs");
+        run(&Cli {
+            raw_matrix: raw_path,
+            output: output.clone(),
+            expect_cells: None,
+            force_cells: None,
+            tagseq_barcodes: Some(barcodes_path),
+            ambient_lower: 1,
+            ambient_upper: 2,
+            emptydrops_minimum_umis: 1,
+            simulations: 10,
+            fdr: 0.001,
+            seed: 0,
+        })
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(output.join("filtered_barcodes.csv")).unwrap(),
+            "genome,barcode\nGRCh38,bc2-1\n"
+        );
+        let calls = fs::read_to_string(output.join("cell_calls.csv")).unwrap();
+        assert!(calls.contains("bc2-1,2,tagseq"));
+        let metrics_json =
+            fs::read_to_string(output.join("cell_calling_metrics.json")).unwrap();
+        assert!(metrics_json.contains("explicit tag-seq sample list"));
+    }
+
+    #[test]
+    fn tagseq_barcodes_rejects_unknown_barcode() {
+        let temp = tempfile::tempdir().unwrap();
+        let raw_path = temp.path().join("raw.h5");
+        let matrix = Matrix {
+            features: vec![Feature {
+                id: "g1".into(),
+                name: "G1".into(),
+            }],
+            barcodes: vec!["bc1-1".into()],
+            counts: [((0, 0), 10)].into_iter().collect(),
+            records: 0,
+            molecules: 10,
+        };
+        write_h5(&matrix, &raw_path, "GRCh38").unwrap();
+        let barcodes_path = temp.path().join("samples.txt");
+        fs::write(&barcodes_path, "not_in_the_matrix\n").unwrap();
+        let output = temp.path().join("outs");
+        let err = run(&Cli {
+            raw_matrix: raw_path,
+            output,
+            expect_cells: None,
+            force_cells: None,
+            tagseq_barcodes: Some(barcodes_path),
+            ambient_lower: 1,
+            ambient_upper: 2,
+            emptydrops_minimum_umis: 1,
+            simulations: 10,
+            fdr: 0.001,
+            seed: 0,
+        })
+        .unwrap_err();
+        assert!(err.to_string().contains("not_in_the_matrix"));
     }
 }

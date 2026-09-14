@@ -6,6 +6,62 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.8] — 2026-09-14
+
+### Added
+- `sbx10x-molecules --tagseq` opts a run out of two single-cell-shaped
+  assumptions that stop holding at pooled-sample depth (tens of millions of
+  reads per barcode rather than a single cell's tens of thousands):
+  - **Cross-gene UMI collision adjudication is skipped.** At this depth the
+    same `(cell, UMI)` value is routinely drawn independently by two or more
+    genuinely distinct, unrelated genes — a 12bp-UMI-space birthday-paradox
+    effect, not a mapping artifact — and the default policy of keeping only
+    the higher-support gene silently discards real molecules from the rest.
+    Every gene sharing a collided UMI is counted independently and tagged
+    `Outcome::Shared` (`XW:A:S`) instead of `Won`/`Lost`/`Tie`;
+    `collision_groups`/`collision_degree` diagnostics are still recorded so
+    collision pressure remains visible.
+  - **Directional UMI error-correction is skipped.** The same UMI-space
+    exhaustion that causes cross-gene collisions also makes the
+    1-mismatch/2x-read-count "sequencing error" heuristic unsafe for
+    high-diversity (cell, gene) groups: two genuinely distinct real
+    molecules can land a single Hamming distance apart by chance and get
+    incorrectly merged. Every raw, exact-duplicate-collapsed node is kept as
+    its own molecule. Trade-off: genuine single-base UMI sequencing errors
+    are no longer corrected either, so `--tagseq` molecule counts trend
+    slightly high rather than the default policy's slightly low.
+  - `Metrics.tagseq` records which policy a run used. Default (single-cell)
+    runs are unaffected by either change — `Outcome::Shared` is never
+    produced and UMI correction still runs unless the flag is passed.
+- `sbxpress cells --tagseq-barcodes <FILE>` calls exactly the listed
+  barcodes as cells/samples, skipping OrdMag and EmptyDrops entirely.
+  Both algorithms are shaped around droplet single-cell data (a few real
+  cells against a large empty-droplet background with a shared ambient-RNA
+  noise profile); a pooled tag-seq run has a different noise mechanism
+  (index hopping into a small closed barcode whitelist) and the real sample
+  barcodes are already known from the experiment design, so there is
+  nothing to infer statistically. One barcode per line, matching the
+  extraction whitelist format (a gem-group `-1` suffix, if present, is
+  ignored); an unrecognized barcode is a hard error rather than a silent
+  skip.
+- `sbxpress illumina --trim-r2-polya` (default off) catches poly-A
+  read-through in R2 on the non-merged path — either `--overlap` is off
+  entirely, or this particular pair failed to merge. On a fragment shorter
+  than R2's read length, R2 reads past the cDNA insert into the poly-A tail
+  and, past that, into the reverse-complemented UMI/CB/primer; `--overlap`
+  already removes this by reconstructing the fragment from both mates, but a
+  short-R1 run (28 bp CB+UMI, no cDNA read-through possible on R1 at all)
+  never has anything to merge against, so the same read-through went
+  undetected. Finds the leftmost poly-A run of at least
+  `--r2-polya-min-run` bp (default 12, same isolated-mismatch tolerance as
+  the existing dT-anchor scan) via `homopolymer::first_run_at_least`, and
+  trims R2 back to just before it; the pair is discarded (`r2_polya_short`)
+  instead of emitted if what remains is below `--min-cdna-len`.
+  `Metrics.r2_polya_trimmed` / `r2_polya_discarded` / `r2_polya_bases_trimmed`
+  record the effect. On a 200k-pair DMTS60 sample (R1 28 bp / R2 90 bp, no
+  `--overlap`), 12.5% of barcode-valid reads carried a poly-A read-through
+  that `--overlap` alone could not have caught.
+
 ## [0.3.7] — 2026-09-03
 
 ### Added
