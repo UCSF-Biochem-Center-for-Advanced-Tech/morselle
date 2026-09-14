@@ -18,7 +18,8 @@ Commands:\n\
   molecules  Correct UMIs, resolve gene collisions, and mark representatives\n\
   audit      Audit mapping, annotation, trimming, and molecule metrics\n\
   matrix     Create 10x-compatible raw feature-barcode matrices\n\
-  cells      Call cells and create filtered feature-barcode matrices\n\n\
+  cells      Call cells and create filtered feature-barcode matrices\n\
+  probe-demux  Assign cell barcodes to samples by probe barcode (10x Flex)\n\n\
 Run 'sbxpress <COMMAND> --help' for command-specific options.\n";
 
 fn helper_dir(executable: &Path) -> Option<PathBuf> {
@@ -45,6 +46,7 @@ fn engine(command: &str) -> Option<&'static str> {
         "audit" => Some("bam-audit"),
         "matrix" => Some("cr-bam-to-mtx"),
         "cells" => Some("sbxpress-cells"),
+        "probe-demux" => Some("sbxpress-probe-demux"),
         _ => None,
     }
 }
@@ -116,6 +118,7 @@ mod tests {
         assert_eq!(engine("audit"), Some("bam-audit"));
         assert_eq!(engine("matrix"), Some("cr-bam-to-mtx"));
         assert_eq!(engine("cells"), Some("sbxpress-cells"));
+        assert_eq!(engine("probe-demux"), Some("sbxpress-probe-demux"));
         assert_eq!(engine("minimap"), None);
     }
 }

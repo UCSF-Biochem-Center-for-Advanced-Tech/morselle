@@ -69,6 +69,10 @@ pub struct Metrics {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub demux: Option<DemuxMetrics>,
+
+    /// `null` unless `--probe-barcode-whitelist` was given.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub probe_barcode: Option<ProbeBarcodeMetrics>,
 }
 
 /// Cell-barcode gate metrics (present only when a whitelist was given).
@@ -92,6 +96,19 @@ pub struct WhitelistMetrics {
     pub realigned: u64,
     pub reframed: u64,
     pub corrected_hamming2: u64,
+}
+
+/// Flex probe-barcode location/identification metrics (FLEX_SUPPORT_PLAN.md
+/// Phase 1; present only when `--probe-barcode-whitelist` was given).
+#[derive(Serialize)]
+pub struct ProbeBarcodeMetrics {
+    pub size: usize,
+    /// Pairs where the probe-barcode window was located at all (in-bounds).
+    pub located: u64,
+    /// Pairs where the located window matched a whitelist entry confidently.
+    pub hit: u64,
+    /// hit / located.
+    pub hit_rate: f64,
 }
 
 impl Metrics {

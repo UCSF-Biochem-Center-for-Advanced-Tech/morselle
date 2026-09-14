@@ -191,6 +191,23 @@ pub struct Params {
     /// `--minimap2`.
     #[arg(long, default_value_t = false)]
     pub processing_tags: bool,
+
+    /// 10x Flex probe-barcode whitelist (e.g. `flex-v2-384.txt`). When set,
+    /// locates + identifies the probe barcode on each read and adds
+    /// `PR:Z:<raw>`/`PB:Z:<corrected id>` to the FASTQ comment (requires
+    /// `--minimap2`, same as CR/CB). See FLEX_SUPPORT_PLAN.md Phase 1.
+    #[arg(long, requires = "minimap2")]
+    pub probe_barcode_whitelist: Option<PathBuf>,
+
+    /// Max mismatches for a confident probe-barcode whitelist match.
+    #[arg(long, default_value_t = 1)]
+    pub probe_barcode_max_mm: u32,
+
+    /// Max bp each side of the empirically-confirmed offset (see
+    /// FLEX_SUPPORT_PLAN.md Phase 0) searched for the probe barcode, to absorb
+    /// per-read jitter in the measured dT-run boundary.
+    #[arg(long, default_value_t = 10)]
+    pub probe_barcode_window: isize,
 }
 
 /// R2 length cap accepted by the compatibility preset.

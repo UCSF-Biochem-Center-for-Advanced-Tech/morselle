@@ -12,9 +12,8 @@
 //! pairwise Hamming i7=3 / i5=4, so single-index assignment (when the other index
 //! is truncated — common for i7 on long reads) is unambiguous.
 
-use std::collections::HashMap;
-
 use crate::anchors::{revcomp, R1_PRIMER, R2_PRIMER};
+use crate::hamming_index::HammingIndex;
 use crate::sample_sheet::SampleSheet;
 
 /// Tuning for demultiplexing.
@@ -48,18 +47,12 @@ pub struct Outcome {
     pub via: DemuxVia,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum Slot {
-    Unique(usize),
-    Ambiguous,
-}
-
 /// Matches extracted index sequences to samples.
 pub struct Demuxer {
     sample_ids: Vec<String>,
     index_len: usize,
-    i5_map: HashMap<Box<[u8]>, Slot>,
-    i7_map: HashMap<Box<[u8]>, Slot>,
+    i5_index: HammingIndex<usize>,
+    i7_index: HammingIndex<usize>,
     cfg: DemuxCfg,
 }
 
@@ -68,18 +61,18 @@ impl Demuxer {
     /// `revcomp(i5)` and `i7` (forward), each expanded to ≤`index_max_mm`
     /// neighbors for O(1), error-tolerant lookup.
     pub fn new(sheet: &SampleSheet, cfg: DemuxCfg) -> Self {
-        let mut i5_map = HashMap::new();
-        let mut i7_map = HashMap::new();
+        let mut i5_index = HammingIndex::new();
+        let mut i7_index = HammingIndex::new();
         let index_len = sheet.samples.first().map_or(10, |s| s.i7.len());
         for (idx, s) in sheet.samples.iter().enumerate() {
-            insert_neighbors(&mut i5_map, &revcomp(&s.i5), idx, cfg.index_max_mm);
-            insert_neighbors(&mut i7_map, &s.i7, idx, cfg.index_max_mm);
+            i5_index.insert(&revcomp(&s.i5), idx, cfg.index_max_mm);
+            i7_index.insert(&s.i7, idx, cfg.index_max_mm);
         }
         Demuxer {
             sample_ids: sheet.samples.iter().map(|s| s.id.clone()).collect(),
             index_len,
-            i5_map,
-            i7_map,
+            i5_index,
+            i7_index,
             cfg,
         }
     }
@@ -90,13 +83,6 @@ impl Demuxer {
 
     pub fn index_len(&self) -> usize {
         self.index_len
-    }
-
-    fn lookup(map: &HashMap<Box<[u8]>, Slot>, region: &[u8]) -> Option<usize> {
-        match map.get(region) {
-            Some(Slot::Unique(i)) => Some(*i),
-            _ => None,
-        }
     }
 
     /// Combine per-index sample matches into an outcome.
@@ -127,36 +113,9 @@ impl Demuxer {
 
     /// Assign a read from its (optional) i5/i7 read-region slices (fixed frame).
     pub fn assign(&self, i5_region: Option<&[u8]>, i7_region: Option<&[u8]>) -> Outcome {
-        let a5 = i5_region.and_then(|r| Self::lookup(&self.i5_map, r));
-        let a7 = i7_region.and_then(|r| Self::lookup(&self.i7_map, r));
+        let a5 = i5_region.and_then(|r| self.i5_index.get(r));
+        let a7 = i7_region.and_then(|r| self.i7_index.get(r));
         self.combine(a5, a7)
-    }
-
-    /// Best unique sample match for an index anchored at `start`, trying offsets
-    /// (0, ±1, …, ±`window`) to absorb R1-primer / adapter indels that shift the
-    /// rigid frame. Returns the first offset (smallest |k|) giving a unique hit.
-    fn match_windowed(
-        map: &HashMap<Box<[u8]>, Slot>,
-        seq: &[u8],
-        start: Option<usize>,
-        index_len: usize,
-        window: isize,
-    ) -> Option<usize> {
-        let start = start? as isize;
-        for k in offset_order(window) {
-            let pos = start + k;
-            if pos < 0 {
-                continue;
-            }
-            let pos = pos as usize;
-            if pos + index_len > seq.len() {
-                continue;
-            }
-            if let Some(s) = Self::lookup(map, &seq[pos..pos + index_len]) {
-                return Some(s);
-            }
-        }
-        None
     }
 
     /// Assign a read by offset-tolerant matching around the i5/i7 anchor starts.
@@ -168,15 +127,10 @@ impl Demuxer {
         i7_start: Option<usize>,
         window: isize,
     ) -> Outcome {
-        let a5 = Self::match_windowed(&self.i5_map, seq, i5_start, self.index_len, window);
-        let a7 = Self::match_windowed(&self.i7_map, seq, i7_start, self.index_len, window);
+        let a5 = self.i5_index.find_windowed(seq, i5_start, self.index_len, window);
+        let a7 = self.i7_index.find_windowed(seq, i7_start, self.index_len, window);
         self.combine(a5, a7)
     }
-}
-
-/// Offsets to try, smallest magnitude first: 0, 1, -1, 2, -2, …
-fn offset_order(window: isize) -> impl Iterator<Item = isize> {
-    std::iter::once(0).chain((1..=window).flat_map(|k| [k, -k]))
 }
 
 /// Anchor START positions for i5 and i7 (before any offset search).
@@ -211,43 +165,6 @@ pub fn index_regions<'a>(
         (s + index_len <= seq.len()).then(|| &seq[s..s + index_len])
     });
     (i5, i7)
-}
-
-/// Insert all ≤`max_mm` Hamming neighbors of `seq` into `map`, marking entries
-/// claimed by more than one sample as ambiguous.
-fn insert_neighbors(map: &mut HashMap<Box<[u8]>, Slot>, seq: &[u8], sample: usize, max_mm: u32) {
-    let mut buf = seq.to_vec();
-    enumerate(map, &mut buf, 0, max_mm, sample);
-}
-
-fn enumerate(
-    map: &mut HashMap<Box<[u8]>, Slot>,
-    buf: &mut [u8],
-    pos: usize,
-    budget: u32,
-    sample: usize,
-) {
-    // Record the current variant.
-    map.entry(buf.to_vec().into_boxed_slice())
-        .and_modify(|slot| {
-            if !matches!(slot, Slot::Unique(s) if *s == sample) {
-                *slot = Slot::Ambiguous;
-            }
-        })
-        .or_insert(Slot::Unique(sample));
-    if budget == 0 {
-        return;
-    }
-    for i in pos..buf.len() {
-        let orig = buf[i];
-        for &b in b"ACGT" {
-            if b != orig {
-                buf[i] = b;
-                enumerate(map, buf, i + 1, budget - 1, sample);
-            }
-        }
-        buf[i] = orig;
-    }
 }
 
 #[cfg(test)]

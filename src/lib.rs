@@ -14,11 +14,15 @@ pub mod cr_bam_to_mtx;
 pub mod demux;
 pub mod extract;
 pub mod gzin;
+pub mod hamming_index;
 pub mod homopolymer;
 pub mod io;
 pub mod orient;
 pub mod overlap;
 pub mod pipeline;
+pub mod probe_barcode;
+pub mod probe_demux;
+pub mod probe_sample_sheet;
 pub mod sample_sheet;
 pub mod yc;
 
@@ -31,7 +35,7 @@ use crossbeam_channel::{bounded, Receiver, Sender};
 use rayon::prelude::*;
 use tracing::info;
 
-use crate::accounting::{pct, DemuxMetrics, Metrics, SampleCount, WhitelistMetrics};
+use crate::accounting::{pct, DemuxMetrics, Metrics, ProbeBarcodeMetrics, SampleCount, WhitelistMetrics};
 use crate::anchors::comp;
 use crate::barcode::Whitelist;
 use crate::config::Cli;
@@ -41,6 +45,7 @@ use crate::gzin::{open_fastx, open_fastx_scan};
 use crate::io::{discover_fastqs, PairShardWriter, ShardWriter};
 use crate::orient::{orient, OrientCfg, OrientMode};
 use crate::pipeline::{CbStatus, Orientation, ReadClass};
+use crate::probe_barcode::ProbeWhitelist;
 use crate::sample_sheet::SampleSheet;
 
 /// Flush a target's batch buffer once its raw R1 bytes reach this size. Bounds
@@ -88,6 +93,9 @@ struct Stats {
     via_i7: u64,
     via_conflict: u64,
     per_sample: Vec<u64>,
+    // probe barcode (FLEX_SUPPORT_PLAN.md Phase 1)
+    probe_located: u64,
+    probe_hit: u64,
 }
 
 impl Stats {
@@ -127,6 +135,8 @@ impl Stats {
         self.via_i5 += o.via_i5;
         self.via_i7 += o.via_i7;
         self.via_conflict += o.via_conflict;
+        self.probe_located += o.probe_located;
+        self.probe_hit += o.probe_hit;
         if self.per_sample.len() < o.per_sample.len() {
             self.per_sample.resize(o.per_sample.len(), 0);
         }
@@ -151,6 +161,9 @@ struct Shared<'a> {
     extract_cfg: ExtractCfg,
     demuxer: Option<&'a Demuxer>,
     whitelist: Option<&'a Whitelist>,
+    /// 10x Flex probe-barcode whitelist (FLEX_SUPPORT_PLAN.md Phase 1). `None`
+    /// unless `--probe-barcode-whitelist` was given — zero cost otherwise.
+    probe_wl: Option<&'a ProbeWhitelist>,
     cb_len: usize,
     umi_len: usize,
     cb_gate: bool,
@@ -226,6 +239,22 @@ pub fn run(cli: &Cli) -> Result<()> {
         None => None,
     };
 
+    // Load the Flex probe-barcode whitelist (FLEX_SUPPORT_PLAN.md Phase 1), if
+    // provided. `--minimap2` is required (clap `requires`) since PR/PB ride the
+    // same FASTQ-comment -> SAM-tag mechanism as CR/CB.
+    let probe_wl = match &cli.params.probe_barcode_whitelist {
+        Some(path) => {
+            let w = ProbeWhitelist::load(
+                path,
+                cli.params.probe_barcode_max_mm,
+                cli.params.probe_barcode_window,
+            )?;
+            info!(barcodes = w.len(), path = %path.display(), "loaded probe-barcode whitelist");
+            Some(w)
+        }
+        None => None,
+    };
+
     // Output targets: per-sample then Undetermined (last) when demuxing, else one
     // combined target. Each file is a single thread-safe gzip member.
     let demuxer = sheet
@@ -278,6 +307,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         extract_cfg,
         demuxer: demuxer.as_ref(),
         whitelist: whitelist.as_ref(),
+        probe_wl: probe_wl.as_ref(),
         cb_len,
         umi_len,
         cb_gate: cli.params.cb_gate,
@@ -371,6 +401,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         &stats,
         whitelist.as_ref(),
         demuxer.as_ref(),
+        probe_wl.as_ref(),
         &timing,
         cli.params.minimap2,
         cli.params.processing_tags,
@@ -475,6 +506,16 @@ fn append_processing_tags(header: &mut Vec<u8>, tags: ProcessingTags) {
         header.extend_from_slice(name.as_bytes());
         header.extend_from_slice(value.to_string().as_bytes());
     }
+}
+
+/// Append the Flex probe-barcode tags (FLEX_SUPPORT_PLAN.md Phase 1): `PR` is
+/// the raw observed 10bp probe barcode (whitelist orientation), `PB` the
+/// corrected probe-barcode id (e.g. `D-A01`), empty when unmatched.
+fn append_probe_tags(header: &mut Vec<u8>, raw: &[u8], id: Option<&str>) {
+    header.extend_from_slice(b"\tPR:Z:");
+    header.extend_from_slice(raw);
+    header.extend_from_slice(b"\tPB:Z:");
+    header.extend_from_slice(id.unwrap_or("").as_bytes());
 }
 
 /// Allocate the per-LOGICAL-target raw FASTQ buffers `(R1 bytes, R2 bytes, count)`.
@@ -788,6 +829,15 @@ fn process_one(
             if sh.processing_tags {
                 append_processing_tags(&mut header, processing);
             }
+            if let Some(wl) = sh.probe_wl {
+                if let Some(hit) = e.polyt_end.and_then(|pts| wl.locate(&o.seq, pts)) {
+                    stats.probe_located += 1;
+                    if hit.id.is_some() {
+                        stats.probe_hit += 1;
+                    }
+                    append_probe_tags(&mut header, &hit.raw, hit.id.as_deref());
+                }
+            }
             &header
         } else if sh.processing_tags {
             header = id.to_vec();
@@ -1092,10 +1142,12 @@ fn classify_read(orientation: Orientation, has_r1: bool, has_r2: bool, cb_ok: bo
 }
 
 /// Assemble the serializable metrics summary.
+#[allow(clippy::too_many_arguments)]
 fn build_metrics(
     stats: &Stats,
     whitelist: Option<&Whitelist>,
     demuxer: Option<&Demuxer>,
+    probe_wl: Option<&ProbeWhitelist>,
     t: &Timing,
     minimap2: bool,
     processing_tags: bool,
@@ -1176,6 +1228,12 @@ fn build_metrics(
                     .collect(),
             }
         }),
+        probe_barcode: probe_wl.map(|w| ProbeBarcodeMetrics {
+            size: w.len(),
+            located: stats.probe_located,
+            hit: stats.probe_hit,
+            hit_rate: pct(stats.probe_hit, stats.probe_located),
+        }),
     }
 }
 
@@ -1218,6 +1276,17 @@ fn report(stats: &Stats, demuxer: Option<&Demuxer>, t: &Timing) {
             corrected2 = stats.corrected2,
             gated_out = stats.gated_out,
             "CB gate"
+        );
+    }
+    if stats.probe_located > 0 {
+        info!(
+            located = stats.probe_located,
+            hit = stats.probe_hit,
+            hit_rate = format!(
+                "{:.1}",
+                100.0 * stats.probe_hit as f64 / stats.probe_located.max(1) as f64
+            ),
+            "probe barcode"
         );
     }
     if let Some(d) = demuxer {

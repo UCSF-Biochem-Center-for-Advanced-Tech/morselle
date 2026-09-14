@@ -32,6 +32,10 @@ path = "src/bin/sbxpress-illumina.rs"
 name = "sbxpress-cells"
 path = "src/bin/sbxpress-cells.rs"
 
+[[bin]]
+name = "sbxpress-probe-demux"
+path = "src/bin/sbxpress-probe-demux.rs"
+
 [dependencies]
 needletail = "0.5"
 flate2 = { version = "1.0", features = ["zlib"] }
