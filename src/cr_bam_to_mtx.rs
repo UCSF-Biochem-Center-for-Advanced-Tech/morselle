@@ -51,6 +51,16 @@ pub struct Cli {
     #[arg(long, default_value_t = 1)]
     pub gem_group: u32,
 
+    /// With --barcodes/--cell-barcodes, silently skip a counted molecule
+    /// whose barcode isn't in the template instead of erroring. Off by
+    /// default (a barcode outside the template usually means a genuine
+    /// whitelist/BAM mismatch worth failing loudly on) — turn on when the
+    /// BAM is intentionally a pooled multi-sample input and the template is
+    /// deliberately just one sample's slice of it (e.g. 10x Flex per-sample
+    /// splitting via `probe-demux`'s `<sample>.barcodes.txt`).
+    #[arg(long, default_value_t = false)]
+    pub skip_unlisted_barcodes: bool,
+
     /// Write plain .tsv/.mtx instead of gzip-compressed files.
     #[arg(long)]
     pub no_gzip: bool,
@@ -71,6 +81,9 @@ pub(crate) struct Matrix {
     pub(crate) counts: BTreeMap<(usize, usize), u64>,
     pub(crate) records: u64,
     pub(crate) molecules: u64,
+    /// Counted molecules skipped because their barcode wasn't in the
+    /// template (only nonzero with `--skip-unlisted-barcodes`).
+    pub(crate) barcodes_skipped: u64,
 }
 
 /// Machine-readable run accounting, following the main `sbx10x` app.
@@ -91,6 +104,8 @@ struct Metrics {
     used_barcode_template: bool,
     used_cell_barcode_whitelist: bool,
     gem_group: Option<u32>,
+    skip_unlisted_barcodes: bool,
+    barcodes_skipped: u64,
 }
 
 /// Run the BAM-to-matrix application.
@@ -105,6 +120,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         cli.barcodes.as_deref(),
         cli.cell_barcodes.as_deref(),
         cli.gem_group,
+        cli.skip_unlisted_barcodes,
     )?;
     fs::create_dir_all(&cli.output)
         .with_context(|| format!("creating {}", cli.output.display()))?;
@@ -134,6 +150,8 @@ pub fn run(cli: &Cli) -> Result<()> {
         used_barcode_template: cli.barcodes.is_some(),
         used_cell_barcode_whitelist: cli.cell_barcodes.is_some(),
         gem_group: cli.cell_barcodes.as_ref().map(|_| cli.gem_group),
+        skip_unlisted_barcodes: cli.skip_unlisted_barcodes,
+        barcodes_skipped: matrix.barcodes_skipped,
     };
     let metrics_path = cli.output.join("metrics_summary.json");
     fs::write(&metrics_path, serde_json::to_string_pretty(&metrics)?)
@@ -229,12 +247,14 @@ fn read_cell_barcodes(path: &Path, gem_group: u32) -> Result<Vec<String>> {
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn read_matrix(
     path: &Path,
     feature_template: Option<&Path>,
     barcode_template: Option<&Path>,
     cell_barcode_whitelist: Option<&Path>,
     gem_group: u32,
+    skip_unlisted_barcodes: bool,
 ) -> Result<Matrix> {
     let mut reader =
         bam::Reader::from_path(path).with_context(|| format!("opening BAM {}", path.display()))?;
@@ -296,8 +316,13 @@ fn read_matrix(
         .map(|(index, barcode)| (barcode.as_str(), index))
         .collect();
     let mut counts = BTreeMap::new();
+    let mut barcodes_skipped = 0u64;
     for (feature, barcode) in &molecule_keys {
         let Some(&barcode) = barcode_indexes.get(barcode.as_str()) else {
+            if skip_unlisted_barcodes {
+                barcodes_skipped += 1;
+                continue;
+            }
             bail!("counted barcode {barcode} is absent from barcode template");
         };
         *counts.entry((barcode, *feature)).or_insert(0) += 1;
@@ -308,7 +333,8 @@ fn read_matrix(
         barcodes,
         counts,
         records,
-        molecules: molecule_keys.len() as u64,
+        molecules: molecule_keys.len() as u64 - barcodes_skipped,
+        barcodes_skipped,
     })
 }
 
@@ -500,6 +526,7 @@ mod tests {
             counts: [((0, 0), 2)].into_iter().collect(),
             records: 3,
             molecules: 2,
+            barcodes_skipped: 0,
         };
         let dir = tempfile::tempdir().unwrap();
         write_matrix(&matrix, dir.path(), false).unwrap();
@@ -527,6 +554,7 @@ mod tests {
                 .collect(),
             records: 6,
             molecules: 6,
+            barcodes_skipped: 0,
         };
         let dir = tempfile::tempdir().unwrap();
         write_matrix(&matrix, dir.path(), false).unwrap();
@@ -554,6 +582,7 @@ mod tests {
                 .collect(),
             records: 6,
             molecules: 6,
+            barcodes_skipped: 0,
         };
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("raw_feature_bc_matrix.h5");
@@ -587,5 +616,57 @@ mod tests {
             genomes.iter().map(|x| x.as_str()).collect::<Vec<_>>(),
             ["GRCh38", "GRCh38"]
         );
+    }
+
+    /// A tiny synthetic BAM with two distinct cell barcodes, each with one
+    /// representative (xf bit 8 set) molecule on GENE1.
+    fn two_barcode_bam(dir: &Path) -> PathBuf {
+        let path = dir.join("in.bam");
+        let mut header = bam::Header::new();
+        header.push_record(
+            bam::header::HeaderRecord::new(b"SQ")
+                .push_tag(b"SN", "chr1")
+                .push_tag(b"LN", 1000),
+        );
+        let mut writer = bam::Writer::from_path(&path, &header, bam::Format::Bam).unwrap();
+        let cigar = bam::record::CigarString(vec![bam::record::Cigar::Match(10)]);
+        for (i, cb) in ["AAAAAAAAAAAAAAAA-1", "CCCCCCCCCCCCCCCC-1"].into_iter().enumerate() {
+            let mut r = bam::Record::new();
+            r.set(b"read", Some(&cigar), b"ACGTACGTAC", &[30; 10]);
+            r.set_tid(0);
+            r.set_pos(i as i64);
+            r.push_aux(b"CB", Aux::String(cb)).unwrap();
+            r.push_aux(b"UB", Aux::String("UMI0000AAAA")).unwrap();
+            r.push_aux(b"GX", Aux::String("GENE1")).unwrap();
+            r.push_aux(b"xf", Aux::I32(25)).unwrap();
+            writer.write(&r).unwrap();
+        }
+        drop(writer);
+        path
+    }
+
+    #[test]
+    fn unlisted_barcode_errors_by_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let bam = two_barcode_bam(dir.path());
+        let barcodes_file = dir.path().join("only_one.txt");
+        fs::write(&barcodes_file, "AAAAAAAAAAAAAAAA\n").unwrap();
+
+        let err = read_matrix(&bam, None, None, Some(&barcodes_file), 1, false).unwrap_err();
+        assert!(err.to_string().contains("absent from barcode template"));
+    }
+
+    #[test]
+    fn skip_unlisted_barcodes_drops_them_instead_of_erroring() {
+        let dir = tempfile::tempdir().unwrap();
+        let bam = two_barcode_bam(dir.path());
+        let barcodes_file = dir.path().join("only_one.txt");
+        fs::write(&barcodes_file, "AAAAAAAAAAAAAAAA\n").unwrap();
+
+        let matrix = read_matrix(&bam, None, None, Some(&barcodes_file), 1, true).unwrap();
+        assert_eq!(matrix.barcodes, ["AAAAAAAAAAAAAAAA-1"]);
+        assert_eq!(matrix.barcodes_skipped, 1);
+        assert_eq!(matrix.molecules, 1);
+        assert_eq!(matrix.counts.len(), 1);
     }
 }

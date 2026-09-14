@@ -244,6 +244,60 @@ Revisit with a proper end-to-end run once Phase 6's alignment step exists.
 
 Per sample: `sbxpress matrix <gex.bam> --cell-barcodes <sample>.barcodes.txt -o <sample>/gex_raw`, then `sbxpress cells <sample>/gex_raw/raw_feature_bc_matrix.h5 -o <sample>/gex_outs` (normal OrdMag/EmptyDrops cell-calling per sample — reuses existing, fully general commands per the architecture facts above). This phase is the orchestration script skeleton (`scripts/run_flex_multi.sh`, new file in the sbxpress repo) plus validation, no new Rust.
 
+### Phase 3 — results (2026-09-14)
+
+"Zero new Rust" turned out to be almost, not quite, true — wiring Phase 2's
+real output into Phase 3's real commands (not just reading the plan)
+surfaced two genuine bugs, both only visible by actually chaining the real
+binaries together end-to-end on a small synthetic BAM (built with
+`samtools`/hand-written SAM, `rust-htslib`-tag-compatible):
+
+1. **Phase 2 bug**: `<sample>.barcodes.txt` was writing `CB` values with
+   their `-1` gem-group suffix still attached (our own `CB` tag convention).
+   But `matrix --cell-barcodes` (`cr_bam_to_mtx.rs::read_cell_barcodes`)
+   expects *bare* ACGT barcodes and appends its own `-{gem_group}` suffix —
+   it rejects anything else as "not a valid 10x reference barcode". Every
+   Phase 3 `matrix` call would have failed immediately. Fixed in
+   `probe_demux.rs` with a `strip_gem_suffix` helper (strips a trailing
+   `-<digits>`, not hardcoded to `-1`, in case of a future multi-gem-group
+   run) applied only to the `.barcodes.txt` output — `sample_assignment.csv`
+   keeps the `-1` as-is, since that's meant to read directly against the
+   BAM's own `CB` tag. New tests: `strip_gem_suffix_removes_trailing_digits_only`,
+   `per_sample_barcode_files_are_bare_acgt_matrix_cell_barcodes_ready`.
+2. **Pre-existing `cr_bam_to_mtx.rs` gap, not Flex-specific**: `matrix
+   --cell-barcodes` treats its list as a *strict, exhaustive* whitelist —
+   any barcode counted from the BAM that isn't on the list is a hard error,
+   not a skip. That's the right behavior for its original single-sample use
+   case (an unlisted barcode there usually means a real whitelist/BAM
+   mismatch worth failing loudly on). But Phase 3's whole premise is one
+   **pooled**, multi-sample GEX BAM split *after the fact* by probe barcode
+   — every per-sample `matrix` call legitimately sees plenty of other
+   samples' barcodes too, and would hard-error on the first one. Fixed by
+   adding an opt-in `--skip-unlisted-barcodes` flag (default off, so the
+   existing single-sample behavior/tests are untouched) that skips instead
+   of erroring, and reports how many molecules were skipped in
+   `metrics_summary.json`. New tests: `unlisted_barcode_errors_by_default`,
+   `skip_unlisted_barcodes_drops_them_instead_of_erroring`.
+
+With both fixed, ran the real chain — `sbxpress probe-demux` →
+`sbxpress matrix --skip-unlisted-barcodes` → `sbxpress cells` — through the
+actual compiled binaries (not library calls) against a synthetic 2-sample,
+2-gene pooled BAM (real `samtools`-built), and it produced real
+`filtered_feature_bc_matrix.h5`/`filtered_barcodes.csv` per sample with the
+correct, cross-contamination-free per-sample counts (verified: a molecule
+tagged with an undeclared probe barcode landed in the right sample's count
+via its `CB`, exactly as it should). `scripts/run_flex_multi.sh` runs this
+same chain per sample from `probe-demux`'s output directory, with a clean
+skip for a sample with zero assigned barcodes.
+
+Full suite green throughout (165 lib tests, +4 from this phase), no clippy
+warnings introduced.
+
+**Conclusion: Phase 3 passes** — real orchestration script, and the whole
+Phase 2 → 3 handoff verified end-to-end through actual binaries, not just
+unit tests. Real CAT06 numbers are still blocked on Phase 6's alignment
+step, same as Phases 1–2.
+
 ## Phase 4 — `guide_capture.rs` + `guides` subcommand (CRISPR read → guide assignment)
 
 - New `src/guide_capture.rs`: `FeatureReference::load(csv)` parsing the real `id,name,read,pattern,sequence,feature_type` schema (confirmed against `CAT06/feature_reference_RZ.csv`); parse `pattern` as `<anchor>(BC)` (confirmed layout; flag `(BC)<anchor>` as an explicit unsupported-format error rather than silently mis-parsing). `GuideMatcher` built on Phase 1's shared `HammingIndex`: one index for anchors (windowed, Hamming-tolerant, mirrors `demux::assign_windowed`), then match the preceding `bc_len` bases against a second small index of guides' `sequence` values.

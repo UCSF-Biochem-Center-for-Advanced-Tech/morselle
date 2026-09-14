@@ -300,6 +300,24 @@ fn write_sample_assignment(assignments: &[Assignment], path: &Path) -> Result<()
     Ok(())
 }
 
+/// `matrix --cell-barcodes` (see `cr_bam_to_mtx.rs::read_cell_barcodes`)
+/// expects *bare* ACGT barcodes and appends its own `-{gem_group}` suffix —
+/// it rejects a barcode that already carries one (not pure ACGT). Our own
+/// `CB` tag convention always carries `-1` already (see `lib.rs`'s
+/// `minimap2_header` emission), so strip it back off here to keep
+/// `<sample>.barcodes.txt` directly usable, matching the plan's own
+/// "feeds `matrix --cell-barcodes` directly" requirement. Strips any
+/// trailing `-<digits>`, not just `-1`, in case a future multi-gem-group run
+/// carries a different suffix.
+fn strip_gem_suffix(cb: &str) -> &str {
+    match cb.rfind('-') {
+        Some(i) if !cb[i + 1..].is_empty() && cb[i + 1..].bytes().all(|b| b.is_ascii_digit()) => {
+            &cb[..i]
+        }
+        _ => cb,
+    }
+}
+
 fn write_per_sample_barcodes(sheet: &ProbeSampleSheet, assignments: &[Assignment], out_dir: &Path) -> Result<()> {
     let mut by_sample: HashMap<&str, Vec<&str>> = HashMap::new();
     for a in assignments {
@@ -312,7 +330,7 @@ fn write_per_sample_barcodes(sheet: &ProbeSampleSheet, assignments: &[Assignment
         let mut w = BufWriter::new(File::create(&path)?);
         if let Some(cbs) = by_sample.get(s.id.as_str()) {
             for cb in cbs {
-                writeln!(w, "{cb}")?;
+                writeln!(w, "{}", strip_gem_suffix(cb))?;
             }
         }
     }
@@ -541,5 +559,37 @@ mod tests {
         let tally = read_bam_tally(&bam_path).unwrap();
         assert_eq!(tally.len(), 1);
         assert_eq!(tally[&("CB1-1".to_string(), "D-A01".to_string())], 1);
+    }
+
+    #[test]
+    fn strip_gem_suffix_removes_trailing_digits_only() {
+        assert_eq!(strip_gem_suffix("ACGTACGTACGTACGT-1"), "ACGTACGTACGTACGT");
+        assert_eq!(strip_gem_suffix("ACGTACGTACGTACGT-12"), "ACGTACGTACGTACGT");
+        assert_eq!(strip_gem_suffix("ACGTACGTACGTACGT"), "ACGTACGTACGTACGT"); // no suffix
+        assert_eq!(strip_gem_suffix("D-A01"), "D-A01"); // trailing non-digit -> untouched
+    }
+
+    #[test]
+    fn per_sample_barcode_files_are_bare_acgt_matrix_cell_barcodes_ready() {
+        // The real bug this guards: matrix --cell-barcodes rejects a barcode
+        // that already carries a gem-group suffix (it appends its own), so
+        // writing "CB1-1" instead of "CB1" would break the Phase 2 -> 3 handoff.
+        let t = tally(&[
+            ("AAACCCAAGAAACCCA-1", "D-A01", 50),
+            ("TTTGGGTTCTTTGGGT-1", "D-A02", 50),
+        ]);
+        let assignments = assign(&sheet(), &t, &DemuxCfg { min_molecules: 10 });
+        let dir = tempfile::tempdir().unwrap();
+        write_per_sample_barcodes(&sheet(), &assignments, dir.path()).unwrap();
+
+        let pos_barcodes = std::fs::read_to_string(dir.path().join("Pos.barcodes.txt")).unwrap();
+        let lines: Vec<&str> = pos_barcodes.lines().collect();
+        assert_eq!(lines, vec!["AAACCCAAGAAACCCA", "TTTGGGTTCTTTGGGT"]);
+        for line in &lines {
+            assert!(
+                line.bytes().all(|b| matches!(b, b'A' | b'C' | b'G' | b'T')),
+                "barcode {line} is not bare ACGT"
+            );
+        }
     }
 }

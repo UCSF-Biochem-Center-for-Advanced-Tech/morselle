@@ -559,6 +559,7 @@ fn filtered_matrix(raw: &RawMatrix, selected: &[usize]) -> Matrix {
         counts,
         records: 0,
         molecules,
+        barcodes_skipped: 0,
     }
 }
 
@@ -717,6 +718,7 @@ mod tests {
             counts: [((0, 0), 10), ((1, 0), 2)].into_iter().collect(),
             records: 0,
             molecules: 12,
+            barcodes_skipped: 0,
         };
         write_h5(&matrix, &raw_path, "GRCh38").unwrap();
         let output = temp.path().join("outs");
@@ -757,6 +759,7 @@ mod tests {
             counts: [((0, 0), 10), ((1, 0), 2)].into_iter().collect(),
             records: 0,
             molecules: 12,
+            barcodes_skipped: 0,
         };
         write_h5(&matrix, &raw_path, "GRCh38").unwrap();
         let barcodes_path = temp.path().join("samples.txt");
@@ -801,6 +804,7 @@ mod tests {
             counts: [((0, 0), 10)].into_iter().collect(),
             records: 0,
             molecules: 10,
+            barcodes_skipped: 0,
         };
         write_h5(&matrix, &raw_path, "GRCh38").unwrap();
         let barcodes_path = temp.path().join("samples.txt");
