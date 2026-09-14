@@ -313,10 +313,72 @@ step, same as Phases 1–2.
 
 ## Phase 4 — `guide_capture.rs` + `guides` subcommand (CRISPR read → guide assignment)
 
+> Implemented as `src/feature_capture.rs`/`FeatureMatcher`, not
+> `guide_capture.rs`/`GuideMatcher` — see "Phase 4 — results" below for why
+> (the Phase 0/1 amendment's generalization requirement).
+
 - New `src/guide_capture.rs`: `FeatureReference::load(csv)` parsing the real `id,name,read,pattern,sequence,feature_type` schema (confirmed against `CAT06/feature_reference_RZ.csv`); parse `pattern` as `<anchor>(BC)` (confirmed layout; flag `(BC)<anchor>` as an explicit unsupported-format error rather than silently mis-parsing). `GuideMatcher` built on Phase 1's shared `HammingIndex`: one index for anchors (windowed, Hamming-tolerant, mirrors `demux::assign_windowed`), then match the preceding `bc_len` bases against a second small index of guides' `sequence` values.
 - New `src/bin/sbxpress-guides.rs` (new `[[bin]]`, new dispatcher arm). CLI: `sbxpress guides <R2_FASTQ> --feature-reference <CSV> -o <BAM> [--features-out <TSV>] [--anchor-max-mm 2] [--capture-max-mm 1] [--anchor-window 5]`.
 - Input is the `--minimap2`-preset R2 FASTQ from `extract` on the CRISPR-library i7/i5 stream (no `extract.rs` changes needed — its existing dT-run-anchored bracketing already captures the anchor+capture region as a side effect). Parses `CR/CB/UR/UB/PR/PB` back out of the FASTQ comment, matches guides, emits a **mapped** BAM against a synthetic per-guide contig header (tid=guide index, trivial CIGAR, mapq 60 on match; unmapped — correctly skipped by `molecules` — on no match), tags `GX`/`GN`=guide id/name plus carried `CB`/`UB`/`PB`. `--features-out` writes a canonical `id\tname` TSV (mirrors `annotate_bam.rs`'s `--genes-mtx` create-or-verify pattern) for `matrix --features`.
 - **Validate**: anchor/capture hit rate against `feature_reference_RZ.csv` on real raw reads.
+
+### Phase 4 — results (2026-09-14)
+
+Implemented as `src/feature_capture.rs` (not `guide_capture.rs`) per the
+Phase 0/1 amendment's generalization requirement: `FeatureReference`/
+`FeatureMatcher` are assay-agnostic (no CRISPR- or Flex-specific branching;
+`feature_type` is carried through as data, never dispatched on), `PB` is
+genuinely optional (parsed if present, simply absent from the tag list
+otherwise — verified by a dedicated test with no `PB:Z:` in the input at
+all). `FeatureMatcher` also handles a mixed panel with *different* anchors
+per feature (grouping by `(anchor, capture_len)`, one `HammingIndex` per
+group, one per distinct anchor length) rather than assuming one universal
+anchor — a real scenario (CITE-seq/CMO experiments mix feature types with
+different anchors) the original single-anchor design would have silently
+mishandled. `sbxpress guides` stays the CRISPR-flavored CLI entry point per
+the amendment's suggestion, built on the general matcher.
+
+One deliberate deviation from the plan's literal CLI default: `--anchor-window`
+defaults to 30, not the plan's placeholder 5. That placeholder predates
+Phase 0's empirical finding (anchor at emitted-R2 offset ~10, with jitter
+out to the low teens); 5 would have silently missed the real signal. 30
+covers the confirmed real offset with margin for other constructs, without
+hardcoding a specific expected offset the way probe-barcode's `locate` does
+(unlike the probe barcode, one universal offset isn't something we can
+assume holds for arbitrary future Feature Barcoding constructs, so this
+scans from the read start rather than centering on a guess).
+
+12 new unit tests, including one specifically proving the generalization
+claim rather than just asserting it in a comment
+(`handles_a_mixed_panel_with_different_anchors_per_feature_type`: a
+CRISPR-flavored feature and an "Antibody Capture"-flavored one with
+different anchors, both resolved correctly) and a full `run()`
+end-to-end test asserting on the actual written BAM (mapped record has
+`GX`/`GN` + carried tags including `PB`; unmapped record has no `GX`/`GN`,
+still carries `CB`/`UB`, and correctly has no `PB` when the input never
+had one). 181 lib tests total, no clippy warnings.
+
+**Real-data validation**: ran the actual `sbxpress guides` binary (not a
+diagnostic) against the same 800k-read CB-validation FASTQ used earlier,
+with the real `feature_reference_RZ.csv`:
+
+- 546,491 reads → 83,493 matched (**15.3% hit rate**) — consistent with
+  Phase 0's own ad hoc finding (~13.8% anchor hit rate at the 4-shard
+  scale); the two independent measurements agree.
+- Per-feature: CD45 82,963, `inactive` 530 — same lopsided ratio Phase 0
+  found, consistent with a CD45-knockout screen where `inactive` is a
+  low-abundance control.
+- Verified the BAM directly (not just the metrics JSON): 83,493 mapped +
+  462,998 unmapped = 546,491 exactly; a real mapped record shows
+  `RNAME:CD45 CIGAR:102M GX:Z:CD45 GN:Z:CD45` plus `CB`/`PB` carried
+  through (a real Flex probe barcode landing on a CRISPR-library read,
+  as expected — probe barcodes hybridize before GEM partitioning, so they
+  identify the sample regardless of which physical library a read comes
+  from); a real unmapped record carries `CB`/`UB` but correctly no `GX`/`GN`.
+  `@SQ` header has exactly the 2 synthetic contigs (`CD45`, `inactive`),
+  both the nominal `LN:1000000`.
+
+**Conclusion: Phase 4 passes.**
 
 ## Phase 5 — CRISPR counting + **new protospacer-calling module** (the published-algorithm gap)
 

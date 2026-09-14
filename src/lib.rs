@@ -13,6 +13,7 @@ pub mod config;
 pub mod cr_bam_to_mtx;
 pub mod demux;
 pub mod extract;
+pub mod feature_capture;
 pub mod gzin;
 pub mod hamming_index;
 pub mod homopolymer;
