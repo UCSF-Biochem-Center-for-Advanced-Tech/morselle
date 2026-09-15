@@ -77,13 +77,17 @@ pub struct Cli {
     pub seed: u64,
 }
 
-struct RawMatrix {
-    features: Vec<Feature>,
-    barcodes: Vec<String>,
-    genome: String,
-    data: Vec<u32>,
-    indices: Vec<u32>,
-    indptr: Vec<u32>,
+/// 10x-style CSC feature-barcode matrix (features x barcodes, `indptr`
+/// column/barcode-indexed, `indices` = feature row per nonzero entry).
+/// `pub(crate)`: also read directly by `protospacer_calling.rs` rather than
+/// duplicating this H5-reading logic a third time.
+pub(crate) struct RawMatrix {
+    pub(crate) features: Vec<Feature>,
+    pub(crate) barcodes: Vec<String>,
+    pub(crate) genome: String,
+    pub(crate) data: Vec<u32>,
+    pub(crate) indices: Vec<u32>,
+    pub(crate) indptr: Vec<u32>,
 }
 
 #[derive(Serialize)]
@@ -164,7 +168,7 @@ fn ascii_strings(dataset: hdf5::Dataset) -> Result<Vec<String>> {
         .collect())
 }
 
-fn read_raw(path: &Path) -> Result<RawMatrix> {
+pub(crate) fn read_raw(path: &Path) -> Result<RawMatrix> {
     let file = hdf5::File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let matrix = file.group("matrix")?;
     let features_group = matrix.group("features")?;

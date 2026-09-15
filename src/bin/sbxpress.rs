@@ -20,7 +20,8 @@ Commands:\n\
   matrix     Create 10x-compatible raw feature-barcode matrices\n\
   cells      Call cells and create filtered feature-barcode matrices\n\
   probe-demux  Assign cell barcodes to samples by probe barcode (10x Flex)\n\
-  guides     Assign Feature Barcoding reads (CRISPR guides, antibody/CMO tags) to features\n\n\
+  guides     Assign Feature Barcoding reads (CRISPR guides, antibody/CMO tags) to features\n\
+  protospacer-call  Call CRISPR guide identity per cell (adaptive UMI threshold)\n\n\
 Run 'sbxpress <COMMAND> --help' for command-specific options.\n";
 
 fn helper_dir(executable: &Path) -> Option<PathBuf> {
@@ -49,6 +50,7 @@ fn engine(command: &str) -> Option<&'static str> {
         "cells" => Some("sbxpress-cells"),
         "probe-demux" => Some("sbxpress-probe-demux"),
         "guides" => Some("sbxpress-guides"),
+        "protospacer-call" => Some("sbxpress-protospacer-call"),
         _ => None,
     }
 }
@@ -122,6 +124,7 @@ mod tests {
         assert_eq!(engine("cells"), Some("sbxpress-cells"));
         assert_eq!(engine("probe-demux"), Some("sbxpress-probe-demux"));
         assert_eq!(engine("guides"), Some("sbxpress-guides"));
+        assert_eq!(engine("protospacer-call"), Some("sbxpress-protospacer-call"));
         assert_eq!(engine("minimap"), None);
     }
 }

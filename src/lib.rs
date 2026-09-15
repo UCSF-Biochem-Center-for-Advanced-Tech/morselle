@@ -24,6 +24,7 @@ pub mod pipeline;
 pub mod probe_barcode;
 pub mod probe_demux;
 pub mod probe_sample_sheet;
+pub mod protospacer_calling;
 pub mod sample_sheet;
 pub mod yc;
 

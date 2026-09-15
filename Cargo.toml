@@ -40,6 +40,10 @@ path = "src/bin/sbxpress-probe-demux.rs"
 name = "sbxpress-guides"
 path = "src/bin/sbxpress-guides.rs"
 
+[[bin]]
+name = "sbxpress-protospacer-call"
+path = "src/bin/sbxpress-protospacer-call.rs"
+
 [dependencies]
 needletail = "0.5"
 flate2 = { version = "1.0", features = ["zlib"] }
