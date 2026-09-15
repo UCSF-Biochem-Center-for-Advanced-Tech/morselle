@@ -146,7 +146,7 @@ optional so normal count generation does not make an additional full-BAM pass.
 ```bash
 scripts/sbxpress-gex-pipeline.sh \
   --fastqs raw/device_0/out raw/device_1/out raw/device_2/out raw/device_3/out \
-  --sample-sheet samples.csv --sample M2_GEX \
+  --bclconvert-samplesheet samples.csv --sample M2_GEX \
   --whitelist 737K-arc-v1.txt.gz \
   --mmi GRCh38.splice-sr.mmi \
   --gtf gencode.v44.primary_assembly.basic.annotation.gtf.gz \
@@ -293,7 +293,7 @@ Single directory of run files, all cores, ready for 10x reference:
 ```bash
 sbxpress extract \
   --fastqs   /data/CAT02/raw_fastqs_run1/device_0/out \
-  --sample-sheet /data/CE15204_bclconvert_input.csv \
+  --bclconvert-samplesheet /data/CE15204_bclconvert_input.csv \
   --whitelist    /usr/local/share/sbxpress/737K-arc-v1.txt.gz \
   --out-dir  /data/out/run1 \
   --threads  0 \
@@ -304,7 +304,7 @@ Explicit files across multiple devices:
 
 ```bash
 sbxpress extract --fastqs /data/.../device_{0,1,2,3}/out/PrimaryAnalysis_*.fastq.gz \
-  --sample-sheet sheet.csv --whitelist 737K-arc-v1.txt.gz -o /data/out/run1 --cellranger
+  --bclconvert-samplesheet sheet.csv --whitelist 737K-arc-v1.txt.gz -o /data/out/run1 --cellranger
 ```
 
 Process each SBX run separately (the two runs are the same library in opposite
@@ -315,7 +315,7 @@ orientations; orientation is auto-detected and enforced per file).
 | Flag | Default | Purpose |
 |---|---|---|
 | `--fastqs` | (required) | Input SBX FASTQs: a directory of `PrimaryAnalysis_*.fastq.gz`, or explicit files. |
-| `--sample-sheet` | — | BCL Convert v2 CSV (primary) or a flat `sample,i7,i5` CSV. |
+| `--bclconvert-samplesheet` | — | BCL Convert v2 CSV (primary) or a flat `sample,i7,i5` CSV. |
 | `--whitelist` | — | 10x cell-barcode whitelist (`737K-arc-v1.txt.gz`). |
 | `--out-dir` / `-o` | `sbxpress_out` | Output directory. |
 | `--threads` | 0 (all cores) | Worker pool size. |

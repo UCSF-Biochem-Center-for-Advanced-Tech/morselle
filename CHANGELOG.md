@@ -31,6 +31,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   what's actually applied, so an existing suffix is optional, never
   required, and never silently wins over the flag.
 
+### Changed
+- **Breaking**: `extract --sample-sheet` renamed to `extract
+  --bclconvert-samplesheet`. The old name didn't make clear that this flag
+  is scoped specifically to reads that passed through an Illumina BCL
+  Convert library-conversion step and therefore carry i5/i7 indices at all
+  — a future direct-Roche-library input (no Illumina conversion step) has
+  no i5/i7 present, needs its own demux mechanism entirely, and must never
+  be pointed at this flag. Demux stays fully opt-in either way: unset, no
+  index-based splitting is attempted regardless of what's in the raw reads.
+
 ## [0.3.8] — 2026-09-14
 
 ### Added

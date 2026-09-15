@@ -20,9 +20,16 @@ pub struct Cli {
     #[arg(long, short = 'o', default_value = "sbxpress_out")]
     pub out_dir: PathBuf,
 
-    /// Sample sheet CSV with columns: sample,i7,i5. (Used from M3 onward.)
+    /// BCL Convert v2 sample sheet (or flat `sample,i7,i5` CSV) for i5/i7
+    /// index-based per-library demultiplexing. Scope is deliberately narrow:
+    /// this only applies to reads that passed through an Illumina library
+    /// conversion step and therefore carry i5/i7 indices at all. A direct
+    /// Roche library (no Illumina BCL Convert step) has no i5/i7 present --
+    /// its CB/UMI live at a different position and it must not be given this
+    /// flag. Demux is entirely opt-in: with this unset, no index-based
+    /// splitting is attempted regardless of what the raw reads contain.
     #[arg(long)]
-    pub sample_sheet: Option<PathBuf>,
+    pub bclconvert_samplesheet: Option<PathBuf>,
 
     /// 10x cell-barcode whitelist (e.g. 3M-february-2018.txt[.gz]). (Used from M4.)
     #[arg(long)]
@@ -70,7 +77,7 @@ pub struct Params {
     #[arg(long, value_enum, default_value_t = OrientMode::Auto)]
     pub orientation: OrientMode,
 
-    /// Max mismatches allowed when matching sample-sheet indices.
+    /// Max mismatches allowed when matching BCL Convert sample-sheet indices.
     #[arg(long, default_value_t = 1)]
     pub index_max_mm: u32,
 

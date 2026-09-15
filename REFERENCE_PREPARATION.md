@@ -87,7 +87,7 @@ puts barcode/UMI fields in the FASTQ comment:
 ```bash
 sbxpress extract \
   --fastqs /data/sbx/run \
-  --sample-sheet /data/sample_sheet.csv \
+  --bclconvert-samplesheet /data/sample_sheet.csv \
   --whitelist /path/to/737K-arc-v1.txt.gz \
   --out-dir /data/sbxpress_minimap2 \
   --minimap2

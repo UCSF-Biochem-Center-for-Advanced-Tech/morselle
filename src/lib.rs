@@ -202,17 +202,17 @@ pub fn run(cli: &Cli) -> Result<()> {
         anyhow::bail!("--cellranger and --minimap2 are mutually exclusive output presets");
     }
     let t_start = Instant::now();
-    let sheet = match &cli.sample_sheet {
+    let sheet = match &cli.bclconvert_samplesheet {
         Some(path) => {
             let sheet = SampleSheet::load(path)?;
             info!(
                 samples = sheet.samples.len(),
                 i5_revcomp = sheet.i5_reverse_complemented,
                 chemistry = ?sheet.chemistry,
-                "loaded sample sheet"
+                "loaded BCL Convert sample sheet"
             );
             if sheet.source == crate::sample_sheet::SourceFormat::BclConvert {
-                let flat_path = cli.out_dir.join("sample_sheet.csv");
+                let flat_path = cli.out_dir.join("bclconvert_samplesheet.csv");
                 sheet.write_flat_csv(&flat_path)?;
                 info!(out = %flat_path.display(), "wrote normalized flat sample sheet");
             }

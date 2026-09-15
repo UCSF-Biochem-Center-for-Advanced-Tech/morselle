@@ -53,7 +53,7 @@ REF=/analysis/resources
 
 "$REPO/scripts/sbxpress-gex-pipeline.sh" \
   --fastqs /data/device_0/out /data/device_1/out /data/device_2/out /data/device_3/out \
-  --sample-sheet /data/samples.csv \
+  --bclconvert-samplesheet /data/samples.csv \
   --sample M2_GEX \
   --whitelist "$REF/737K-arc-v1.txt.gz" \
   --mmi "$REF/GRCh38.primary_assembly.gencode-v44.splice-sr.mmi" \
@@ -106,7 +106,7 @@ and omit `--minimap2`:
 ```bash
 sbxpress extract \
   --fastqs /data/device_0/out /data/device_1/out /data/device_2/out /data/device_3/out \
-  --sample-sheet /data/samples.csv \
+  --bclconvert-samplesheet /data/samples.csv \
   --whitelist /references/737K-arc-v1.txt.gz \
   --out-dir /analysis/sbx_fastqs \
   --threads 128 --split 16 --lenient \

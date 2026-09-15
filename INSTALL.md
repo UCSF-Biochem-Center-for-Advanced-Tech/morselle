@@ -226,7 +226,7 @@ Without a whitelist the pipeline still runs but cannot gate/rescue cell barcodes
 1. **Raw SBX FASTQs** — `--fastqs`. Either a directory of
    `PrimaryAnalysis_*.fastq.gz` or an explicit list of files. Plain gzip is
    expected (each file inflates serially; parallelism is across files).
-2. **Sample sheet** — `--sample-sheet`. The BCL Convert v2 CSV
+2. **Sample sheet** — `--bclconvert-samplesheet`. The BCL Convert v2 CSV
    (e.g. `CE15204_bclconvert_input.csv`) is the primary format; a flat
    `sample,i7,i5` CSV is the fallback. A flat CSV is also written to the output.
 3. **Whitelist** — `--whitelist 737K-arc-v1.txt.gz` (see §4).
@@ -240,7 +240,7 @@ Single directory of run files, all cores:
 ```bash
 sbxpress extract \
   --fastqs /data/CAT02/raw_fastqs_run1/device_0/out \
-  --sample-sheet /data/CE15204_bclconvert_input.csv \
+  --bclconvert-samplesheet /data/CE15204_bclconvert_input.csv \
   --whitelist /usr/local/share/sbxpress/737K-arc-v1.txt.gz \
   --out-dir /data/out/run1 \
   --threads 0          # 0 = use all cores
@@ -250,7 +250,7 @@ Explicit files / multiple devices:
 
 ```bash
 sbxpress extract --fastqs /data/.../device_{0,1,2,3}/out/PrimaryAnalysis_*.fastq.gz \
-  --sample-sheet sheet.csv --whitelist 737K-arc-v1.txt.gz -o /data/out/run1
+  --bclconvert-samplesheet sheet.csv --whitelist 737K-arc-v1.txt.gz -o /data/out/run1
 ```
 
 Process each SBX run separately (the two runs are the same library in opposite

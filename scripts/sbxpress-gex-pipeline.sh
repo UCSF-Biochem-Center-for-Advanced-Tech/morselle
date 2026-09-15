@@ -12,14 +12,14 @@ usage() {
 Usage:
   sbxpress-gex-pipeline.sh \
     --fastqs DEVICE_0_OUT DEVICE_1_OUT [...] \
-    --sample-sheet SAMPLES.csv --sample SAMPLE_ID \
+    --bclconvert-samplesheet SAMPLES.csv --sample SAMPLE_ID \
     --whitelist 10X_BARCODES.txt.gz \
     --mmi REFERENCE.mmi --gtf ANNOTATION.gtf.gz --junctions JUNCTIONS.bed \
     --out-dir OUTPUT_DIRECTORY [options]
 
 Required inputs:
   --fastqs DIR [...]       Raw SBX FASTQ directories, one or more device outputs.
-  --sample-sheet FILE      BCL Convert-compatible sample sheet.
+  --bclconvert-samplesheet FILE      BCL Convert-compatible sample sheet.
   --sample NAME            Demultiplexed sample to map and count.
   --whitelist FILE         10x cell-barcode whitelist.
   --mmi FILE               minimap2 splice index.
@@ -93,7 +93,7 @@ while (( $# > 0 )); do
                 shift
             done
             ;;
-        --sample-sheet) SAMPLE_SHEET=${2:?missing value for --sample-sheet}; shift 2 ;;
+        --bclconvert-samplesheet) SAMPLE_SHEET=${2:?missing value for --bclconvert-samplesheet}; shift 2 ;;
         --sample) SAMPLE=${2:?missing value for --sample}; shift 2 ;;
         --whitelist) WHITELIST=${2:?missing value for --whitelist}; shift 2 ;;
         --mmi) MMI=${2:?missing value for --mmi}; shift 2 ;;
@@ -161,7 +161,7 @@ if [[ ! -s "$EXTRACT_DIR/metrics_summary.json" ]]; then
     echo "[1/5] extracting and demultiplexing raw SBX data"
     sbxpress extract \
         --fastqs "${FASTQS[@]}" \
-        --sample-sheet "$SAMPLE_SHEET" \
+        --bclconvert-samplesheet "$SAMPLE_SHEET" \
         --whitelist "$WHITELIST" \
         --out-dir "$EXTRACT_DIR" \
         --threads "$EXTRACT_THREADS" \
