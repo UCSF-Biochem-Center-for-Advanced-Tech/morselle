@@ -18,13 +18,34 @@ use crate::anchors::{revcomp, R1_PRIMER, R2_PRIMER};
 use crate::hamming_index::HammingIndex;
 use crate::sample_sheet::SampleSheet;
 
-/// Which index to use for demux. `I5` needs only `r1s` (no dependency on the
-/// 3' adapter ever being found), so restricting to it reaches the widest
-/// possible population of reads -- but is only safe when the sample sheet's
-/// i5 values alone separate every sample with enough Hamming margin.
+/// A single index, for real-distance measurement (`min_pairwise_hamming`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum IndexSource {
     I5,
+    I7,
+}
+
+/// How to combine i5/i7 for demux assignment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum DemuxMode {
+    /// i5 OR i7: assigned when either matches. Both present must agree (else
+    /// `Conflict` -> unassigned, the safe default when a real disagreement
+    /// shows up); only one present falls back to it alone. Highest recall,
+    /// but that fallback is only as safe as that one index's own standalone
+    /// uniqueness -- see `min_pairwise_hamming`.
+    Dual,
+    /// i5 AND i7: assigned only when both are found and agree. Safety here
+    /// only needs the *declared (i5,i7) pairs* to be distinct across
+    /// samples (true of any valid sheet), not either index alone -- so it's
+    /// always safe, at the cost of needing both ends locatable. The right
+    /// choice when neither index is standalone-unique enough for `I5`/`I7`.
+    Both,
+    /// i5 alone; i7 is never even consulted. Needs only `r1s` -- no
+    /// dependency on the 3' adapter ever being found -- so it reaches the
+    /// widest possible population of reads. Only safe when i5 alone
+    /// separates every sample with enough Hamming margin.
+    I5,
+    /// i7 alone; i5 is never even consulted. Symmetric to `I5`.
     I7,
 }
 
@@ -33,11 +54,11 @@ pub enum IndexSource {
 pub struct DemuxCfg {
     /// Max mismatches when matching an index.
     pub index_max_mm: u32,
-    /// Allow assignment from a single index when the other is unavailable.
-    pub allow_single_index: bool,
-    /// Restrict demux to one index, skipping the other entirely. `None`
-    /// (default) keeps today's dual-index-with-fallback behavior.
-    pub single_index_source: Option<IndexSource>,
+    /// `None` = auto: picks `Dual` if both indices are standalone-safe,
+    /// else whichever single index is safe, else `Both` (always safe by
+    /// construction). Logged at build time either way -- see
+    /// `Demuxer::new`'s `resolved_mode`.
+    pub mode: Option<DemuxMode>,
 }
 
 /// Real minimum pairwise Hamming distance among the sheet's samples, for the
@@ -99,7 +120,7 @@ pub struct Demuxer {
     index_len: usize,
     i5_index: HammingIndex<usize>,
     i7_index: HammingIndex<usize>,
-    cfg: DemuxCfg,
+    resolved_mode: DemuxMode,
 }
 
 impl Demuxer {
@@ -107,24 +128,44 @@ impl Demuxer {
     /// `revcomp(i5)` and `i7` (forward), each expanded to ≤`index_max_mm`
     /// neighbors for O(1), error-tolerant lookup.
     ///
-    /// When `cfg.single_index_source` is set, refuses (rather than silently
-    /// risking ambiguous assignment) unless that index alone separates every
-    /// sample with enough real Hamming margin for `cfg.index_max_mm`.
+    /// `cfg.mode`: `Some(I5)`/`Some(I7)` refuse (rather than silently risk
+    /// ambiguous assignment) unless that index alone separates every sample
+    /// with enough real Hamming margin for `cfg.index_max_mm`; `Some(Dual)`/
+    /// `Some(Both)` are taken as given (`Both`'s safety only needs the
+    /// declared (i5,i7) *pairs* to be distinct, true of any valid sheet, not
+    /// either index alone). `None` (auto) resolves to `Dual` if both indices
+    /// are standalone-safe, else whichever single index is safe, else `Both`
+    /// -- always logged, so the choice is never silent.
     pub fn new(sheet: &SampleSheet, cfg: DemuxCfg) -> Result<Self> {
-        if let Some(source) = cfg.single_index_source {
-            let min_dist = min_pairwise_hamming(sheet, source);
-            let required = 2 * cfg.index_max_mm + 1;
-            if min_dist < required {
-                bail!(
-                    "--demux-index {source:?} is unsafe for this sample sheet: real min pairwise \
-                     Hamming distance is {min_dist}, but unambiguous decoding at --index-max-mm \
-                     {mm} needs > {mm2}. Use dual-index demux (omit --demux-index) or lower \
-                     --index-max-mm.",
-                    mm = cfg.index_max_mm,
-                    mm2 = required - 1,
-                );
-            }
-        }
+        let i5_dist = min_pairwise_hamming(sheet, IndexSource::I5);
+        let i7_dist = min_pairwise_hamming(sheet, IndexSource::I7);
+        let required = 2 * cfg.index_max_mm + 1;
+        let i5_safe = i5_dist >= required;
+        let i7_safe = i7_dist >= required;
+        let auto = cfg.mode.is_none();
+
+        let resolved_mode = match cfg.mode {
+            Some(DemuxMode::I5) if !i5_safe => bail!(unsafe_single_index_msg(
+                DemuxMode::I5, i5_dist, cfg.index_max_mm, required
+            )),
+            Some(DemuxMode::I7) if !i7_safe => bail!(unsafe_single_index_msg(
+                DemuxMode::I7, i7_dist, cfg.index_max_mm, required
+            )),
+            Some(explicit) => explicit,
+            None if i5_safe && i7_safe => DemuxMode::Dual,
+            None if i5_safe => DemuxMode::I5,
+            None if i7_safe => DemuxMode::I7,
+            None => DemuxMode::Both,
+        };
+        tracing::info!(
+            mode = ?resolved_mode,
+            auto,
+            i5_min_hamming = i5_dist,
+            i7_min_hamming = i7_dist,
+            index_max_mm = cfg.index_max_mm,
+            "demux mode resolved"
+        );
+
         let mut i5_index = HammingIndex::new();
         let mut i7_index = HammingIndex::new();
         let index_len = sheet.samples.first().map_or(10, |s| s.i7.len());
@@ -137,7 +178,7 @@ impl Demuxer {
             index_len,
             i5_index,
             i7_index,
-            cfg,
+            resolved_mode,
         })
     }
 
@@ -149,7 +190,11 @@ impl Demuxer {
         self.index_len
     }
 
-    /// Combine per-index sample matches into an outcome.
+    pub fn resolved_mode(&self) -> DemuxMode {
+        self.resolved_mode
+    }
+
+    /// Combine per-index sample matches into an outcome (`Dual`/`Both` modes only).
     fn combine(&self, a5: Option<usize>, a7: Option<usize>) -> Outcome {
         match (a5, a7) {
             (Some(x), Some(y)) if x == y => Outcome {
@@ -160,11 +205,11 @@ impl Demuxer {
                 sample: None,
                 via: DemuxVia::Conflict,
             },
-            (Some(x), None) if self.cfg.allow_single_index => Outcome {
+            (Some(x), None) if self.resolved_mode == DemuxMode::Dual => Outcome {
                 sample: Some(x),
                 via: DemuxVia::I5Only,
             },
-            (None, Some(y)) if self.cfg.allow_single_index => Outcome {
+            (None, Some(y)) if self.resolved_mode == DemuxMode::Dual => Outcome {
                 sample: Some(y),
                 via: DemuxVia::I7Only,
             },
@@ -175,7 +220,7 @@ impl Demuxer {
         }
     }
 
-    /// One index's outcome, standing alone (single-index mode): a hit is
+    /// One index's outcome, standing alone (`I5`/`I7` mode): a hit is
     /// reported the same way dual-index reports a fallback single-index hit
     /// (`I5Only`/`I7Only`), since semantically it's the same situation --
     /// only one index was ever consulted.
@@ -188,14 +233,14 @@ impl Demuxer {
 
     /// Assign a read from its (optional) i5/i7 read-region slices (fixed frame).
     pub fn assign(&self, i5_region: Option<&[u8]>, i7_region: Option<&[u8]>) -> Outcome {
-        match self.cfg.single_index_source {
-            Some(IndexSource::I5) => {
+        match self.resolved_mode {
+            DemuxMode::I5 => {
                 Self::solo(i5_region.and_then(|r| self.i5_index.get(r)), DemuxVia::I5Only)
             }
-            Some(IndexSource::I7) => {
+            DemuxMode::I7 => {
                 Self::solo(i7_region.and_then(|r| self.i7_index.get(r)), DemuxVia::I7Only)
             }
-            None => {
+            DemuxMode::Dual | DemuxMode::Both => {
                 let a5 = i5_region.and_then(|r| self.i5_index.get(r));
                 let a7 = i7_region.and_then(|r| self.i7_index.get(r));
                 self.combine(a5, a7)
@@ -212,22 +257,31 @@ impl Demuxer {
         i7_start: Option<usize>,
         window: isize,
     ) -> Outcome {
-        match self.cfg.single_index_source {
-            Some(IndexSource::I5) => Self::solo(
+        match self.resolved_mode {
+            DemuxMode::I5 => Self::solo(
                 self.i5_index.find_windowed(seq, i5_start, self.index_len, window),
                 DemuxVia::I5Only,
             ),
-            Some(IndexSource::I7) => Self::solo(
+            DemuxMode::I7 => Self::solo(
                 self.i7_index.find_windowed(seq, i7_start, self.index_len, window),
                 DemuxVia::I7Only,
             ),
-            None => {
+            DemuxMode::Dual | DemuxMode::Both => {
                 let a5 = self.i5_index.find_windowed(seq, i5_start, self.index_len, window);
                 let a7 = self.i7_index.find_windowed(seq, i7_start, self.index_len, window);
                 self.combine(a5, a7)
             }
         }
     }
+}
+
+fn unsafe_single_index_msg(mode: DemuxMode, dist: u32, mm: u32, required: u32) -> String {
+    format!(
+        "--demux-index {mode:?} is unsafe for this sample sheet: real min pairwise Hamming \
+         distance is {dist}, but unambiguous decoding at --index-max-mm {mm} needs > {req}. \
+         Use --demux-index dual, both, or lower --index-max-mm.",
+        req = required - 1,
+    )
 }
 
 /// Anchor START positions for i5 and i7 (before any offset search).
@@ -275,12 +329,10 @@ mod tests {
         SampleSheet::load(&p).unwrap()
     }
 
+    /// Auto-resolves to `Dual` on the real fixture (both i5 and i7 are
+    /// standalone-safe there -- see `real_fixture_min_pairwise_hamming_matches_doc_comment`).
     fn cfg() -> DemuxCfg {
-        DemuxCfg {
-            index_max_mm: 1,
-            allow_single_index: true,
-            single_index_source: None,
-        }
+        DemuxCfg { index_max_mm: 1, mode: None }
     }
 
     #[test]
@@ -313,11 +365,7 @@ mod tests {
         let sh = sheet();
         let d = Demuxer::new(
             &sh,
-            DemuxCfg {
-                index_max_mm: 1,
-                allow_single_index: true,
-                single_index_source: Some(IndexSource::I5),
-            },
+            DemuxCfg { index_max_mm: 1, mode: Some(DemuxMode::I5) },
         )
         .unwrap();
         let m2 = sh.samples.iter().position(|s| s.id == "M2_GEX").unwrap();
@@ -337,11 +385,7 @@ mod tests {
         // must be refused, not silently allowed.
         let result = Demuxer::new(
             &sh,
-            DemuxCfg {
-                index_max_mm: 2,
-                allow_single_index: true,
-                single_index_source: Some(IndexSource::I5),
-            },
+            DemuxCfg { index_max_mm: 2, mode: Some(DemuxMode::I5) },
         );
         assert!(result.is_err());
     }
@@ -388,13 +432,42 @@ mod tests {
     }
 
     #[test]
-    fn single_index_disabled() {
+    fn both_mode_requires_agreement_rejects_lone_i5() {
         let sh = sheet();
-        let mut c = cfg();
-        c.allow_single_index = false;
-        let d = Demuxer::new(&sh, c).unwrap();
+        let d = Demuxer::new(&sh, DemuxCfg { index_max_mm: 1, mode: Some(DemuxMode::Both) })
+            .unwrap();
         let o = d.assign(Some(&revcomp(b"TACGATCAAG")), None);
         assert_eq!(o.sample, None);
+    }
+
+    #[test]
+    fn both_mode_assigns_on_real_agreement() {
+        let sh = sheet();
+        let d = Demuxer::new(&sh, DemuxCfg { index_max_mm: 1, mode: Some(DemuxMode::Both) })
+            .unwrap();
+        let m2 = sh.samples.iter().position(|s| s.id == "M2_GEX").unwrap();
+        let o = d.assign(Some(&revcomp(b"TACGATCAAG")), Some(b"TGTAGTCATT"));
+        assert_eq!(o.sample, Some(m2));
+        assert_eq!(o.via, DemuxVia::Dual);
+    }
+
+    #[test]
+    fn auto_picks_dual_when_both_indices_are_standalone_safe() {
+        // Real fixture: i5 min=4, i7 min=3. At index_max_mm=1 (required=3),
+        // both are individually safe, so auto must pick Dual.
+        let sh = sheet();
+        let d = Demuxer::new(&sh, DemuxCfg { index_max_mm: 1, mode: None }).unwrap();
+        assert_eq!(d.resolved_mode(), DemuxMode::Dual);
+    }
+
+    #[test]
+    fn auto_picks_both_when_neither_index_is_standalone_safe() {
+        // Same real fixture, but index_max_mm=2 (required=5): neither i5
+        // (4) nor i7 (3) clears that margin alone, so auto must fall back
+        // to Both -- the only mode still safe by construction.
+        let sh = sheet();
+        let d = Demuxer::new(&sh, DemuxCfg { index_max_mm: 2, mode: None }).unwrap();
+        assert_eq!(d.resolved_mode(), DemuxMode::Both);
     }
 
     #[test]

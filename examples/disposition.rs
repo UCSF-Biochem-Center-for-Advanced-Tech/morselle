@@ -41,8 +41,7 @@ fn main() -> anyhow::Result<()> {
         &sheet,
         DemuxCfg {
             index_max_mm: 1,
-            allow_single_index: true,
-            single_index_source: None,
+            mode: None,
         },
     )?;
     let expected = match orient_arg.as_str() {

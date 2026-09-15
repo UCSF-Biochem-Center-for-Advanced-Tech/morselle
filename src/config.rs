@@ -81,21 +81,19 @@ pub struct Params {
     #[arg(long, default_value_t = 1)]
     pub index_max_mm: u32,
 
-    /// Allow demux assignment from one index when the other is truncated (M3).
-    /// Safe here (min pairwise Hamming i7=3/i5=4); disable for strict dual-index.
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
-    pub single_index: bool,
-
-    /// Restrict index demux to one index, skipping the other entirely (rather
-    /// than the default dual-index-with-per-read-fallback). `i5` needs only
-    /// `r1s` -- no dependency on the 3' adapter ever being found -- so it
-    /// reaches the widest possible population of reads, and also stops
-    /// disagreeing indices ever landing a read as unassigned `Conflict`.
-    /// Refused at startup unless the real sample sheet supports it: the
-    /// chosen index alone must separate every sample with Hamming margin
-    /// `> 2 * --index-max-mm`. Unset (default) keeps today's behavior.
+    /// How to combine i5/i7 for demux assignment: `dual` (i5 OR i7, agree
+    /// when both present, fall back to whichever's present otherwise),
+    /// `both` (i5 AND i7 must both match -- safest, needs only the declared
+    /// (i5,i7) pairs to be distinct, not either index alone), `i5`/`i7`
+    /// (one index only, skipping the other entirely -- `i5` needs only
+    /// `r1s`, no adapter dependency, reaching the widest read population).
+    /// Unset (default): auto -- picks `dual` if both indices are
+    /// standalone-safe (Hamming margin `> 2 * --index-max-mm`), else
+    /// whichever single index is safe, else `both`. `i5`/`i7` are refused at
+    /// startup if the real sample sheet doesn't support them safely, whether
+    /// picked explicitly or by auto.
     #[arg(long, value_enum)]
-    pub demux_index: Option<crate::demux::IndexSource>,
+    pub demux_index: Option<crate::demux::DemuxMode>,
 
     /// Max frame shift (each side) tried when matching i5/i7, to absorb indels in
     /// the R1-primer/adapter region that shift the index. 0 = rigid frame.
@@ -290,8 +288,7 @@ impl Params {
     pub fn demux_cfg(&self) -> DemuxCfg {
         DemuxCfg {
             index_max_mm: self.index_max_mm,
-            allow_single_index: self.single_index,
-            single_index_source: self.demux_index,
+            mode: self.demux_index,
         }
     }
 
