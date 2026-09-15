@@ -105,6 +105,10 @@ struct Stats {
     // FLEX_SUPPORT_PLAN.md's read-metrics comparison.
     per_sample_early: Vec<u64>,
     undetermined_early: u64,
+    via_dual_early: u64,
+    via_i5_only_early: u64,
+    via_i7_only_early: u64,
+    via_conflict_early: u64,
     /// R1 itself was never located (orientation failed, or R1 not found even
     /// though oriented) -- demux is structurally unreachable for these, same
     /// as for Illumina's own index read, which requires nothing about R1/R2
@@ -157,6 +161,10 @@ impl Stats {
         self.probe_hit += o.probe_hit;
         self.undetermined_early += o.undetermined_early;
         self.index_unreachable += o.index_unreachable;
+        self.via_dual_early += o.via_dual_early;
+        self.via_i5_only_early += o.via_i5_only_early;
+        self.via_i7_only_early += o.via_i7_only_early;
+        self.via_conflict_early += o.via_conflict_early;
         if self.per_sample.len() < o.per_sample.len() {
             self.per_sample.resize(o.per_sample.len(), 0);
         }
@@ -622,14 +630,25 @@ fn process_one(
         if sh.demuxer.is_some() {
             match e.r1 {
                 None => stats.index_unreachable += 1,
-                Some(_) => match early_outcome.and_then(|o| o.sample) {
-                    Some(i) => {
-                        if i < stats.per_sample_early.len() {
-                            stats.per_sample_early[i] += 1;
+                Some(_) => {
+                    if let Some(o) = early_outcome {
+                        match o.via {
+                            DemuxVia::Dual => stats.via_dual_early += 1,
+                            DemuxVia::I5Only => stats.via_i5_only_early += 1,
+                            DemuxVia::I7Only => stats.via_i7_only_early += 1,
+                            DemuxVia::Conflict => stats.via_conflict_early += 1,
+                            DemuxVia::None => {}
                         }
                     }
-                    None => stats.undetermined_early += 1,
-                },
+                    match early_outcome.and_then(|o| o.sample) {
+                        Some(i) => {
+                            if i < stats.per_sample_early.len() {
+                                stats.per_sample_early[i] += 1;
+                            }
+                        }
+                        None => stats.undetermined_early += 1,
+                    }
+                }
             }
         }
 
@@ -1425,6 +1444,13 @@ fn report(stats: &Stats, demuxer: Option<&Demuxer>, t: &Timing) {
             undetermined_early = stats.undetermined_early,
             index_unreachable = stats.index_unreachable,
             "  index demux (early, pre-gate -- comparable to Illumina's own post-BCL-Convert demux count)"
+        );
+        info!(
+            via_dual = stats.via_dual_early,
+            via_i5_only = stats.via_i5_only_early,
+            via_i7_only = stats.via_i7_only_early,
+            via_conflict = stats.via_conflict_early,
+            "    index demux (early) via breakdown"
         );
     }
 }
