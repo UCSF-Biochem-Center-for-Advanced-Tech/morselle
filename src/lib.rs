@@ -42,7 +42,7 @@ use crate::accounting::{pct, DemuxMetrics, Metrics, ProbeBarcodeMetrics, SampleC
 use crate::anchors::comp;
 use crate::barcode::Whitelist;
 use crate::config::Cli;
-use crate::demux::{index_anchor_starts, DemuxVia, Demuxer};
+use crate::demux::{index_anchor_starts, DemuxVia, Demuxer, Outcome};
 use crate::extract::{extract, ExtractCfg};
 use crate::gzin::{open_fastx, open_fastx_scan};
 use crate::io::{discover_fastqs, PairShardWriter, ShardWriter};
@@ -96,6 +96,20 @@ struct Stats {
     via_i7: u64,
     via_conflict: u64,
     per_sample: Vec<u64>,
+    // demux (early): the same i5/i7 assignment, computed the moment R1 is
+    // located -- before the CB gate and independent of whether R2/cDNA was
+    // ever found. Reachable for every read that got as far as R1, unlike
+    // `per_sample`/`undetermined` above (only reachable for reads that also
+    // cleared both gates). This is the closest SBX-side analog to Illumina's
+    // own post-BCL-Convert index-only demultiplex count -- see
+    // FLEX_SUPPORT_PLAN.md's read-metrics comparison.
+    per_sample_early: Vec<u64>,
+    undetermined_early: u64,
+    /// R1 itself was never located (orientation failed, or R1 not found even
+    /// though oriented) -- demux is structurally unreachable for these, same
+    /// as for Illumina's own index read, which requires nothing about R1/R2
+    /// content but does require the read to exist at all.
+    index_unreachable: u64,
     // probe barcode (FLEX_SUPPORT_PLAN.md Phase 1)
     probe_located: u64,
     probe_hit: u64,
@@ -106,6 +120,7 @@ impl Stats {
     fn new(n_samples: usize) -> Self {
         Stats {
             per_sample: vec![0; n_samples],
+            per_sample_early: vec![0; n_samples],
             ..Default::default()
         }
     }
@@ -140,10 +155,18 @@ impl Stats {
         self.via_conflict += o.via_conflict;
         self.probe_located += o.probe_located;
         self.probe_hit += o.probe_hit;
+        self.undetermined_early += o.undetermined_early;
+        self.index_unreachable += o.index_unreachable;
         if self.per_sample.len() < o.per_sample.len() {
             self.per_sample.resize(o.per_sample.len(), 0);
         }
         for (a, b) in self.per_sample.iter_mut().zip(o.per_sample.iter()) {
+            *a += b;
+        }
+        if self.per_sample_early.len() < o.per_sample_early.len() {
+            self.per_sample_early.resize(o.per_sample_early.len(), 0);
+        }
+        for (a, b) in self.per_sample_early.iter_mut().zip(o.per_sample_early.iter()) {
             *a += b;
         }
     }
@@ -583,6 +606,32 @@ fn process_one(
         }
         let e = extract(&o.seq, o.cb_umi, o.polyt_start, &sh.extract_cfg);
 
+        // Demux (early): i5/i7 assignment the moment R1 is located, before
+        // any CB-specific work and independent of whether R2/cDNA is ever
+        // found. Both index anchors depend only on `e.r1`/`e.adapter_pos`
+        // (both already set by `extract()` above), never on CB classification
+        // or gating -- so this is the earliest point the assignment can run,
+        // and it's cached (not recomputed) for the actual routing decision
+        // further down, so output is unaffected by moving it here.
+        let early_outcome: Option<Outcome> = sh.demuxer.and_then(|d| {
+            let r1s = e.r1.map(|(s, _)| s)?;
+            let (i5s, i7s) = index_anchor_starts(r1s, e.adapter_pos, sh.index_len);
+            Some(d.assign_windowed(&o.seq, i5s, i7s, sh.index_window))
+        });
+        if sh.demuxer.is_some() {
+            match e.r1 {
+                None => stats.index_unreachable += 1,
+                Some(_) => match early_outcome.and_then(|o| o.sample) {
+                    Some(i) => {
+                        if i < stats.per_sample_early.len() {
+                            stats.per_sample_early[i] += 1;
+                        }
+                    }
+                    None => stats.undetermined_early += 1,
+                },
+            }
+        }
+
         // Classify the cell barcode (CB = first cb_len bp of R1) if a whitelist.
         let cb_status = match (sh.whitelist, e.r1) {
             (Some(w), Some((r1s, _))) => Some(w.classify(&o.seq[r1s..r1s + sh.cb_len])),
@@ -751,10 +800,12 @@ fn process_one(
         }
 
         // Route to a target index: sample, Undetermined (= n_samples), or combined.
+        // Reuses `early_outcome` (computed right after `extract()`, above) --
+        // same inputs (`r1s`/`e.adapter_pos`/`o.seq` are unchanged since
+        // then), so this is the identical result, not a fresh decision.
         let mut index_route = 5; // XI=5: demultiplexing was not requested.
-        let target_idx = if let Some(d) = sh.demuxer {
-            let (i5s, i7s) = index_anchor_starts(r1s, e.adapter_pos, sh.index_len);
-            let outcome = d.assign_windowed(&o.seq, i5s, i7s, sh.index_window);
+        let target_idx = if sh.demuxer.is_some() {
+            let outcome = early_outcome.expect("demuxer set and R1 located => early_outcome computed");
             index_route = match outcome.via {
                 DemuxVia::Dual => 0,
                 DemuxVia::I5Only => 1,
@@ -1212,6 +1263,7 @@ fn build_metrics(
         }),
         demux: demuxer.map(|d| {
             let assigned = stats.pairs_emitted - stats.undetermined;
+            let assigned_early: u64 = stats.per_sample_early.iter().sum();
             DemuxMetrics {
                 assigned,
                 assigned_pct: pct(assigned, stats.pairs_emitted),
@@ -1227,6 +1279,19 @@ fn build_metrics(
                     .map(|(i, id)| SampleCount {
                         sample: id.clone(),
                         pairs: stats.per_sample[i],
+                    })
+                    .collect(),
+                assigned_early,
+                assigned_early_pct: pct(assigned_early, stats.reads),
+                undetermined_early: stats.undetermined_early,
+                index_unreachable: stats.index_unreachable,
+                per_sample_early: d
+                    .sample_ids()
+                    .iter()
+                    .enumerate()
+                    .map(|(i, id)| SampleCount {
+                        sample: id.clone(),
+                        pairs: stats.per_sample_early[i],
                     })
                     .collect(),
             }
@@ -1351,6 +1416,16 @@ fn report(stats: &Stats, demuxer: Option<&Demuxer>, t: &Timing) {
         index_undetermined = has_demux.then_some(stats.undetermined),
         "  lost breakdown"
     );
+    if has_demux {
+        let assigned_early: u64 = stats.per_sample_early.iter().sum();
+        info!(
+            assigned_early,
+            assigned_early_pct = format!("{:.1}", 100.0 * assigned_early as f64 / stats.reads.max(1) as f64),
+            undetermined_early = stats.undetermined_early,
+            index_unreachable = stats.index_unreachable,
+            "  index demux (early, pre-gate -- comparable to Illumina's own post-BCL-Convert demux count)"
+        );
+    }
 }
 
 #[cfg(test)]

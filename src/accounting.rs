@@ -25,6 +25,19 @@ pub struct DemuxMetrics {
     pub via_i7_only: u64,
     pub via_conflict: u64,
     pub per_sample: Vec<SampleCount>,
+    /// Early (pre-gate) demux: assigned the moment R1 was located, independent
+    /// of CB/cDNA outcome -- the closest SBX-side analog to Illumina's own
+    /// post-BCL-Convert index-only demultiplex count. Denominator is
+    /// `total_reads` (matching how Illumina reports its own demux rate,
+    /// against all reads sequenced), not `pairs_emitted`.
+    pub assigned_early: u64,
+    pub assigned_early_pct: f64,
+    pub undetermined_early: u64,
+    /// R1 itself was never located -- demux is structurally unreachable for
+    /// these (SBX has no separate, fixed-position index read the way
+    /// Illumina does; this is the real chemistry floor, not a code gap).
+    pub index_unreachable: u64,
+    pub per_sample_early: Vec<SampleCount>,
 }
 
 /// Top-level run metrics, serialized to `metrics_summary.json`.
