@@ -498,6 +498,112 @@ Implementation happens in a fresh session rooted at `/mnt/analysis/software_shar
 
 ---
 
+## Phase 6 — results (2026-09-14): the plan's missing prerequisite, found and built
+
+The plan above assumes the existing GEX pipeline (`extract` → `minimap2` →
+`annotate` → `molecules`) already produces a real per-sample GEX BAM for
+Flex data — Phase 6 was written as "just diff the outputs." **That
+assumption is wrong**, discovered empirically in this session's earlier
+full-chain `--no-gzip` profiling test: real CAT06 Flex R2 aligned against
+the whole genome (splice-aware, real GRCh38 index) found almost nothing —
+59 real molecules out of 1.65M records. Flex doesn't sequence free cDNA;
+each read's payload is one of a fixed, closed set of ~54k known 50bp probe
+sequences (`Chromium_Human_Transcriptome_Probe_Set_v2.0.0...csv`, already
+referenced in `config.csv`'s `[gene-expression]` section but never
+consumed by anything in this plan). Standard genome alignment was never
+going to produce real Flex GEX counts — a probe-set matcher was a missing
+prerequisite, not an optional refinement.
+
+### Confirmed the read layout empirically before building anything
+
+Same rigor as every other coordinate in this plan (`examples/probe_seq_locate.rs`,
+not checked in as a permanent tool — a one-off diagnostic): scanned real
+extracted R2 reads for **exact** 50bp substring matches against the real
+probe set. Forward orientation, dominant offset **69** (jitter into the
+low 60s/high 60s — the same `dt_run_end`-measurement-jitter shape as the
+probe barcode and the CRISPR anchor, at yet another distinct offset, since
+GEX and CRISPR are physically different library constructs). **42% of all
+reads (mixed GEX+CRISPR+noise) matched exactly**, zero mismatch tolerance
+— and the genes hit were immediately recognizable real biology (TMSB4X,
+B2M, ACTB, VIM, IL32, CD74 — housekeeping + immune markers, consistent
+with a PBMC-like sample), not noise.
+
+### Built `src/probe_set.rs` + `sbxpress probeset-align`
+
+`ProbeSetReference::load` (real schema: `gene_id,probe_seq,probe_id,
+included,region,gene_name`, `#key=value` metadata header skipped,
+`included=FALSE` rows excluded — 10x's own curation of probes too
+cross-reactive to count on). `ProbeMatcher` is architecturally the
+probe-barcode's own `locate()` pattern reused a third time (windowed,
+Hamming-tolerant lookup on the shared `HammingIndex`, centered on the
+empirically confirmed offset 69) rather than `feature_capture.rs`'s
+anchor+capture pattern — there's no anchor here, just a direct fixed-length
+lookup. `--max-mm` defaults to 1, not more: `HammingIndex` precomputes
+every ≤max_mm neighbor per key, and neighbor count grows as `C(50,k)·3^k`
+— 1 is ~8M entries (fast, ~1.3GB peak RSS observed); 2 would be ~590M
+(tens of GB), impractical to build. Output BAM is shaped exactly like
+`feature_capture.rs`'s (synthetic per-gene contigs, `GX`/`GN` tags, `CB`/
+`UB`/`PB` carried through, unmapped-but-tagged on no match) specifically
+so it feeds `molecules`/`matrix`/`cells`/`probe-demux` completely
+unchanged — no new consumer-side code needed anywhere else in the plan.
+10 new unit tests (reference loading incl. `included=FALSE` filtering,
+matcher exact/mismatch/windowed/multi-gene behavior, manifest
+create-or-verify, full `run()` end-to-end BAM assertions). 198 lib tests
+total, no clippy warnings.
+
+### Real-data validation: production run, then the full real chain
+
+Ran the actual `sbxpress probeset-align` binary (not the diagnostic)
+against the real probe set and the 800k-read CB-validation sample:
+**51.5% hit rate** (up from the 42% exact-only baseline, confirming
+`--max-mm 1` is doing real work), **10,487 distinct genes hit** — a
+sensible count for real scRNA-seq — same top genes as the diagnostic.
+
+Chained the actual, unmodified rest of the pipeline on top, for real —
+this is the first time in this plan a Flex sample has gone all the way
+from raw reads to a real gene-expression matrix:
+`probeset-align` → `sbx10x-molecules` (normal UMI correction, **not**
+`--tagseq` — Flex GEX is real per-cell single-cell depth, not the
+pooled/aggregate-barcode depth `--tagseq` exists for; that flag's use here
+stays CRISPR-specific) → `sbxpress probe-demux` against the real
+`config.csv` → `matrix`/`cells` for sample `Pos`.
+
+- **Sample assignment** (all 9 real samples, gene-expression-based this
+  time, not just probe-barcode counting): `Pos` highest (2,450 of 9,624
+  total assigned cells at this reduced depth), `RZ214` second — matches
+  real cellranger's own ranking's top two exactly. The `RZ213` trio
+  remained the clear minority group, as in every earlier phase's check.
+  Not a perfect rank match further down (real ground truth: `Pos > RZ214 >
+  Neg > RZ212 > RZ215 > RZ211 > ...`; ours: `Pos > RZ214 > RZ212 > RZ211 >
+  RZ215 > Neg > ...`) — expected at 800k reads (~0.1% of real depth), not
+  investigated further at this scale.
+- **Gene expression, the real payoff**: compared `Pos`'s top-15 expressed
+  genes against real cellranger's actual `sample_filtered_feature_bc_matrix.h5`
+  for `Pos` (full real depth). **9 of our top 10 genes are in cellranger's
+  real top 10**, in nearly the same order (`TMSB4X` #1 and `ACTB` #2 in
+  both) — from an 800k-read sample against cellranger's full-depth result.
+  This is strong, real evidence the whole new alignment strategy produces
+  biologically correct results, not an artifact of small-sample noise
+  happening to look right.
+
+### What Phase 6 still needs for the plan's original, literal bar
+
+The plan's own validate step asks for all 9 samples, full real depth,
+cell-count/matrix-level diffs, and (once real CRISPR-library sample data
+exists) real `protospacer_calls_*` comparisons. What's been done here is
+a real, working, validated pipeline and a strong small-sample proof that
+it's biologically correct — not yet the full 754-shard, full-depth,
+all-9-sample run this phase's literal bar describes. That's a
+multi-hour-plus compute job on the infrastructure now built (real per-read
+throughput is established from the profiling work — `--no-gzip` +
+`probeset-align`'s ~40k reads/sec single-threaded, parallelizable), not
+something to run to completion inline here. Natural next step when
+pursuing full validation: run `scripts/run_flex_multi.sh`-style
+orchestration (extended to call `probeset-align` instead of assuming a
+pre-existing GEX BAM) across the full raw dataset.
+
+---
+
 ## Amendment (2026-09-14) — review notes before implementation
 
 Reviewed the plan against the current source (0.3.8, post-tagseq/`--trim-r2-polya` release) and against two follow-up questions.

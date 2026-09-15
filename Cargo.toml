@@ -44,6 +44,10 @@ path = "src/bin/sbxpress-guides.rs"
 name = "sbxpress-protospacer-call"
 path = "src/bin/sbxpress-protospacer-call.rs"
 
+[[bin]]
+name = "sbxpress-probeset-align"
+path = "src/bin/sbxpress-probeset-align.rs"
+
 [dependencies]
 needletail = "0.5"
 flate2 = { version = "1.0", features = ["zlib"] }
