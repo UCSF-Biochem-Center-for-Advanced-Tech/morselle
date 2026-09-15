@@ -86,6 +86,17 @@ pub struct Params {
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub single_index: bool,
 
+    /// Restrict index demux to one index, skipping the other entirely (rather
+    /// than the default dual-index-with-per-read-fallback). `i5` needs only
+    /// `r1s` -- no dependency on the 3' adapter ever being found -- so it
+    /// reaches the widest possible population of reads, and also stops
+    /// disagreeing indices ever landing a read as unassigned `Conflict`.
+    /// Refused at startup unless the real sample sheet supports it: the
+    /// chosen index alone must separate every sample with Hamming margin
+    /// `> 2 * --index-max-mm`. Unset (default) keeps today's behavior.
+    #[arg(long, value_enum)]
+    pub demux_index: Option<crate::demux::IndexSource>,
+
     /// Max frame shift (each side) tried when matching i5/i7, to absorb indels in
     /// the R1-primer/adapter region that shift the index. 0 = rigid frame.
     #[arg(long, default_value_t = 3)]
@@ -280,6 +291,7 @@ impl Params {
         DemuxCfg {
             index_max_mm: self.index_max_mm,
             allow_single_index: self.single_index,
+            single_index_source: self.demux_index,
         }
     }
 

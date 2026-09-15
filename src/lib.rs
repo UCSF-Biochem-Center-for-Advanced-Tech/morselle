@@ -285,7 +285,8 @@ pub fn run(cli: &Cli) -> Result<()> {
     // combined target. Each file is a single thread-safe gzip member.
     let demuxer = sheet
         .as_ref()
-        .map(|s| Demuxer::new(s, cli.params.demux_cfg()));
+        .map(|s| Demuxer::new(s, cli.params.demux_cfg()))
+        .transpose()?;
     let n_samples = demuxer.as_ref().map_or(1, |d| d.sample_ids().len());
     let glevel = cli.params.output_gzip_level();
     let split = cli.params.split.max(1);

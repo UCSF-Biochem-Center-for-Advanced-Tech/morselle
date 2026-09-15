@@ -42,8 +42,9 @@ fn main() -> anyhow::Result<()> {
         DemuxCfg {
             index_max_mm: 1,
             allow_single_index: true,
+            single_index_source: None,
         },
-    );
+    )?;
     let expected = match orient_arg.as_str() {
         "p7-led" => Orientation::P7Led,
         _ => Orientation::P5Led,

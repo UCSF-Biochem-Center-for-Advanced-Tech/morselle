@@ -38,8 +38,9 @@ fn main() -> anyhow::Result<()> {
         DemuxCfg {
             index_max_mm: 1,
             allow_single_index: true,
+            single_index_source: None,
         },
-    );
+    )?;
     let ilen = demux.index_len();
     let expected = if orient_arg == "p7-led" {
         Orientation::P7Led
