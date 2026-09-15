@@ -222,6 +222,17 @@ struct Shared<'a> {
     targets: &'a [PairShardWriter],
     /// Side channel for reads that never produce a pair. See `--failed-output`.
     failed: Option<&'a ShardWriter>,
+    /// Round-robin source for `process_file`'s per-file chunk assignment (the
+    /// "many files" path). Shared and atomic, not per-thread: real per-file
+    /// yield varies a lot (some raw shards pass far more reads than others),
+    /// and rayon's work-stealing doesn't guarantee an even file count per
+    /// thread either, so keying chunk-choice off which thread happened to
+    /// claim a file let a handful of high-yield files landing on the same
+    /// thread permanently skew that one chunk file to several times the
+    /// median size. A shared counter, incremented once per file regardless
+    /// of which thread claims it, decorrelates chunk assignment from any
+    /// thread-level yield clustering.
+    chunk_counter: &'a AtomicUsize,
 }
 
 /// Entry point invoked by the binary. Orients each read to canonical P5→P7,
@@ -336,6 +347,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         .as_ref()
         .map(|path| ShardWriter::create(path, glevel))
         .transpose()?;
+    let chunk_counter = AtomicUsize::new(0);
     let shared = Shared {
         orient_cfg,
         orient_mode: cli.params.orientation,
@@ -358,6 +370,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         processing_tags: cli.params.processing_tags,
         targets: &targets,
         failed: failed_writer.as_ref(),
+        chunk_counter: &chunk_counter,
     };
 
     // Process files in parallel — each plain-gzip file inflates serially on one
@@ -971,10 +984,16 @@ fn process_file(input: &Path, sh: &Shared) -> Result<Stats> {
         ..sh.orient_cfg
     };
 
-    // This worker writes to one chunk per logical target (so each chunk file is
-    // touched by few threads — parallel per-sample compression). The rayon worker
-    // index is stable for the duration of this task.
-    let chunk = rayon::current_thread_index().unwrap_or(0) % sh.split;
+    // One chunk per logical target for this whole file (parallel per-sample
+    // compression). Chosen via a shared round-robin counter, not this
+    // thread's identity: real per-file yield varies substantially, and
+    // tying chunk choice to the processing thread let a handful of
+    // high-yield files that happened to land on the same thread (via
+    // rayon's work-stealing) permanently skew that thread's chunk to
+    // several times the median size (real CAT06 full run: 2 of 128 chunks
+    // came out ~4.4x the median, becoming the long-pole stragglers for
+    // every downstream per-chunk consumer).
+    let chunk = sh.chunk_counter.fetch_add(1, Ordering::Relaxed) % sh.split;
     let n_targets = sh.targets.len() / sh.split;
     let mut bufs = make_target_bufs(n_targets);
     let mut failed_buf = Vec::new();
