@@ -130,9 +130,23 @@ impl Dna {
     }
 }
 
+/// No `PB` tag on this record (non-Flex data, or a probe barcode that
+/// wasn't confidently located) -- `sample` is genuinely absent, not merely
+/// unknown-but-present, so this must never collide with a real interned id.
+const NO_SAMPLE: u32 = u32::MAX;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct RawKey {
     cell: Dna,
+    /// Interned `PB` (probe/sample barcode) tag, or `NO_SAMPLE` if absent.
+    /// Required for Flex data: the same 16bp `CB` whitelist is shared
+    /// across every sample in a pooled Flex run (confirmed on real CAT06
+    /// data -- 99.8% of observed cell barcodes are shared by more than one
+    /// sample), so `cell` alone is not a unique cell identity there. Every
+    /// place that groups or looks up by `(cell, ...)` for correction or
+    /// collision-resolution purposes must include `sample` too, or reads
+    /// from different samples sharing a `CB` get silently merged.
+    sample: u32,
     gene: u32,
     umi: Dna,
 }
@@ -385,17 +399,45 @@ fn better(record: &bam::Record, ordinal: u64, evidence: &Evidence) -> bool {
                     && ordinal < evidence.best_ordinal)))
 }
 
+/// Intern a `PB` tag value (if present) into a compact id, or `NO_SAMPLE`
+/// if the record carries no probe/sample barcode at all -- included only
+/// when present, per the `RawKey::sample` doc comment.
+fn intern_sample(
+    pb: Option<String>,
+    samples: &mut Vec<String>,
+    sample_ids: &mut HashMap<String, u32>,
+) -> u32 {
+    let Some(pb) = pb else { return NO_SAMPLE };
+    if let Some(&id) = sample_ids.get(&pb) {
+        id
+    } else {
+        let id = samples.len() as u32;
+        samples.push(pb.clone());
+        sample_ids.insert(pb, id);
+        id
+    }
+}
+
+#[allow(clippy::type_complexity)]
 fn collect_evidence(
     path: &Path,
     threads: usize,
     metrics: &mut Metrics,
-) -> Result<(HashMap<RawKey, Evidence>, Vec<String>, HashMap<String, u32>)> {
+) -> Result<(
+    HashMap<RawKey, Evidence>,
+    Vec<String>,
+    HashMap<String, u32>,
+    Vec<String>,
+    HashMap<String, u32>,
+)> {
     let mut reader =
         bam::Reader::from_path(path).with_context(|| format!("opening {}", path.display()))?;
     reader.set_threads(threads)?;
     let mut evidence = HashMap::<RawKey, Evidence>::new();
     let mut genes = Vec::<String>::new();
     let mut gene_ids = HashMap::<String, u32>::new();
+    let mut samples = Vec::<String>::new();
+    let mut sample_ids = HashMap::<String, u32>::new();
     eprintln!("[sbxpress molecules] phase=evidence_collect mode=serial start");
     for (ordinal, result) in reader.records().enumerate() {
         let record = result.context("reading BAM in evidence pass")?;
@@ -429,8 +471,9 @@ fn collect_evidence(
             gene_ids.insert(gene, id);
             id
         };
+        let sample = intern_sample(aux_string(&record, b"PB"), &mut samples, &mut sample_ids);
         metrics.eligible_records += 1;
-        let key = RawKey { cell, gene, umi };
+        let key = RawKey { cell, sample, gene, umi };
         let ordinal = ordinal as u64;
         evidence
             .entry(key)
@@ -457,12 +500,13 @@ fn collect_evidence(
         metrics.eligible_records,
         evidence.len()
     );
-    Ok((evidence, genes, gene_ids))
+    Ok((evidence, genes, gene_ids, samples, sample_ids))
 }
 
 struct RegionEvidence {
     evidence: HashMap<RawKey, Evidence>,
     genes: Vec<String>,
+    samples: Vec<String>,
     records: u64,
     eligible_records: u64,
 }
@@ -527,6 +571,8 @@ fn collect_region(path: &Path, tid: u32, start: u64, end: u64) -> Result<RegionE
     let mut evidence = HashMap::<RawKey, Evidence>::new();
     let mut genes = Vec::<String>::new();
     let mut gene_ids = HashMap::<String, u32>::new();
+    let mut samples = Vec::<String>::new();
+    let mut sample_ids = HashMap::<String, u32>::new();
     let mut records = 0_u64;
     let mut eligible_records = 0_u64;
     for result in reader.records() {
@@ -560,8 +606,9 @@ fn collect_region(path: &Path, tid: u32, start: u64, end: u64) -> Result<RegionE
             gene_ids.insert(gene, id);
             id
         };
+        let sample = intern_sample(aux_string(&record, b"PB"), &mut samples, &mut sample_ids);
         eligible_records += 1;
-        let key = RawKey { cell, gene, umi };
+        let key = RawKey { cell, sample, gene, umi };
         let candidate = Evidence {
             reads: 1,
             best_ordinal: record_identity(&record),
@@ -577,6 +624,7 @@ fn collect_region(path: &Path, tid: u32, start: u64, end: u64) -> Result<RegionE
     Ok(RegionEvidence {
         evidence,
         genes,
+        samples,
         records,
         eligible_records,
     })
@@ -596,12 +644,19 @@ fn indexed_regions(path: &Path, chunk_bases: u64) -> Result<Vec<(u32, u64, u64)>
     Ok(regions)
 }
 
+#[allow(clippy::type_complexity)]
 fn collect_evidence_indexed(
     path: &Path,
     workers: usize,
     chunk_bases: u64,
     metrics: &mut Metrics,
-) -> Result<(HashMap<RawKey, Evidence>, Vec<String>, HashMap<String, u32>)> {
+) -> Result<(
+    HashMap<RawKey, Evidence>,
+    Vec<String>,
+    HashMap<String, u32>,
+    Vec<String>,
+    HashMap<String, u32>,
+)> {
     if chunk_bases == 0 {
         bail!("--evidence-chunk-bases must be greater than zero");
     }
@@ -642,7 +697,10 @@ fn collect_evidence_indexed(
     eprintln!("[sbxpress molecules] phase=evidence_collect mode=indexed complete");
     let mut genes = Vec::<String>::new();
     let mut gene_ids = HashMap::<String, u32>::new();
+    let mut samples = Vec::<String>::new();
+    let mut sample_ids = HashMap::<String, u32>::new();
     let mut remaps = Vec::with_capacity(parts.len());
+    let mut sample_remaps = Vec::with_capacity(parts.len());
     for part in &parts {
         metrics.records += part.records;
         metrics.eligible_records += part.eligible_records;
@@ -661,6 +719,21 @@ fn collect_evidence_indexed(
             })
             .collect();
         remaps.push(remap);
+        let sample_remap: Vec<u32> = part
+            .samples
+            .iter()
+            .map(|sample| {
+                if let Some(&id) = sample_ids.get(sample) {
+                    id
+                } else {
+                    let id = samples.len() as u32;
+                    sample_ids.insert(sample.clone(), id);
+                    samples.push(sample.clone());
+                    id
+                }
+            })
+            .collect();
+        sample_remaps.push(sample_remap);
     }
     eprintln!(
         "[sbxpress molecules] phase=evidence_remap start regions={} records={} eligible={}",
@@ -672,10 +745,14 @@ fn collect_evidence_indexed(
         parts
             .into_par_iter()
             .zip(remaps.into_par_iter())
-            .map(|(part, remap)| {
+            .zip(sample_remaps.into_par_iter())
+            .map(|((part, remap), sample_remap)| {
                 let mut map = HashMap::with_capacity(part.evidence.len());
                 for (mut key, item) in part.evidence {
                     key.gene = remap[key.gene as usize];
+                    if key.sample != NO_SAMPLE {
+                        key.sample = sample_remap[key.sample as usize];
+                    }
                     map.entry(key)
                         .and_modify(|current| merge_item(current, item))
                         .or_insert(item);
@@ -694,7 +771,7 @@ fn collect_evidence_indexed(
         "[sbxpress molecules] phase=evidence_merge complete raw_nodes={}",
         evidence.len()
     );
-    Ok((evidence, genes, gene_ids))
+    Ok((evidence, genes, gene_ids, samples, sample_ids))
 }
 
 fn correct_group(
@@ -751,9 +828,18 @@ fn build_decisions(
     workers: usize,
     tagseq: bool,
 ) -> (HashMap<RawKey, Decision>, Option<Saturation>) {
-    let mut groups = HashMap::<(Dna, u32), Vec<RawKey>>::new();
+    // Grouped by (cell, sample, gene), not just (cell, gene): the same CB
+    // whitelist is shared across every sample in a pooled Flex run, so
+    // omitting `sample` here would let correct_group()'s internal by-UMI
+    // map (keyed on UMI alone within a group) silently overwrite one
+    // sample's evidence with another's whenever two samples' reads for the
+    // same cell+gene happen to share a UMI value.
+    let mut groups = HashMap::<(Dna, u32, u32), Vec<RawKey>>::new();
     for &key in evidence.keys() {
-        groups.entry((key.cell, key.gene)).or_default().push(key);
+        groups
+            .entry((key.cell, key.sample, key.gene))
+            .or_default()
+            .push(key);
     }
     eprintln!(
         "[sbxpress molecules] phase=umi_group_index complete groups={} raw_nodes={}",
@@ -763,7 +849,7 @@ fn build_decisions(
     let mut saturation =
         saturation_interval.map(|interval| Saturation::new(metrics.eligible_records, interval));
     if let Some(curve) = saturation.as_mut() {
-        for (&(cell, gene), keys) in &groups {
+        for (&(cell, _sample, gene), keys) in &groups {
             let min_hash = keys
                 .iter()
                 .map(|key| evidence[key].min_read_hash)
@@ -881,10 +967,13 @@ fn build_decisions(
     );
 
     eprintln!("[sbxpress molecules] phase=gene_collision_index start");
-    let mut collisions = HashMap::<(Dna, Dna), Vec<RawKey>>::new();
+    // (cell, sample, umi): same reasoning as the umi_group_index above --
+    // without `sample`, two different samples' molecules sharing a cell+UMI
+    // would look like one real molecule colliding across two genes.
+    let mut collisions = HashMap::<(Dna, u32, Dna), Vec<RawKey>>::new();
     for &root in molecules.keys() {
         collisions
-            .entry((root.cell, root.umi))
+            .entry((root.cell, root.sample, root.umi))
             .or_default()
             .push(root);
     }
@@ -990,6 +1079,7 @@ fn write_output(
     decisions: &HashMap<RawKey, Decision>,
     genes: &[String],
     gene_ids: &HashMap<String, u32>,
+    sample_ids: &HashMap<String, u32>,
     metrics: &mut Metrics,
 ) -> Result<()> {
     eprintln!("[sbxpress molecules] phase=bam_write start");
@@ -1007,8 +1097,18 @@ fn write_output(
                 .or_else(|| aux_string(&record, b"UB"))
                 .and_then(|v| Dna::pack(&v));
             let gene = choose_gene(&record).and_then(|(g, _)| gene_ids.get(&g).copied());
-            match (cell, gene, umi) {
-                (Some(cell), Some(gene), Some(umi)) => Some(RawKey { cell, gene, umi }),
+            // Mirror intern_sample()'s original key construction exactly:
+            // no PB tag -> NO_SAMPLE; a PB tag present but somehow not in
+            // sample_ids (shouldn't happen, same BAM the ids were built
+            // from) -> None, same safe fall-through as an unknown gene.
+            let sample = match aux_string(&record, b"PB") {
+                None => Some(NO_SAMPLE),
+                Some(pb) => sample_ids.get(&pb).copied(),
+            };
+            match (cell, sample, gene, umi) {
+                (Some(cell), Some(sample), Some(gene), Some(umi)) => {
+                    Some(RawKey { cell, sample, gene, umi })
+                }
                 _ => None,
             }
         } else {
@@ -1092,7 +1192,7 @@ fn main() -> Result<()> {
         tagseq: cli.tagseq,
         ..Default::default()
     };
-    let (evidence, genes, gene_ids) = if cli.evidence_workers > 1 {
+    let (evidence, genes, gene_ids, _samples, sample_ids) = if cli.evidence_workers > 1 {
         info!(
             workers = cli.evidence_workers,
             "collecting evidence from indexed BAM regions"
@@ -1132,7 +1232,7 @@ fn main() -> Result<()> {
         metrics.saturation = Some(curve.write(path)?);
         eprintln!("[sbxpress molecules] phase=saturation_write complete");
     }
-    write_output(&cli, &decisions, &genes, &gene_ids, &mut metrics)?;
+    write_output(&cli, &decisions, &genes, &gene_ids, &sample_ids, &mut metrics)?;
     metrics.elapsed_secs = started.elapsed().as_secs_f64();
     let metrics_path = cli
         .metrics
@@ -1215,16 +1315,19 @@ mod tests {
         let mut input = HashMap::new();
         let gene0_major = RawKey {
             cell,
+            sample: NO_SAMPLE,
             gene: 0,
             umi: major,
         };
         let gene0_error = RawKey {
             cell,
+            sample: NO_SAMPLE,
             gene: 0,
             umi: error,
         };
         let gene1_major = RawKey {
             cell,
+            sample: NO_SAMPLE,
             gene: 1,
             umi: major,
         };
@@ -1253,6 +1356,69 @@ mod tests {
         );
     }
 
+    /// Real-data-motivated regression: on real CAT06 Flex data, 99.8% of
+    /// observed cell barcodes are shared by more than one sample (the same
+    /// CB whitelist is reused across every pooled sample), so `cell` alone
+    /// is not a unique identity there. Two different samples' reads sharing
+    /// a cell+gene+UMI must never be merged into one evidence node, corrected
+    /// against each other, or resolved as a cross-gene collision against
+    /// each other -- each must come out `Outcome::Unique` on its own.
+    #[test]
+    fn different_samples_sharing_cell_gene_umi_are_never_merged() {
+        let cell = Dna::pack("AACCGGTTAACCGGTT").unwrap();
+        let umi = Dna::pack("AAAAAAAAAAAA").unwrap();
+        let mut input = HashMap::new();
+        let sample_a = RawKey {
+            cell,
+            sample: 0,
+            gene: 0,
+            umi,
+        };
+        let sample_b = RawKey {
+            cell,
+            sample: 1,
+            gene: 0,
+            umi,
+        };
+        input.insert(sample_a, evidence(10, 0));
+        input.insert(sample_b, evidence(7, 1));
+
+        let mut metrics = Metrics::default();
+        let (decisions, _) = build_decisions(&input, &mut metrics, None, 1, false);
+        // Neither read of `sample_a`'s evidence, nor a collision group of 2.
+        assert_eq!(decisions[&sample_a].outcome, Outcome::Unique);
+        assert_eq!(decisions[&sample_b].outcome, Outcome::Unique);
+        assert_eq!(decisions[&sample_a].collision_degree, 1);
+        assert_eq!(decisions[&sample_b].collision_degree, 1);
+        assert_eq!(metrics.collision_groups, 0);
+        assert_eq!(metrics.molecules_counted, 2);
+        assert_eq!(metrics.umi_nodes_collapsed, 0);
+
+        let mut parallel_metrics = Metrics::default();
+        let (parallel, _) = build_decisions(&input, &mut parallel_metrics, None, 2, false);
+        assert_eq!(parallel[&sample_a].outcome, Outcome::Unique);
+        assert_eq!(parallel[&sample_b].outcome, Outcome::Unique);
+        assert_eq!(parallel_metrics.molecules_counted, 2);
+    }
+
+    #[test]
+    fn intern_sample_only_includes_pb_when_present() {
+        let mut samples = Vec::new();
+        let mut sample_ids = HashMap::new();
+        assert_eq!(
+            intern_sample(None, &mut samples, &mut sample_ids),
+            NO_SAMPLE
+        );
+        let a = intern_sample(Some("D-A01".to_string()), &mut samples, &mut sample_ids);
+        let b = intern_sample(Some("D-A02".to_string()), &mut samples, &mut sample_ids);
+        let a_again = intern_sample(Some("D-A01".to_string()), &mut samples, &mut sample_ids);
+        assert_ne!(a, NO_SAMPLE);
+        assert_ne!(b, NO_SAMPLE);
+        assert_ne!(a, b);
+        assert_eq!(a, a_again);
+        assert_eq!(samples.len(), 2);
+    }
+
     #[test]
     fn tagseq_counts_every_gene_in_a_collision_instead_of_picking_a_winner() {
         // Same raw evidence as corrects_within_gene_then_resolves_cross_gene_collision,
@@ -1269,16 +1435,19 @@ mod tests {
         let mut input = HashMap::new();
         let gene0_major = RawKey {
             cell,
+            sample: NO_SAMPLE,
             gene: 0,
             umi: major,
         };
         let gene0_error = RawKey {
             cell,
+            sample: NO_SAMPLE,
             gene: 0,
             umi: error,
         };
         let gene1_major = RawKey {
             cell,
+            sample: NO_SAMPLE,
             gene: 1,
             umi: major,
         };
@@ -1321,8 +1490,8 @@ mod tests {
     fn equal_cross_gene_support_is_not_counted() {
         let cell = Dna::pack("AACCGGTTAACCGGTT").unwrap();
         let umi = Dna::pack("ACGTACGTACGT").unwrap();
-        let a = RawKey { cell, gene: 0, umi };
-        let b = RawKey { cell, gene: 1, umi };
+        let a = RawKey { cell, sample: NO_SAMPLE, gene: 0, umi };
+        let b = RawKey { cell, sample: NO_SAMPLE, gene: 1, umi };
         let input = HashMap::from([(a, evidence(2, 0)), (b, evidence(2, 1))]);
         let mut metrics = Metrics::default();
         let (decisions, _) = build_decisions(&input, &mut metrics, None, 1, false);
@@ -1400,9 +1569,9 @@ mod tests {
         assert_eq!(collect_region(&path, 0, 0, 10).unwrap().eligible_records, 2);
 
         let mut serial_metrics = Metrics::default();
-        let (serial, _, _) = collect_evidence(&path, 1, &mut serial_metrics).unwrap();
+        let (serial, _, _, _, _) = collect_evidence(&path, 1, &mut serial_metrics).unwrap();
         let mut parallel_metrics = Metrics::default();
-        let (parallel, _, _) =
+        let (parallel, _, _, _, _) =
             collect_evidence_indexed(&path, 2, 10, &mut parallel_metrics).unwrap();
         assert_eq!(serial_metrics.eligible_records, 3);
         assert_eq!(parallel_metrics.eligible_records, 3);
