@@ -4,6 +4,12 @@ Three complementary tools, from coarsest to finest. Use them in that order:
 find which *stage* is slow first, then which *function within that stage*,
 then (once available) which *instruction*.
 
+See `PIPELINE_NOTES.md` for real, measured CPU/memory/I/O resource profiles
+of every pipeline stage at true production scale (32.6B-read full-dataset
+runs) — complementary to this doc's per-function profiling: that one is
+about *whole-pipeline resource planning and scheduling*, this one is about
+*finding the hot function once you know which stage to look at*.
+
 ## 1. Cross-stage comparison (works today, zero setup)
 
 Every stage (`extract`, `annotate`, `molecules`, `matrix`, `cells`,
