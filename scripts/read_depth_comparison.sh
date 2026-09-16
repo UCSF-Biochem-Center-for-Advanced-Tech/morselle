@@ -5,35 +5,44 @@
 # count Illumina reached at this stage?" and producing its own molecule/
 # matrix output folder documenting the real raw-read count used.
 #
-# Checkpoints (Illumina targets, all real numbers from the report):
+# Checkpoints (Illumina targets, all real numbers from CAT06_read_metrics_report.md,
+# updated 2026-09-16 once the real L2 Cell Ranger run completed):
 #   1. Raw reads:                    6,852,776,830   (all 4 libraries)
 #   2. Demultiplexed reads:          6,002,061,558   (all 4 libraries)
-#   3. Valid cellBC+sampleBC+UMI:    4,490,827,365   (GEX only, L1+L2)
+#   3. Valid cellBC+sampleBC+UMI:    4,831,665,536   (L1_GEX + L2_GEX + L1_CRI
+#      -- L2_CRI was never run through Cell Ranger, so the report's own
+#      "All processed (3 libraries)" total explicitly excludes it; this is a
+#      real, exact Illumina scope, not GEX-only as an earlier plan version
+#      assumed before the report was updated)
 #   4. Final molecules: computed at run time by summing real
-#      filtered_feature_bc_matrix.h5 files -- L1's has always been on disk
-#      (illumina_data/RZ16443_L1_multi/outs/...); L2's did not exist as of
-#      2026-09-15 (only a samplesheet stub was found after a broad search),
-#      so CP4 was L1-only (2,115,131,488) until a real L2 cellranger run was
-#      started that same day. This script checks both
-#      RZ16443_L2_multi_complete/outs/ and RZ16443_L2_multi/outs/ for a real
-#      L2 matrix and includes it once present -- if neither exists yet, CP4
-#      stays L1-only and the report says so explicitly, never a fabricated
-#      L2 estimate.
+#      filtered_feature_bc_matrix.h5 files, GEX only (L1+L2 -- CRISPR guide
+#      UMI counts are a different kind of "molecule" than gene-expression
+#      transcript counts, so CP4 stays GEX-scoped even though CP3 now
+#      includes L1_CRI). As of 2026-09-16 both real matrices exist
+#      (illumina_data/RZ16443_L1_multi/outs/... and
+#      RZ16443_L2_multi_complete/outs/...): real combined target is
+#      3,704,554,258 (L1 2,115,131,488 + L2 1,589,422,770, both measured
+#      directly from the real matrices, not estimated). This script still
+#      checks both L2 matrix paths at run time and falls back to L1-only
+#      with an explicit scope note if either ever isn't there.
 #
 # Roche-side yield rates needed to invert "Illumina target -> raw reads
 # needed" come from two already-running real full-scale jobs, not new
 # calibration compute:
 #   - CP2, CP3 numerators: sbxpress_extract_v2/metrics_summary.json
 #     (assigned_early, probe_barcode.hit, per-library per_sample_early)
-#   - CP4 numerator: sbxpress_full_run/molecules/L1_gex.metrics.json
+#   - CP4 numerator: sbxpress_full_run/molecules/{L1,L2}_gex.metrics.json
 #     (molecules_counted)
 #
-# CP3's real Illumina target is GEX-only, but extract's probe_hit counter is
-# library-agnostic (probe barcodes are read on CRISPR reads too). Per
-# 2026-09-15 direction: approximate by scaling probe_hit by GEX's real share
-# of assigned_early (probe-capture rate has no reason to differ structurally
-# between GEX and CRISPR reads of the same physical run) -- stated here and
-# in the final report as an approximation, not represented as exact.
+# CP3's real Illumina target excludes exactly one library (L2_CRI), but
+# extract's probe_hit counter is library-agnostic (probe barcodes are read
+# on every library together). Approximated by scaling probe_hit by the
+# three included libraries' (L1_GEX+L2_GEX+L1_CRI) real share of
+# assigned_early -- probe-capture rate has no reason to differ structurally
+# by library of the same physical run. Stated here and in the final report
+# as an approximation, not represented as exact (confirmed acceptable with
+# the user on 2026-09-15 rather than building new per-library
+# instrumentation and re-running the multi-hour extract once more).
 #
 # This script does NOT try to deduplicate processing across checkpoints by
 # sharing partial extract output -- each checkpoint runs the real, full,
@@ -117,9 +126,12 @@ assigned_early = extract["demux"]["assigned_early"]
 probe_hit = extract["probe_barcode"]["hit"]
 per_sample_early = {s["sample"]: s["pairs"] for s in extract["demux"]["per_sample_early"]}
 
-gex_early = sum(v for k, v in per_sample_early.items() if "GEX" in k)
-gex_share = gex_early / assigned_early
-probe_hit_gex_approx = probe_hit * gex_share  # approximation -- see script header
+# CP3 scope: every library except L2_CRI (Cell Ranger never ran on it) --
+# L1_GEX + L2_GEX + L1_CRI. See script header for the approximation this
+# feeds (probe_hit is library-agnostic; scaled by this share).
+cp3_libs_early = sum(v for k, v in per_sample_early.items() if k != "TSeq100_L2_CRI")
+cp3_share = cp3_libs_early / assigned_early
+probe_hit_cp3_approx = probe_hit * cp3_share  # approximation -- see script header
 
 l1_gex_early = per_sample_early.get("TSeq100_L1_GEX", 0)
 l2_gex_early = per_sample_early.get("TSeq100_L2_GEX", 0)
@@ -160,19 +172,20 @@ cp4_gex_share_of_raw = cp4_gex_early / total_raw
 r4 = cp4_molecules_counted / cp4_gex_early
 
 r2 = assigned_early / total_raw
-r3 = probe_hit_gex_approx / total_raw
+r3 = probe_hit_cp3_approx / total_raw
 
 illumina = {
     "cp1_raw": 6852776830,
     "cp2_demuxed": 6002061558,
-    "cp3_cb_samplebc_umi_gex_l1l2": 4490827365,
+    "cp3_cb_samplebc_umi": 4831665536,
+    "cp3_scope": "L1_GEX + L2_GEX + L1_CRI (excludes L2_CRI, never run through Cell Ranger)",
     "cp4_final_molecules": cp4_illumina_target,
     "cp4_scope": cp4_scope,
 }
 
 cp1_raw_needed = illumina["cp1_raw"]
 cp2_raw_needed = illumina["cp2_demuxed"] / r2
-cp3_raw_needed = illumina["cp3_cb_samplebc_umi_gex_l1l2"] / r3
+cp3_raw_needed = illumina["cp3_cb_samplebc_umi"] / r3
 # CP4: need enough raw reads so that the GEX-assigned share alone yields
 # enough molecules -- raw_needed * cp4_gex_share_of_raw * r4 = target
 cp4_raw_needed = illumina["cp4_final_molecules"] / (cp4_gex_share_of_raw * r4)
@@ -182,8 +195,8 @@ out = {
         "total_raw": total_raw,
         "assigned_early": assigned_early,
         "probe_hit_all_libraries": probe_hit,
-        "gex_share_of_assigned_early": gex_share,
-        "probe_hit_gex_approx": probe_hit_gex_approx,
+        "cp3_share_of_assigned_early": cp3_share,
+        "probe_hit_cp3_approx": probe_hit_cp3_approx,
         "cp4_gex_share_of_raw": cp4_gex_share_of_raw,
         "cp4_molecules_counted": cp4_molecules_counted,
         "molecules_per_gex_assigned_read": r4,
