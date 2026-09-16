@@ -27,12 +27,15 @@
 #      with an explicit scope note if either ever isn't there.
 #
 # Roche-side yield rates needed to invert "Illumina target -> raw reads
-# needed" come from two already-running real full-scale jobs, not new
-# calibration compute:
+# needed" come from real full-scale jobs, not new calibration compute. This
+# script refuses to run until all three exist:
 #   - CP2, CP3 numerators: sbxpress_extract_v2/metrics_summary.json
 #     (assigned_early, probe_barcode.hit, per-library per_sample_early)
-#   - CP4 numerator: sbxpress_full_run/molecules/{L1,L2}_gex.metrics.json
-#     (molecules_counted)
+#   - CP4 numerator: sbxpress_full_run/molecules/L1_gex.metrics.json AND
+#     .../L2_gex.metrics.json (molecules_counted) -- both required before
+#     starting, not just L1, so CP4's target is the real L1+L2 combined
+#     number from the very first checkpoint run rather than a provisional
+#     L1-only number a later re-run would need to retroactively enlarge.
 #
 # CP3's real Illumina target excludes exactly one library (L2_CRI), but
 # extract's probe_hit counter is library-agnostic (probe barcodes are read
@@ -56,16 +59,20 @@
 # per-checkpoint independence/inspectability over a more complex shared-
 # extract-output design.
 #
-# Usage: scripts/read_depth_comparison.sh
+# Lives in the CAT06 project folder itself (not the sbxpress repo) --
+# read_depth_comparison_plan.md in this same directory has full background,
+# current real status, and follow-up (molecule-matrix comparison) plans.
+#
+# Usage: ./read_depth_comparison.sh
 # Intended invocation (survives disconnect):
-#   setsid nohup scripts/read_depth_comparison.sh > read_depth_comparison_driver.log 2>&1 < /dev/null &
+#   setsid nohup ./read_depth_comparison.sh > read_depth_comparison_driver.log 2>&1 < /dev/null &
 #   disown
 
 set -euo pipefail
 
 CAT06=/mnt/analysis/active_projects/roche_SBX_ABRF/CAT06
 BIN=/mnt/analysis/software_shared/sbxpress/target/release
-OUT=$CAT06/read_depth_comparison
+OUT=$CAT06/read_depth_comparison_out
 CORES=128
 
 SAMPLE_SHEET="$CAT06/20260806_LH00416_0423_B23WVVYLT4/RZ16443/Reports/SampleSheet.csv"
@@ -78,6 +85,7 @@ RAW_FASTQS="$CAT06/raw_fastqs"
 
 EXTRACT_V2_METRICS="$CAT06/sbxpress_extract_v2/metrics_summary.json"
 L1_MOLECULES_METRICS="$CAT06/sbxpress_full_run/molecules/L1_gex.metrics.json"
+L2_MOLECULES_METRICS="$CAT06/sbxpress_full_run/molecules/L2_gex.metrics.json"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
@@ -85,17 +93,23 @@ mkdir -p "$OUT"
 
 # ---------------------------------------------------------------------------
 # Step 0: prerequisite check -- refuse to guess, wait for the real numbers.
+# L2 molecules is required here (not just optionally picked up) because
+# run_checkpoint()'s extract step is skip-if-.done: if CP4's target were
+# computed once L1-only and a checkpoint run already started against that
+# (smaller) shard subset, a later upgrade to the real L1+L2 target would
+# need a *larger* subset and the skip-if-done logic would not know to
+# extend it. Waiting for all three real inputs up front avoids that trap.
 # ---------------------------------------------------------------------------
 check_prereqs() {
   local missing=0
-  for f in "$EXTRACT_V2_METRICS" "$L1_MOLECULES_METRICS"; do
+  for f in "$EXTRACT_V2_METRICS" "$L1_MOLECULES_METRICS" "$L2_MOLECULES_METRICS"; do
     if [ ! -f "$f" ]; then
       echo "not ready: $f does not exist yet" >&2
       missing=1
     fi
   done
   if [ "$missing" = 1 ]; then
-    echo "error: prerequisite run(s) not finished. Re-run this script once both exist." >&2
+    echo "error: prerequisite run(s) not finished. Re-run this script once all three exist." >&2
     exit 1
   fi
 }
