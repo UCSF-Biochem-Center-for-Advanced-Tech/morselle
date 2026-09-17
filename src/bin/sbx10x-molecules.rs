@@ -4,7 +4,7 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 use std::time::Instant;
 
@@ -66,6 +66,20 @@ struct Cli {
     /// front; deferred).
     #[arg(long, default_value_t = 1)]
     shards: usize,
+    /// Number of shards to process concurrently (evidence -> correct ->
+    /// aggregate -> decide) when --shards > 1. Each concurrent shard holds
+    /// its own evidence/roots/molecules/decisions in memory simultaneously,
+    /// so peak memory scales roughly linearly with this value -- real
+    /// observed peak per shard on CAT06 L1_GEX (8 shards) was ~44-90GB, so
+    /// e.g. concurrency=4 projects to ~180-360GB, well within a 1.5TB box's
+    /// margin, but always check real per-shard peak memory for your own
+    /// data before raising this. Default 1 preserves the original strictly
+    /// sequential behavior (lowest memory, slowest). Must not exceed
+    /// --shards. Only the final output write is serialized (one shard's
+    /// write pass holds the output-file lock at a time); evidence
+    /// collection and correction run fully concurrently.
+    #[arg(long, default_value_t = 1)]
+    shard_concurrency: usize,
     /// Pooled-sample mode: a barcode is a whole sample sequenced far deeper
     /// than a single cell, not a droplet. At that depth, cross-gene UMI
     /// collisions (the same (cell, UMI) independently drawn by two
@@ -221,6 +235,28 @@ struct Metrics {
     representatives_tagged: u64,
     saturation: Option<SaturationMetrics>,
     elapsed_secs: f64,
+}
+
+/// Adds one shard's local counters into the run-wide accumulator. Used by
+/// the concurrent shard path, where each shard builds its own `Metrics`
+/// (starting from `Metrics::default()`) rather than sharing one `&mut
+/// Metrics` across threads. `input_bam`/`output_bam`/`tagseq`/`saturation`/
+/// `elapsed_secs` are set once at the top level, not per-shard, so they're
+/// deliberately left alone here.
+fn merge_metrics(target: &mut Metrics, source: &Metrics) {
+    target.records += source.records;
+    target.eligible_records += source.eligible_records;
+    target.raw_cell_gene_umis += source.raw_cell_gene_umis;
+    target.corrected_umi_nodes += source.corrected_umi_nodes;
+    target.molecules_before_gene_resolution += source.molecules_before_gene_resolution;
+    target.molecules_counted += source.molecules_counted;
+    target.umi_nodes_collapsed += source.umi_nodes_collapsed;
+    target.collision_groups += source.collision_groups;
+    target.collision_molecules_won += source.collision_molecules_won;
+    target.collision_molecules_lost += source.collision_molecules_lost;
+    target.collision_ties += source.collision_ties;
+    target.collision_molecules_shared += source.collision_molecules_shared;
+    target.representatives_tagged += source.representatives_tagged;
 }
 
 #[derive(Serialize)]
@@ -1393,32 +1429,59 @@ fn run_sharded(cli: &Cli, metrics: &mut Metrics) -> Result<()> {
     };
     let mut writer = bam::Writer::from_path(&cli.output, &header, bam::Format::Bam)?;
     writer.set_threads(cli.threads)?;
+    let writer = Mutex::new(writer);
 
-    for (i, shard_path) in shard_paths.iter().enumerate() {
-        eprintln!(
-            "[sbxpress molecules] phase=shard_quant start shard={}/{}",
-            i + 1,
-            cli.shards
-        );
-        let (evidence, genes, gene_ids, _samples, sample_ids) =
-            collect_evidence(shard_path, cli.threads, metrics)?;
-        let (decisions, _saturation) =
-            build_decisions(&evidence, metrics, None, cli.evidence_workers, cli.tagseq);
-        write_shard_output(
-            cli,
-            shard_path,
-            &decisions,
-            &genes,
-            &gene_ids,
-            &sample_ids,
-            &mut writer,
-            metrics,
-        )?;
-        eprintln!(
-            "[sbxpress molecules] phase=shard_quant complete shard={}/{}",
-            i + 1,
-            cli.shards
-        );
+    // Each shard runs evidence-collect -> correct -> aggregate -> decide
+    // fully independently (real per-shard proof: sharding_by_cell_sample_
+    // matches_global_build_decisions), so shard_concurrency shards can run
+    // truly concurrently with no coordination needed until the final write.
+    // Only that write is serialized (one shard holds the output-file lock
+    // at a time) -- everything before it runs lock-free.
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(cli.shard_concurrency.min(shard_paths.len()))
+        .build()
+        .context("creating shard-concurrency worker pool")?;
+    let total_shards = shard_paths.len();
+    let completed = Arc::new(AtomicUsize::new(0));
+
+    let shard_metrics: Vec<Metrics> = pool.install(|| {
+        shard_paths
+            .par_iter()
+            .map(|shard_path| -> Result<Metrics> {
+                let mut local_metrics = Metrics::default();
+                let (evidence, genes, gene_ids, _samples, sample_ids) =
+                    collect_evidence(shard_path, cli.threads, &mut local_metrics)?;
+                let (decisions, _saturation) = build_decisions(
+                    &evidence,
+                    &mut local_metrics,
+                    None,
+                    cli.evidence_workers,
+                    cli.tagseq,
+                );
+                {
+                    let mut writer_guard = writer.lock().expect("output writer mutex poisoned");
+                    write_shard_output(
+                        cli,
+                        shard_path,
+                        &decisions,
+                        &genes,
+                        &gene_ids,
+                        &sample_ids,
+                        &mut writer_guard,
+                        &mut local_metrics,
+                    )?;
+                }
+                let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                eprintln!(
+                    "[sbxpress molecules] phase=shard_quant complete shards={done}/{total_shards}"
+                );
+                Ok(local_metrics)
+            })
+            .collect::<Result<Vec<_>>>()
+    })?;
+
+    for local in &shard_metrics {
+        merge_metrics(metrics, local);
     }
     drop(writer);
 
@@ -1458,6 +1521,9 @@ fn main() -> Result<()> {
     }
     if cli.shards == 0 {
         bail!("--shards must be greater than zero");
+    }
+    if cli.shard_concurrency == 0 {
+        bail!("--shard-concurrency must be greater than zero");
     }
     if cli.shards > 1 {
         if cli.saturation.is_some() {
