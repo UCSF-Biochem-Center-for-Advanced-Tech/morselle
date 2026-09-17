@@ -471,13 +471,22 @@ fn collate(input: &Path, threads: usize, shard_paths: &[PathBuf]) -> Result<()> 
         bam::Reader::from_path(input).with_context(|| format!("opening {}", input.display()))?;
     reader.set_threads(threads)?;
     let header = bam::Header::from_template(reader.header());
+    // Uncompressed: shard files are pure ephemeral intermediates, deleted
+    // right after quant reads each one exactly once -- same lesson as
+    // extract's --no-gzip finding (PROFILING.md: 53.9% of extract's CPU was
+    // zlib, --no-gzip gave an 8x win). Collate was previously the dominant
+    // cost of the whole --shards run for exactly this reason: 8 writers all
+    // doing default-level BGZF compression, serialized onto the single
+    // collate loop thread.
     let mut writers: Vec<bam::Writer> = shard_paths
         .iter()
         .map(|path| {
-            bam::Writer::from_path(path, &header, bam::Format::Bam)
-                .with_context(|| format!("creating shard {}", path.display()))
+            let mut writer = bam::Writer::from_path(path, &header, bam::Format::Bam)
+                .with_context(|| format!("creating shard {}", path.display()))?;
+            writer.set_compression_level(bam::CompressionLevel::Uncompressed)?;
+            Ok(writer)
         })
-        .collect::<Result<_>>()?;
+        .collect::<Result<Vec<_>>>()?;
     let shards = writers.len();
     let mut routed = 0_u64;
     for result in reader.records() {
