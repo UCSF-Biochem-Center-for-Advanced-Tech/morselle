@@ -49,6 +49,23 @@ struct Cli {
     /// Eligible-read interval between saturation observations.
     #[arg(long, default_value_t = 1_000_000)]
     saturation_interval: u64,
+    /// Bound peak memory by partitioning evidence into N shards, hashed by
+    /// (cell barcode, sample/probe barcode), and processing each shard fully
+    /// independently -- collate (bucket records into N temporary BAMs),
+    /// then quant (evidence -> correct -> aggregate -> write) one shard at a
+    /// time, discarding memory before the next -- rather than materializing
+    /// one global evidence/roots/decisions table. This is the same
+    /// collate/quant split salmon alevin-fry uses to solve the identical
+    /// memory-blowup problem. Real motivation: --evidence-workers 64 on a
+    /// full-scale (~11B-read) library OOM-killed at ~1.49TB anon-rss on a
+    /// 1.5TB box (see PIPELINE_NOTES.md). Safe by construction: every
+    /// grouping/collision key sbx10x-molecules uses is scoped to
+    /// (cell, sample), so no shard ever needs to see another shard's data.
+    /// Default 1 = today's unsharded behavior, unchanged. Not yet supported
+    /// together with --saturation (needs a global read-count known up
+    /// front; deferred).
+    #[arg(long, default_value_t = 1)]
+    shards: usize,
     /// Pooled-sample mode: a barcode is a whole sample sequenced far deeper
     /// than a single cell, not a droplet. At that depth, cross-gene UMI
     /// collisions (the same (cell, UMI) independently drawn by two
@@ -174,7 +191,7 @@ enum Outcome {
     Shared,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Decision {
     corrected: Dna,
     representative: u64,
@@ -416,6 +433,69 @@ fn intern_sample(
         sample_ids.insert(pb, id);
         id
     }
+}
+
+/// Stable hash of a record's raw (cell barcode, sample/probe barcode) pair,
+/// used only to pick a shard during `collate()` -- deliberately independent
+/// of any interned id, so collate never needs gene/sample interning tables
+/// built up front. Every real grouping/collision key in this file is scoped
+/// to `(cell, sample)`, so routing by this pair alone guarantees a shard
+/// never needs to see another shard's data.
+fn shard_hash(cb: &[u8], pb: Option<&[u8]>) -> u32 {
+    let mut value = 0xcbf29ce484222325u64;
+    for &byte in cb {
+        value ^= byte as u64;
+        value = value.wrapping_mul(0x100000001b3);
+    }
+    // Separator so e.g. cb="AB",pb="C" hashes differently from cb="A",pb="BC".
+    value ^= 0xff;
+    value = value.wrapping_mul(0x100000001b3);
+    for &byte in pb.unwrap_or(&[]) {
+        value ^= byte as u64;
+        value = value.wrapping_mul(0x100000001b3);
+    }
+    let mut z = value.wrapping_add(0x9E3779B97F4A7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+    (z ^ (z >> 31)) as u32
+}
+
+/// Collate stage (salmon alevin-fry naming): a single sequential pass over
+/// the input BAM, bucketing every record (eligible or not -- ineligible
+/// records just pass through unmodified during quant) into one of
+/// `shard_paths.len()` temporary BAM files by `shard_hash` of its `CB`+`PB`
+/// tags. A record with no `CB` at all can never be correction-eligible
+/// either way, so it's routed to shard 0 as a fixed fallback.
+fn collate(input: &Path, threads: usize, shard_paths: &[PathBuf]) -> Result<()> {
+    let mut reader =
+        bam::Reader::from_path(input).with_context(|| format!("opening {}", input.display()))?;
+    reader.set_threads(threads)?;
+    let header = bam::Header::from_template(reader.header());
+    let mut writers: Vec<bam::Writer> = shard_paths
+        .iter()
+        .map(|path| {
+            bam::Writer::from_path(path, &header, bam::Format::Bam)
+                .with_context(|| format!("creating shard {}", path.display()))
+        })
+        .collect::<Result<_>>()?;
+    let shards = writers.len();
+    let mut routed = 0_u64;
+    for result in reader.records() {
+        let record = result.context("reading BAM in collate pass")?;
+        let cb = aux_string(&record, b"CB");
+        let pb = aux_string(&record, b"PB");
+        let idx = match &cb {
+            Some(cb) => shard_hash(cb.as_bytes(), pb.as_deref().map(str::as_bytes)) as usize % shards,
+            None => 0,
+        };
+        writers[idx].write(&record)?;
+        routed += 1;
+        if routed % 25_000_000 == 0 {
+            eprintln!("[sbxpress molecules] phase=collate records={routed}");
+        }
+    }
+    eprintln!("[sbxpress molecules] phase=collate complete records={routed}");
+    Ok(())
 }
 
 #[allow(clippy::type_complexity)]
@@ -921,8 +1001,12 @@ fn build_decisions(
         "[sbxpress molecules] phase=umi_correct complete roots={}",
         roots.len()
     );
-    metrics.raw_cell_gene_umis = evidence.len() as u64;
-    metrics.umi_nodes_collapsed = roots
+    // `+=`, not `=`: safe both for the single global call (Metrics starts
+    // zeroed, so the result is identical) and for the sharded path, which
+    // calls build_decisions() once per shard against the same accumulating
+    // Metrics.
+    metrics.raw_cell_gene_umis += evidence.len() as u64;
+    metrics.umi_nodes_collapsed += roots
         .iter()
         .filter(|(key, root)| key.umi != root.umi)
         .count() as u64;
@@ -947,7 +1031,23 @@ fn build_decisions(
                 m.support += item.reads as u64;
                 m.min_read_hash = m.min_read_hash.min(item.min_read_hash);
                 let rank = (u32::from(item.best_mapq) << 24) | item.best_aligned.min(0x00ff_ffff);
-                if rank > m.best_rank {
+                // On an exact rank tie (common for true PCR/optical
+                // duplicates of the same molecule, which share mapq and
+                // aligned_bases at the same locus), fall back to
+                // `best_ordinal` as an explicit, deterministic tiebreak
+                // instead of leaving the winner to HashMap iteration order.
+                // `best_ordinal` is a positional ordinal in serial mode and
+                // a content-based `record_identity()` hash in indexed mode
+                // (see `collect_region`) -- either way it's a fixed
+                // per-read value, so "smaller wins" gives the same answer
+                // regardless of which order this loop visits entries in,
+                // which HashMap iteration order does not otherwise
+                // guarantee (confirmed by a real cross-run diff: identical
+                // molecule/collision decisions, but an inconsistent choice
+                // of which duplicate read got the representative flag).
+                if rank > m.best_rank
+                    || (rank == m.best_rank && item.best_ordinal < m.representative)
+                {
                     m.representative = item.best_ordinal;
                     m.best_rank = rank;
                 }
@@ -959,8 +1059,8 @@ fn build_decisions(
                 min_read_hash: item.min_read_hash,
             });
     }
-    metrics.corrected_umi_nodes = molecules.len() as u64;
-    metrics.molecules_before_gene_resolution = molecules.len() as u64;
+    metrics.corrected_umi_nodes += molecules.len() as u64;
+    metrics.molecules_before_gene_resolution += molecules.len() as u64;
     eprintln!(
         "[sbxpress molecules] phase=molecule_aggregate complete corrected_nodes={}",
         molecules.len()
@@ -1173,6 +1273,155 @@ fn write_output(
     Ok(())
 }
 
+/// Quant stage's write step for the sharded path: identical logic to
+/// `write_output`, except it reads one shard's own temporary BAM (not
+/// `cli.bam`) and appends into a shared `writer` opened once for the whole
+/// run, rather than creating its own. Always uses ordinal-based
+/// representative comparison (never `record_identity`): a shard is always
+/// built via the plain serial `collect_evidence()`, so ordinals are stable
+/// within this single sequential read of the shard file, matching the
+/// ordinals `collect_evidence` assigned when building `decisions` for this
+/// same shard.
+#[allow(clippy::too_many_arguments)]
+fn write_shard_output(
+    cli: &Cli,
+    shard_path: &Path,
+    decisions: &HashMap<RawKey, Decision>,
+    genes: &[String],
+    gene_ids: &HashMap<String, u32>,
+    sample_ids: &HashMap<String, u32>,
+    writer: &mut bam::Writer,
+    metrics: &mut Metrics,
+) -> Result<()> {
+    let mut reader = bam::Reader::from_path(shard_path)?;
+    reader.set_threads(cli.threads)?;
+    for (ordinal, result) in reader.records().enumerate() {
+        let mut record = result?;
+        let key = if !record.is_unmapped() && !record.is_secondary() && !record.is_supplementary() {
+            let cell = aux_string(&record, b"CB").and_then(|v| Dna::pack(&v));
+            let umi = aux_string(&record, b"UR")
+                .or_else(|| aux_string(&record, b"UB"))
+                .and_then(|v| Dna::pack(&v));
+            let gene = choose_gene(&record).and_then(|(g, _)| gene_ids.get(&g).copied());
+            let sample = match aux_string(&record, b"PB") {
+                None => Some(NO_SAMPLE),
+                Some(pb) => sample_ids.get(&pb).copied(),
+            };
+            match (cell, sample, gene, umi) {
+                (Some(cell), Some(sample), Some(gene), Some(umi)) => {
+                    Some(RawKey { cell, sample, gene, umi })
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let _ = record.remove_aux(b"xf");
+        for tag in [b"XV", b"XW"] {
+            let _ = record.remove_aux(tag);
+        }
+        if let Some((key, decision)) =
+            key.and_then(|key| decisions.get(&key).map(|decision| (key, decision)))
+        {
+            replace_string(&mut record, b"UB", &decision.corrected.unpack())?;
+            if aux_string(&record, b"GX").is_some_and(|gx| gx.contains(';')) {
+                let selected = &genes[key.gene as usize];
+                let selected_name = choose_gene(&record)
+                    .map(|(_, name)| name)
+                    .unwrap_or_else(|| selected.clone());
+                replace_string(&mut record, b"GX", selected)?;
+                replace_string(&mut record, b"GN", &selected_name)?;
+            }
+            let representative = decision.representative == ordinal as u64
+                && matches!(
+                    decision.outcome,
+                    Outcome::Unique | Outcome::Won | Outcome::Shared
+                );
+            record.push_aux(b"xf", Aux::I32(if representative { 25 } else { 17 }))?;
+            record.push_aux(b"XV", Aux::U32(decision.collision_degree))?;
+            record.push_aux(
+                b"XW",
+                Aux::Char(match decision.outcome {
+                    Outcome::Unique => b'U',
+                    Outcome::Won => b'W',
+                    Outcome::Lost => b'L',
+                    Outcome::Tie => b'T',
+                    Outcome::Shared => b'S',
+                }),
+            )?;
+            if representative {
+                metrics.representatives_tagged += 1;
+            }
+        }
+        writer.write(&record)?;
+    }
+    Ok(())
+}
+
+/// Full sharded (collate + quant) path: bounds peak memory to roughly
+/// `total/shards` by processing one `(cell, sample)`-hashed shard fully
+/// (evidence -> correct -> aggregate -> decide -> write) before moving to
+/// the next, discarding each shard's `evidence`/`roots`/`molecules`/
+/// `collisions`/`decisions` before starting the next one. See the `--shards`
+/// CLI doc comment and PIPELINE_NOTES.md for the real OOM this replaces.
+fn run_sharded(cli: &Cli, metrics: &mut Metrics) -> Result<()> {
+    let shard_dir = PathBuf::from(format!("{}.shards", cli.output.display()));
+    fs::create_dir_all(&shard_dir)
+        .with_context(|| format!("creating shard directory {}", shard_dir.display()))?;
+    let shard_paths: Vec<PathBuf> = (0..cli.shards)
+        .map(|i| shard_dir.join(format!("shard_{i:04}.bam")))
+        .collect();
+
+    eprintln!(
+        "[sbxpress molecules] phase=collate start shards={}",
+        cli.shards
+    );
+    collate(&cli.bam, cli.threads, &shard_paths)?;
+
+    let header = {
+        let reader = bam::Reader::from_path(&cli.bam)?;
+        bam::Header::from_template(reader.header())
+    };
+    let mut writer = bam::Writer::from_path(&cli.output, &header, bam::Format::Bam)?;
+    writer.set_threads(cli.threads)?;
+
+    for (i, shard_path) in shard_paths.iter().enumerate() {
+        eprintln!(
+            "[sbxpress molecules] phase=shard_quant start shard={}/{}",
+            i + 1,
+            cli.shards
+        );
+        let (evidence, genes, gene_ids, _samples, sample_ids) =
+            collect_evidence(shard_path, cli.threads, metrics)?;
+        let (decisions, _saturation) =
+            build_decisions(&evidence, metrics, None, cli.evidence_workers, cli.tagseq);
+        write_shard_output(
+            cli,
+            shard_path,
+            &decisions,
+            &genes,
+            &gene_ids,
+            &sample_ids,
+            &mut writer,
+            metrics,
+        )?;
+        eprintln!(
+            "[sbxpress molecules] phase=shard_quant complete shard={}/{}",
+            i + 1,
+            cli.shards
+        );
+    }
+    drop(writer);
+
+    if let Err(err) = fs::remove_dir_all(&shard_dir) {
+        eprintln!(
+            "[sbxpress molecules] warning: failed to clean up shard directory {}: {err}",
+            shard_dir.display()
+        );
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -1192,6 +1441,36 @@ fn main() -> Result<()> {
         tagseq: cli.tagseq,
         ..Default::default()
     };
+    if cli.saturation_interval == 0 {
+        bail!("--saturation-interval must be greater than zero");
+    }
+    if cli.evidence_workers == 0 {
+        bail!("--evidence-workers must be greater than zero");
+    }
+    if cli.shards == 0 {
+        bail!("--shards must be greater than zero");
+    }
+    if cli.shards > 1 {
+        if cli.saturation.is_some() {
+            bail!("--saturation is not yet supported together with --shards > 1");
+        }
+        info!(shards = cli.shards, "running sharded (collate + quant)");
+        run_sharded(&cli, &mut metrics)?;
+        metrics.elapsed_secs = started.elapsed().as_secs_f64();
+        let metrics_path = cli
+            .metrics
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(format!("{}.metrics.json", cli.output.display())));
+        fs::write(&metrics_path, serde_json::to_string_pretty(&metrics)?)?;
+        info!(
+            records = metrics.records,
+            molecules = metrics.molecules_counted,
+            collisions = metrics.collision_groups,
+            elapsed = format!("{:.1}s", metrics.elapsed_secs),
+            "RUN SUMMARY"
+        );
+        return Ok(());
+    }
     let (evidence, genes, gene_ids, _samples, sample_ids) = if cli.evidence_workers > 1 {
         info!(
             workers = cli.evidence_workers,
@@ -1211,12 +1490,6 @@ fn main() -> Result<()> {
         evidence.len(),
         metrics.eligible_records
     );
-    if cli.saturation_interval == 0 {
-        bail!("--saturation-interval must be greater than zero");
-    }
-    if cli.evidence_workers == 0 {
-        bail!("--evidence-workers must be greater than zero");
-    }
     let (decisions, saturation) = build_decisions(
         &evidence,
         &mut metrics,
@@ -1592,6 +1865,147 @@ mod tests {
         assert_eq!(
             serial_decision_metrics.molecules_counted,
             parallel_decision_metrics.molecules_counted
+        );
+    }
+
+    /// Core correctness guarantee behind `--shards`: every real grouping
+    /// (`(cell, sample, gene)`) and collision-resolution (`(cell, sample,
+    /// umi)`) key in `build_decisions` is scoped to `(cell, sample)`, so
+    /// partitioning evidence by `(cell, sample)` into independent shards and
+    /// merging each shard's own `build_decisions()` output must produce
+    /// exactly the decisions (and exactly the accumulated metrics) that a
+    /// single global `build_decisions()` call over the same evidence would
+    /// -- this is what makes it safe to process shards one at a time,
+    /// discarding memory in between, instead of materializing one global
+    /// evidence/roots/decisions table.
+    #[test]
+    fn sharding_by_cell_sample_matches_global_build_decisions() {
+        let cells: Vec<Dna> = [
+            "AAAAAAAAAAAAAAAA",
+            "CCCCCCCCCCCCCCCC",
+            "GGGGGGGGGGGGGGGG",
+            "ACGTACGTACGTACGT",
+            "TGCATGCATGCATGCA",
+            "AACCGGTTAACCGGTT",
+        ]
+        .iter()
+        .map(|s| Dna::pack(s).unwrap())
+        .collect();
+        let umis: Vec<Dna> = ["AAAAAAAAAAAA", "AAAAAAAAAAAC", "GGGGGGGGGGGG", "TTTTTTTTTTTT"]
+            .iter()
+            .map(|s| Dna::pack(s).unwrap())
+            .collect();
+
+        // A synthetic but real-shaped evidence set: several cells, some with
+        // more than one sample (matching the pooled-Flex architecture this
+        // whole fix targets), several genes, a within-group UMI-correction
+        // pair (umis[0]/umis[1] differ by 1 base), and a cross-gene
+        // collision (umis[2] shared by two genes in the same cell+sample).
+        let mut evidence = HashMap::new();
+        let mut next_ordinal = 0_u64;
+        let mut push = |evidence: &mut HashMap<RawKey, Evidence>,
+                         cell: Dna,
+                         sample: u32,
+                         gene: u32,
+                         umi: Dna,
+                         reads: u32| {
+            let ordinal = next_ordinal;
+            next_ordinal += 1;
+            evidence.insert(
+                RawKey { cell, sample, gene, umi },
+                Evidence {
+                    reads,
+                    best_ordinal: ordinal,
+                    best_mapq: 60,
+                    // Distinct per entry (real reads essentially never tie
+                    // exactly): an exact rank tie makes `molecule_aggregate`'s
+                    // representative choice depend on HashMap iteration
+                    // order, which a shard's own map instance need not share
+                    // with the global one -- a real but orthogonal,
+                    // pre-existing property of tie-breaking, not something
+                    // this test is meant to exercise.
+                    best_aligned: 100 + ordinal as u32,
+                    min_read_hash: ordinal as u32,
+                },
+            );
+        };
+        for (i, &cell) in cells.iter().enumerate() {
+            let sample = (i % 3) as u32; // several cells reuse the same sample id, and vice versa
+            push(&mut evidence, cell, sample, 0, umis[0], 10); // major
+            push(&mut evidence, cell, sample, 0, umis[1], 2); // 1bp error of major -> corrects into it
+            push(&mut evidence, cell, sample, 1, umis[2], 4); // gene 1, umi X
+            push(&mut evidence, cell, sample, 2, umis[2], 3); // gene 2, same umi X, same (cell,sample) -> real cross-gene collision
+            // Same cell, a DIFFERENT sample, reusing the same UMI+a new gene:
+            // must NOT be pulled into the collision group above.
+            push(&mut evidence, cell, (sample + 1) % 3, 3, umis[2], 5);
+            push(&mut evidence, cell, sample, 4, umis[3], 1); // plain unique molecule
+        }
+
+        let mut global_metrics = Metrics::default();
+        let (global_decisions, _) = build_decisions(&evidence, &mut global_metrics, None, 1, false);
+
+        const SHARDS: u64 = 4;
+        let mut shard_maps: Vec<HashMap<RawKey, Evidence>> =
+            (0..SHARDS).map(|_| HashMap::new()).collect();
+        for (&key, &item) in &evidence {
+            // Mirrors shard_hash's real invariant (route by (cell, sample)
+            // alone) without needing raw bytes -- any valid partition
+            // function proves the same property.
+            let idx = (key.cell.0 ^ (key.sample as u64).wrapping_mul(0x9E3779B97F4A7C15))
+                % SHARDS;
+            shard_maps[idx as usize].insert(key, item);
+        }
+
+        let mut sharded_decisions = HashMap::new();
+        let mut sharded_metrics = Metrics::default();
+        for shard in &shard_maps {
+            if shard.is_empty() {
+                continue;
+            }
+            let (decisions, _) = build_decisions(shard, &mut sharded_metrics, None, 1, false);
+            sharded_decisions.extend(decisions);
+        }
+
+        assert_eq!(sharded_decisions.len(), global_decisions.len());
+        for (key, global_decision) in &global_decisions {
+            assert_eq!(
+                sharded_decisions.get(key),
+                Some(global_decision),
+                "decision for {key:?} differs between sharded and global runs"
+            );
+        }
+        assert_eq!(
+            sharded_metrics.molecules_counted,
+            global_metrics.molecules_counted
+        );
+        assert_eq!(
+            sharded_metrics.collision_groups,
+            global_metrics.collision_groups
+        );
+        assert_eq!(
+            sharded_metrics.umi_nodes_collapsed,
+            global_metrics.umi_nodes_collapsed
+        );
+        assert_eq!(
+            sharded_metrics.raw_cell_gene_umis,
+            global_metrics.raw_cell_gene_umis
+        );
+        // Sanity: this synthetic input actually exercises correction and
+        // collision resolution, not just a trivial all-unique case.
+        assert!(global_metrics.umi_nodes_collapsed > 0);
+        assert!(global_metrics.collision_groups > 0);
+    }
+
+    #[test]
+    fn shard_hash_is_stable_and_distinguishes_cb_pb_boundary() {
+        let a = shard_hash(b"AB", Some(b"C"));
+        let b = shard_hash(b"A", Some(b"BC"));
+        assert_ne!(a, b, "CB/PB boundary must affect the hash, not just concatenation");
+        assert_eq!(a, shard_hash(b"AB", Some(b"C")), "hash must be deterministic");
+        assert_eq!(
+            shard_hash(b"AB", None),
+            shard_hash(b"AB", Some(b"")),
+            "no PB tag and an empty PB tag hash the same (both contribute zero bytes)"
         );
     }
 }
