@@ -23,9 +23,9 @@ tool-level takeaway, not CAT06-specific.
 | `extract` | Scales genuinely well with `--threads`/`--split` | Modest, bounded per-thread buffers | Write-heavy (gzip output) | 32.6B reads in 5h40m at `--threads 128 --split 128` (~1.6M reads/sec aggregate). **`--split` must round-robin, not tie chunk assignment to thread identity** — a real bug found and fixed this session (`5f4f2c8`): thread-affinity chunking let 2 of 128 output chunks balloon to ~4.4x the median size, because real per-shard yield varies and rayon's work-stealing doesn't guarantee even file counts per thread. |
 | `probeset-align` / `guides` | **Single-threaded per process, no internal parallelism** | Modest | Read+write moderate | Must be fanned out externally (`xargs -P<cores>`, one process per `--split` chunk) to use multiple cores at all. Real per-chunk timing: ~977s for a 58M-read GEX chunk, ~172s for a 14.6M-read CRISPR chunk (single-threaded each). |
 | `samtools cat` (merge) | Low CPU (no recompression, same-codec concatenation) | Low | **Pure I/O, can be fast**: observed 150–400MB/s real sustained throughput on this box's NFS mount | Only concatenates — does **not** sort. Downstream indexed access needs an explicit sort step (see next row); don't assume `cat` output is index-able. |
-| `samtools sort` | `-@` mainly parallelizes *compression*, not the core in-memory sort-comparison step — real observed pattern: bursty CPU (idle while filling a buffer, spikes to several cores while compressing+flushing one chunk), not sustained at the requested thread count | **`-m` (memory per thread) is the real lever**, not `-@`, once you have RAM to spare | Directly memory-gated: bigger `-m` → fewer, larger chunks → far less repeated read/sort/compress/flush overhead | Real before/after on this box: `-m 2G` → ~70MB/s effective read throughput (many small ~37.5GB chunks, one every ~10min); `-m 8G` → ~254MB/s (3.6x) on the identical file. **Always check `free -h` before raising `-m`** — this is a real, direct memory commitment, not just a suggestion. |
+| `samtools sort` | `-@` mainly parallelizes *compression*, not the core in-memory sort-comparison step — real observed pattern: bursty CPU (idle while filling a buffer, spikes to several cores while compressing+flushing one chunk), not sustained at the requested thread count | **`-m` (memory per thread) is the real lever**, not `-@`, once you have RAM to spare | Directly memory-gated: bigger `-m` → fewer, larger chunks → far less repeated read/sort/compress/flush overhead | Real before/after on this box: `-m 2G` → ~70MB/s effective read throughput (many small ~37.5GB chunks, one every ~10min); `-m 8G` → ~254MB/s (3.6x) on the identical file. **Always check `free -h` before raising `-m`** — this is a real, direct memory commitment, not just a suggestion. **Follow-up, real numbers from watching the actual `-m 8G` run on `TSeq100_L1_GEX.bam` (703GB) to completion of its first two chunks:** an early single-snapshot read (~26min in) caught `tmp.0000.bam` at ~44.2GB and was wrongly logged here as a *finished* chunk size — it was actually a **mid-flush snapshot**, not the final size; that "~18% bigger than `-m 2G`" conclusion was an artifact of reading too early and is **corrected** below. Real finished-chunk sizes, read back from disk once each `tmp.NNNN.bam` stopped growing: `tmp.0000.bam` = **150.7GB**, `tmp.0001.bam` = **150.6GB** — roughly **4x** `-m 2G`'s ~37.5GB chunks, in line with the 4x memory-per-thread increase after all. Revised chunk-count estimate for this 703GB file: **~5 chunks at `-m 8G`** (vs. ~19 at `-m 2G`), not the ~16 first guessed from the bad early sample. `/proc/<pid>/io` cross-check at 2h07m elapsed: 465GB read of 703GB (66%) at an average 62.7MB/s over the full elapsed window (lower than the ~254MB/s *peak* measured earlier, because the average includes idle fill-phase time, not just active-read bursts) — real end-to-end lesson: **don't trust a single early snapshot for chunk-size or throughput conclusions; only read finished-file sizes and full-window `/proc/<pid>/io` deltas.** Process RSS held steady at **~1.1TB** across both the early and later checks (tracks the naive `-m 8G × ~128 threads ≈ ~1TB` ceiling), with system-wide `free -h` "available" holding ~403-404GB throughout — a real, direct memory commitment worth checking against whatever else is running concurrently before choosing `-m`, not a free lunch, but stable rather than climbing further over time. **Monitoring note:** a single `/proc/<pid>/io`-delta snapshot reading ~0.0MB/s does **not** mean the process stalled — external-merge sort alternates fill (reading, low measured I/O) and flush (writing a completed chunk) phases, so a 0MB/s *read*-throughput sample during a flush window is expected; only sustained zero across multiple snapshots spanning both phases would indicate a real stall. |
 | `samtools index` | Low | Low | Read-heavy, fast | **Requires coordinate-sorted input** — fails outright ("NO_COOR reads not in a single block") on `samtools cat` output. Sort first, every time. |
-| `sbx10x-molecules` | Default `--evidence-workers 1` is **fully serial** and dramatically slower at billion-read scale despite a real parallel path (`--evidence-workers N`, commits `3b7366c`/`9afc664`) existing in the binary since 2026-09-02 — that path additionally **requires the input BAM to be indexed**, so it only activates after the sort+index steps above. | **By far the dominant memory consumer in the whole pipeline.** Real observed: **~976GB RSS** for one ~9B-read / ~4.02B-raw-UMI-node library (`TSeq100_L1_GEX`), serial mode. Root cause (verified by reading the code, not guessed): `evidence` (`HashMap<RawKey,Evidence>`), `roots` (`HashMap<RawKey,RawKey>`), and `decisions` (`HashMap<RawKey,Decision>`) are all genuinely alive *simultaneously* at the point `decisions` gets built — each ~4B entries, ~24–48 bytes/entry raw plus real hashbrown overhead. No cheap safe reduction found; would need real restructuring (e.g. streaming `decisions` construction while draining `roots`/`evidence`) to meaningfully cut peak memory. | Read-heavy (evidence collection), write-heavy (final BAM rewrite) | **Two real libraries' worth of this can't run concurrently** on a 1.5TB box — confirmed L1 alone used ~976GB, leaving only ~552GB free, not enough headroom for a second comparably-sized library's molecules pass at the same time. This is the single biggest scheduling constraint discovered this session. Whether `--evidence-workers N>1` has a meaningfully *different* peak-memory profile than serial mode (same total live data, just more concurrent access to it) is an open question worth confirming once real data is available — plan to note the answer here once observed. |
+| `sbx10x-molecules` | Default `--evidence-workers 1` is **fully serial** and dramatically slower at billion-read scale despite a real parallel path (`--evidence-workers N`, commits `3b7366c`/`9afc664`) existing in the binary since 2026-09-02 — that path additionally **requires the input BAM to be indexed**, so it only activates after the sort+index steps above. | **By far the dominant memory consumer in the whole pipeline.** Real observed: **~976GB RSS** for one ~9B-read / ~4.02B-raw-UMI-node library (`TSeq100_L1_GEX`), serial mode. Root cause (verified by reading the code, not guessed): `evidence` (`HashMap<RawKey,Evidence>`), `roots` (`HashMap<RawKey,RawKey>`), and `decisions` (`HashMap<RawKey,Decision>`) are all genuinely alive *simultaneously* at the point `decisions` gets built — each ~4B entries, ~24–48 bytes/entry raw plus real hashbrown overhead. No cheap safe reduction found; would need real restructuring (e.g. streaming `decisions` construction while draining `roots`/`evidence`) to meaningfully cut peak memory. | Read-heavy (evidence collection), write-heavy (final BAM rewrite) | **Two real libraries' worth of this can't run concurrently** on a 1.5TB box — confirmed L1 alone used ~976GB, leaving only ~552GB free, not enough headroom for a second comparably-sized library's molecules pass at the same time. This is the single biggest scheduling constraint discovered this session. **Answered, and the answer is bad**: `--evidence-workers 64` on this same `TSeq100_L1_GEX` library was real-world **OOM-killed** by the kernel on 2026-09-16 — confirmed via `sudo dmesg`: `Out of memory: Killed process 503511 (sbx10x-molecule) total-vm:1676222284kB, anon-rss:1561676212kB` — i.e. **~1.49TB anon-RSS**, essentially the whole 1.5TB box, right at the `umi_correct` → `molecule_aggregate` phase transition (union-find fully resolved, `roots=4,078,415,170`, aggregation just starting). That's ~525GB **more** than the ~976GB serial-mode figure above, not less — parallel mode's per-worker local tables (each of the 64 evidence-workers builds its own region-local table before the global remap, same pattern used for genes/samples) add real duplicated overhead on top of the same `evidence`/`roots`/`decisions` structures serial mode already needed, rather than replacing them. **Practical implication: `--evidence-workers N>1` is not a safe default at this library's scale on this box** — it trades a real, large memory-safety margin for `umi_correct`-phase wall-clock speed, and at N=64 that trade goes negative (crash, not just "faster but chunkier"). Serial mode's own true peak was never fully confirmed either (that run was killed intentionally, mid-run, for the correctness bug — not because it hit a wall) — so "~976GB" should be read as "highest observed," not "confirmed peak," until a serial run is actually let run to completion. Whether some smaller worker count (e.g. 8–16) keeps most of the speed benefit while staying under the serial figure is untested. |
 | `probe-demux` / `matrix` / `cells` / `protospacer-call` | Single-threaded each | Low | Low | Fast, lightweight relative to everything above — never the bottleneck. |
 
 ## Concurrency lessons (real, not theoretical)
@@ -78,15 +78,56 @@ for the constraints found above, not just port the shell logic:
    sort/index step directly (with a memory-aware chunk size chosen from
    real available RAM at run time, not a hardcoded default) rather than
    relying on a separately-invoked `samtools sort -m <guessed value>`.
-3. **Bound `molecules`' peak memory by design, not by hoping it fits.**
-   Given `evidence`/`roots`/`decisions` need to coexist today, a real
-   redesign — e.g., partitioning the genome/synthetic-contig space into
-   bounded-memory batches, writing `decisions` incrementally per batch
-   instead of materializing one global map — would let memory scale with
-   `--evidence-chunk-bases`/batch size instead of total library size. This
-   is the single highest-value architectural change available, given
-   `molecules` is both the slowest and the most memory-hungry stage by a
-   wide margin.
+3. **Bound `molecules`' peak memory by design, not by hoping it fits — real
+   design confirmed 2026-09-16, after a real OOM kill.** `--evidence-workers
+   64` on `TSeq100_L1_GEX` was killed by the kernel: `sudo dmesg` confirmed
+   `anon-rss:1561676212kB` (~1.49TB) at the `umi_correct`→
+   `molecule_aggregate` boundary — ~525GB **more** than serial mode's ~976GB
+   high-water mark, because parallel evidence collection's per-worker local
+   tables add real duplicated overhead on top of the same global structures
+   serial mode already needed, not instead of them. Reading the actual code
+   (`build_decisions()`) to find the *right* partition axis, not just any
+   axis:
+   - **Partitioning by genome/synthetic-contig position (one gene per
+     contig, matching this project's pseudo-reference) does NOT work.**
+     `groups` (UMI correction) is keyed `(cell, sample, gene)`, so it's
+     gene-scoped and *could* stream per-contig — but
+     `gene_collision_index`/`gene_collision_resolve` (deciding which gene
+     wins when the same UMI shows up under more than one gene for a cell) is
+     keyed `(cell, sample, umi)` **with no gene in the key**, and two
+     genuinely different genes for the same cell+UMI can sit on two
+     completely different, far-apart contigs. Streaming gene-by-gene would
+     silently miss real cross-gene UMI collisions.
+   - **The right axis is `(cell, sample)`** — both real grouping keys in the
+     algorithm share this as their outer key, so partitioning evidence by a
+     hash of `(cell, sample)` into K bounded shards, then running the full
+     `groups → correct → molecules → collisions → decisions → write`
+     sequence **per shard**, discarding each shard's memory before the next,
+     is safe by construction: no correction or collision-resolution step
+     ever needs to see two different `(cell, sample)` shards at once. Peak
+     memory becomes ~`total/K`, a real tunable knob (matching `extract`'s
+     `--split` philosophy), independent of total library size. **This is the
+     established, proven pattern** — it's how Cell Ranger (Martian pipeline
+     chunks/joins by cell-barcode range), STARsolo (per-cell-barcode
+     structures released once a cell's counting finishes), and salmon
+     alevin/alevin-fry (`collate`-by-barcode then per-cell `quant`,
+     built specifically because plain `alevin` hit this same memory wall at
+     scale) all solve this same problem. No BAM re-sort is required — bucket
+     assignment can happen during the existing per-region parallel read
+     pass.
+   - **A smaller, lower-risk quick win, not yet applied**: `evidence`'s
+     *values* (the heavy `Evidence` struct) are only read up through the
+     point `molecules` is built; the final `decisions`-materialization loop
+     only needs `evidence`'s *keys*, which are identical to `roots`' keys
+     (a much lighter value type). `evidence` is currently passed by
+     reference and kept alive by the caller for the whole function, so it
+     never gets freed despite being dead weight for the back half of
+     `build_decisions` (`gene_collision_index` through
+     `decision_materialize`). Passing `evidence` by value and dropping it
+     right after `molecules` is built (switching the final loop to iterate
+     `roots.keys()` instead) would free one whole ~4B-entry heavyweight map
+     for that back half — real, bounded-risk, and worth doing regardless of
+     whether/when the full cell-sharded rewrite happens.
 4. **Round-robin output sharding by construction, not thread-affinity.**
    The `--split` bug (fixed as a bolt-on `AtomicUsize` counter this
    session) should just be the native design in a unified pipeline: never
@@ -100,10 +141,22 @@ for the constraints found above, not just port the shell logic:
 
 ## Open items to fill in once observed
 
-- Real peak memory for `sbx10x-molecules --evidence-workers 64` (parallel
-  mode) vs. the ~976GB serial-mode baseline, once the corrected pipeline
-  actually runs a library through the parallel path end to end.
+- ~~Real peak memory for `sbx10x-molecules --evidence-workers 64` (parallel
+  mode) vs. the ~976GB serial-mode baseline~~ — **answered, 2026-09-16**: it
+  OOM-killed at ~1.49TB, ~525GB worse than serial, not better. See the
+  cell/sample-sharding design note above. Serial mode's own true peak is
+  still unconfirmed (that run was killed intentionally, mid-run, for the
+  correctness fix, not because it hit a wall).
 - Real wall-clock improvement from `-m 8G` sort + `--evidence-workers 64`
   molecules, full library, once L1 completes under the new settings —
-  update the table above with the actual number instead of the
-  in-progress read-throughput sample.
+  **superseded**: the plan moved away from running full-scale (32.6B-read,
+  ~11B-reads-per-library) `molecules` jobs at all — see
+  `read_depth_comparison_plan.md`'s CP1–CP3 checkpoints (each ≤~8.1B raw
+  reads total across all 4 libraries, safely under a working ~10B ceiling
+  for what this comparison actually needs) as the real path forward instead.
+- **Not yet implemented, real next step when there's time**: the
+  `(cell, sample)`-hash-sharded `molecules` rewrite described above. Until
+  it lands, keep any `sbx10x-molecules --evidence-workers N>1` run scoped to
+  a bounded raw-read budget (~10B or less, matching what CP1–CP3 need) rather
+  than a full 30B+-read production library, since the real memory ceiling
+  scales with total UMI-node count, not thread count.
