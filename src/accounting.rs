@@ -38,6 +38,13 @@ pub struct DemuxMetrics {
     /// Illumina does; this is the real chemistry floor, not a code gap).
     pub index_unreachable: u64,
     pub per_sample_early: Vec<SampleCount>,
+    /// Of `per_sample_early`, how many also located a real R2/cDNA 3' boundary
+    /// (adapter or Flex anchor found -- see `Extracted::adapter_trimmed`),
+    /// excluding reads too short/garbled to ever locate one regardless of
+    /// matching-algorithm quality. The fair denominator for scoring a
+    /// downstream matcher (probe-set, guide capture, ...) in isolation from
+    /// upstream capture-length loss.
+    pub per_sample_early_boundary_found: Vec<SampleCount>,
 }
 
 /// Top-level run metrics, serialized to `metrics_summary.json`.

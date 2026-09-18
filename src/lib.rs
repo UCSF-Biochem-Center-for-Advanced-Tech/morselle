@@ -104,6 +104,13 @@ struct Stats {
     // own post-BCL-Convert index-only demultiplex count -- see
     // FLEX_SUPPORT_PLAN.md's read-metrics comparison.
     per_sample_early: Vec<u64>,
+    /// Of `per_sample_early`, how many also located a real R2/cDNA 3' boundary
+    /// (`Extracted::adapter_trimmed`) -- excludes reads that are structurally
+    /// too short/garbled to ever locate one, regardless of matching-algorithm
+    /// quality. The closest fair denominator for "of reads that had a real
+    /// shot at this, how many succeeded" when scoring a matcher in isolation
+    /// from upstream capture-length loss.
+    per_sample_early_boundary_found: Vec<u64>,
     undetermined_early: u64,
     via_dual_early: u64,
     via_i5_only_early: u64,
@@ -125,6 +132,7 @@ impl Stats {
         Stats {
             per_sample: vec![0; n_samples],
             per_sample_early: vec![0; n_samples],
+            per_sample_early_boundary_found: vec![0; n_samples],
             ..Default::default()
         }
     }
@@ -175,6 +183,16 @@ impl Stats {
             self.per_sample_early.resize(o.per_sample_early.len(), 0);
         }
         for (a, b) in self.per_sample_early.iter_mut().zip(o.per_sample_early.iter()) {
+            *a += b;
+        }
+        if self.per_sample_early_boundary_found.len() < o.per_sample_early_boundary_found.len() {
+            self.per_sample_early_boundary_found.resize(o.per_sample_early_boundary_found.len(), 0);
+        }
+        for (a, b) in self
+            .per_sample_early_boundary_found
+            .iter_mut()
+            .zip(o.per_sample_early_boundary_found.iter())
+        {
             *a += b;
         }
     }
@@ -695,6 +713,9 @@ fn process_one(
                         Some(i) => {
                             if i < stats.per_sample_early.len() {
                                 stats.per_sample_early[i] += 1;
+                                if e.adapter_trimmed && i < stats.per_sample_early_boundary_found.len() {
+                                    stats.per_sample_early_boundary_found[i] += 1;
+                                }
                             }
                         }
                         None => stats.undetermined_early += 1,
@@ -1371,6 +1392,15 @@ fn build_metrics(
                     .map(|(i, id)| SampleCount {
                         sample: id.clone(),
                         pairs: stats.per_sample_early[i],
+                    })
+                    .collect(),
+                per_sample_early_boundary_found: d
+                    .sample_ids()
+                    .iter()
+                    .enumerate()
+                    .map(|(i, id)| SampleCount {
+                        sample: id.clone(),
+                        pairs: stats.per_sample_early_boundary_found[i],
                     })
                     .collect(),
             }
