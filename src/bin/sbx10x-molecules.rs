@@ -23,9 +23,14 @@ use tracing::info;
     about = "Correct gene-aware UMIs, resolve gene collisions, and mark molecule representatives"
 )]
 struct Cli {
-    /// Annotated BAM containing CB, UB/UR, GX, and optionally ZG tags.
-    #[arg(value_name = "BAM")]
-    bam: PathBuf,
+    /// Annotated BAM(s) containing CB, UB/UR, GX, and optionally ZG tags.
+    /// Multiple files are only supported together with --shards > 1: they're
+    /// read directly, in sequence, by collate() -- no pre-merge/sort/index
+    /// step needed, since collate() only ever does a plain sequential scan
+    /// (never indexed access) regardless of how many files it reads from.
+    /// With --shards == 1 (the default), exactly one file is required.
+    #[arg(value_name = "BAM", num_args = 1..)]
+    bam: Vec<PathBuf>,
     /// Output BAM. Input order is preserved.
     #[arg(short, long)]
     output: PathBuf,
@@ -497,16 +502,31 @@ fn shard_hash(cb: &[u8], pb: Option<&[u8]>) -> u32 {
 }
 
 /// Collate stage (salmon alevin-fry naming): a single sequential pass over
-/// the input BAM, bucketing every record (eligible or not -- ineligible
+/// the input BAM(s), bucketing every record (eligible or not -- ineligible
 /// records just pass through unmodified during quant) into one of
 /// `shard_paths.len()` temporary BAM files by `shard_hash` of its `CB`+`PB`
 /// tags. A record with no `CB` at all can never be correction-eligible
 /// either way, so it's routed to shard 0 as a fixed fallback.
-fn collate(input: &Path, threads: usize, shard_paths: &[PathBuf]) -> Result<()> {
-    let mut reader =
-        bam::Reader::from_path(input).with_context(|| format!("opening {}", input.display()))?;
-    reader.set_threads(threads)?;
-    let header = bam::Header::from_template(reader.header());
+///
+/// Reads `inputs` in sequence -- one, or many (e.g. the raw per-chunk
+/// aligned BAMs straight from probeset-align/guides, unmerged, unsorted,
+/// unindexed). This never needed indexed/sorted access in the first place
+/// (only a plain sequential scan), so there was never a real reason to pay
+/// for `samtools cat` + `sort` + `index` before this step -- that was
+/// always just an artifact of the non-sharded --evidence-workers path's
+/// real requirement (IndexedReader), not something collate() itself needs.
+/// All input files must share the same header (verified once, from the
+/// first file, and reused for every shard writer and every subsequent
+/// input file).
+fn collate(inputs: &[PathBuf], threads: usize, shard_paths: &[PathBuf]) -> Result<()> {
+    let first = inputs
+        .first()
+        .context("collate() requires at least one input BAM")?;
+    let header = {
+        let reader = bam::Reader::from_path(first)
+            .with_context(|| format!("opening {}", first.display()))?;
+        bam::Header::from_template(reader.header())
+    };
     // Uncompressed: shard files are pure ephemeral intermediates, deleted
     // right after quant reads each one exactly once -- same lesson as
     // extract's --no-gzip finding (PROFILING.md: 53.9% of extract's CPU was
@@ -525,21 +545,29 @@ fn collate(input: &Path, threads: usize, shard_paths: &[PathBuf]) -> Result<()> 
         .collect::<Result<Vec<_>>>()?;
     let shards = writers.len();
     let mut routed = 0_u64;
-    for result in reader.records() {
-        let record = result.context("reading BAM in collate pass")?;
-        let cb = aux_string(&record, b"CB");
-        let pb = aux_string(&record, b"PB");
-        let idx = match &cb {
-            Some(cb) => shard_hash(cb.as_bytes(), pb.as_deref().map(str::as_bytes)) as usize % shards,
-            None => 0,
-        };
-        writers[idx].write(&record)?;
-        routed += 1;
-        if routed % 25_000_000 == 0 {
-            eprintln!("[sbxpress molecules] phase=collate records={routed}");
+    for input in inputs {
+        let mut reader = bam::Reader::from_path(input)
+            .with_context(|| format!("opening {}", input.display()))?;
+        reader.set_threads(threads)?;
+        for result in reader.records() {
+            let record = result
+                .with_context(|| format!("reading BAM in collate pass ({})", input.display()))?;
+            let cb = aux_string(&record, b"CB");
+            let pb = aux_string(&record, b"PB");
+            let idx = match &cb {
+                Some(cb) => {
+                    shard_hash(cb.as_bytes(), pb.as_deref().map(str::as_bytes)) as usize % shards
+                }
+                None => 0,
+            };
+            writers[idx].write(&record)?;
+            routed += 1;
+            if routed % 25_000_000 == 0 {
+                eprintln!("[sbxpress molecules] phase=collate records={routed}");
+            }
         }
     }
-    eprintln!("[sbxpress molecules] phase=collate complete records={routed}");
+    eprintln!("[sbxpress molecules] phase=collate complete records={routed} inputs={}", inputs.len());
     Ok(())
 }
 
@@ -1228,7 +1256,9 @@ fn write_output(
     metrics: &mut Metrics,
 ) -> Result<()> {
     eprintln!("[sbxpress molecules] phase=bam_write start");
-    let mut reader = bam::Reader::from_path(&cli.bam)?;
+    // Non-sharded path only: cli.shards <= 1 is validated (in main()) to
+    // require exactly one input file.
+    let mut reader = bam::Reader::from_path(&cli.bam[0])?;
     reader.set_threads(cli.threads)?;
     let header = bam::Header::from_template(reader.header());
     let mut writer = bam::Writer::from_path(&cli.output, &header, bam::Format::Bam)?;
@@ -1424,7 +1454,7 @@ fn run_sharded(cli: &Cli, metrics: &mut Metrics) -> Result<()> {
     collate(&cli.bam, cli.threads, &shard_paths)?;
 
     let header = {
-        let reader = bam::Reader::from_path(&cli.bam)?;
+        let reader = bam::Reader::from_path(&cli.bam[0])?;
         bam::Header::from_template(reader.header())
     };
     let mut writer = bam::Writer::from_path(&cli.output, &header, bam::Format::Bam)?;
@@ -1503,12 +1533,17 @@ fn main() -> Result<()> {
     } else {
         Cli::parse()
     };
-    if cli.bam == cli.output {
+    if cli.bam.iter().any(|b| b == &cli.output) {
         bail!("input and output BAM must differ");
     }
     let started = Instant::now();
     let mut metrics = Metrics {
-        input_bam: cli.bam.display().to_string(),
+        input_bam: cli
+            .bam
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(","),
         output_bam: cli.output.display().to_string(),
         tagseq: cli.tagseq,
         ..Default::default()
@@ -1524,6 +1559,14 @@ fn main() -> Result<()> {
     }
     if cli.shard_concurrency == 0 {
         bail!("--shard-concurrency must be greater than zero");
+    }
+    if cli.shards <= 1 && cli.bam.len() != 1 {
+        bail!(
+            "multiple input BAMs are only supported with --shards > 1 (got {} inputs, --shards {}); \
+             the non-sharded path needs a single indexed/re-scannable file",
+            cli.bam.len(),
+            cli.shards
+        );
     }
     if cli.shards > 1 {
         if cli.saturation.is_some() {
@@ -1546,19 +1589,21 @@ fn main() -> Result<()> {
         );
         return Ok(());
     }
+    // Validated above: cli.shards <= 1 requires exactly one input file.
+    let single_bam = &cli.bam[0];
     let (evidence, genes, gene_ids, _samples, sample_ids) = if cli.evidence_workers > 1 {
         info!(
             workers = cli.evidence_workers,
             "collecting evidence from indexed BAM regions"
         );
         collect_evidence_indexed(
-            &cli.bam,
+            single_bam,
             cli.evidence_workers,
             cli.evidence_chunk_bases,
             &mut metrics,
         )?
     } else {
-        collect_evidence(&cli.bam, cli.threads, &mut metrics)?
+        collect_evidence(single_bam, cli.threads, &mut metrics)?
     };
     eprintln!(
         "[sbxpress molecules] phase=evidence_ready raw_nodes={} eligible={}",
@@ -2082,5 +2127,97 @@ mod tests {
             shard_hash(b"AB", Some(b"")),
             "no PB tag and an empty PB tag hash the same (both contribute zero bytes)"
         );
+    }
+
+    fn write_test_bam(path: &Path, records: &[(&str, i64, &str, &str, &str)]) {
+        use rust_htslib::bam::{header::HeaderRecord, record::Cigar, record::CigarString};
+        let mut header = bam::Header::new();
+        header.push_record(
+            HeaderRecord::new(b"SQ")
+                .push_tag(b"SN", "ENSG1")
+                .push_tag(b"LN", 1_000_000),
+        );
+        let mut writer = bam::Writer::from_path(path, &header, bam::Format::Bam).unwrap();
+        let cigar = CigarString(vec![Cigar::Match(20)]);
+        for (name, pos, cb, umi, gene) in records {
+            let mut record = bam::Record::new();
+            record.set(
+                name.as_bytes(),
+                Some(&cigar),
+                b"ACGTACGTACGTACGTACGT",
+                &[30; 20],
+            );
+            record.set_tid(0);
+            record.set_pos(*pos);
+            record.set_flags(0);
+            record.push_aux(b"CB", Aux::String(cb)).unwrap();
+            record.push_aux(b"UR", Aux::String(umi)).unwrap();
+            record.push_aux(b"GX", Aux::String(gene)).unwrap();
+            writer.write(&record).unwrap();
+        }
+    }
+
+    fn read_tag_set(path: &Path) -> std::collections::BTreeSet<(String, String, String)> {
+        let mut reader = bam::Reader::from_path(path).unwrap();
+        reader
+            .records()
+            .map(|r| {
+                let record = r.unwrap();
+                (
+                    String::from_utf8(record.qname().to_vec()).unwrap(),
+                    aux_string(&record, b"CB").unwrap(),
+                    aux_string(&record, b"UR").unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    /// Core correctness guarantee behind reading multiple un-merged input
+    /// BAMs directly (the real motivation: skip samtools cat/sort/index
+    /// entirely, since collate() only ever does a plain sequential scan --
+    /// see the `bam` CLI field doc comment). Splitting the exact same
+    /// records across two "chunk" files must route every record into the
+    /// same shard, in the same multiset, as collating from one file holding
+    /// all of them -- collate() doesn't care how many files or what order
+    /// the records arrive in, only their CB+PB content.
+    #[test]
+    fn collate_from_multiple_inputs_matches_collate_from_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let all_records = [
+            ("r1", 1, "AAAACCCCGGGGTTTTAAAA", "AAAAAAAAAAAA", "ENSG1"),
+            ("r2", 2, "AAAACCCCGGGGTTTTAAAA", "CCCCCCCCCCCC", "ENSG1"),
+            ("r3", 3, "CCCCGGGGTTTTAAAACCCC", "GGGGGGGGGGGG", "ENSG1"),
+            ("r4", 4, "GGGGTTTTAAAACCCCGGGG", "TTTTTTTTTTTT", "ENSG1"),
+            ("r5", 5, "TTTTAAAACCCCGGGGTTTT", "AAAACCCCGGGG", "ENSG1"),
+        ];
+
+        // One pre-merged file, all records together.
+        let merged_path = dir.path().join("merged.bam");
+        write_test_bam(&merged_path, &all_records);
+        let merged_shards: Vec<PathBuf> = (0..3)
+            .map(|i| dir.path().join(format!("merged_shard_{i}.bam")))
+            .collect();
+        collate(&[merged_path], 1, &merged_shards).unwrap();
+
+        // The same records, split across three un-merged "chunk" files
+        // (simulating raw per-chunk probeset-align output, no cat/sort/index).
+        let chunk_paths: Vec<PathBuf> = (0..3)
+            .map(|i| dir.path().join(format!("chunk_{i}.bam")))
+            .collect();
+        write_test_bam(&chunk_paths[0], &all_records[0..2]);
+        write_test_bam(&chunk_paths[1], &all_records[2..3]);
+        write_test_bam(&chunk_paths[2], &all_records[3..5]);
+        let split_shards: Vec<PathBuf> = (0..3)
+            .map(|i| dir.path().join(format!("split_shard_{i}.bam")))
+            .collect();
+        collate(&chunk_paths, 1, &split_shards).unwrap();
+
+        for i in 0..3 {
+            assert_eq!(
+                read_tag_set(&merged_shards[i]),
+                read_tag_set(&split_shards[i]),
+                "shard {i} differs between single-file and multi-file collate"
+            );
+        }
     }
 }
