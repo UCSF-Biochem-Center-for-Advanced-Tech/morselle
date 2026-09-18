@@ -225,6 +225,15 @@ struct Metrics {
     tagseq: bool,
     records: u64,
     eligible_records: u64,
+    /// Otherwise-eligible (mapped, valid CB+UMI+gene) records dropped for
+    /// missing/empty `PB` (no confident sample-barcode call). Never counted
+    /// as a molecule: `probe-demux` requires the same non-empty `PB` and
+    /// silently discards anything without it, so keeping these in `molecules`
+    /// bought nothing downstream -- and worse, letting them share one
+    /// `NO_SAMPLE` bucket risked exactly the cross-sample UMI collision
+    /// `RawKey`'s `sample` field exists to prevent (see its doc comment: 99.8%
+    /// of real CAT06 cell barcodes are shared by more than one sample).
+    no_sample_records: u64,
     raw_cell_gene_umis: u64,
     corrected_umi_nodes: u64,
     molecules_before_gene_resolution: u64,
@@ -251,6 +260,7 @@ struct Metrics {
 fn merge_metrics(target: &mut Metrics, source: &Metrics) {
     target.records += source.records;
     target.eligible_records += source.eligible_records;
+    target.no_sample_records += source.no_sample_records;
     target.raw_cell_gene_umis += source.raw_cell_gene_umis;
     target.corrected_umi_nodes += source.corrected_umi_nodes;
     target.molecules_before_gene_resolution += source.molecules_before_gene_resolution;
@@ -457,21 +467,17 @@ fn better(record: &bam::Record, ordinal: u64, evidence: &Evidence) -> bool {
                     && ordinal < evidence.best_ordinal)))
 }
 
-/// Intern a `PB` tag value (if present) into a compact id, or `NO_SAMPLE`
-/// if the record carries no probe/sample barcode at all -- included only
-/// when present, per the `RawKey::sample` doc comment.
-fn intern_sample(
-    pb: Option<String>,
-    samples: &mut Vec<String>,
-    sample_ids: &mut HashMap<String, u32>,
-) -> u32 {
-    let Some(pb) = pb else { return NO_SAMPLE };
-    if let Some(&id) = sample_ids.get(&pb) {
+/// Intern a `PB` tag value into a compact id. Callers must have already
+/// rejected records with a missing/empty `PB` -- see `RawKey::sample`'s doc
+/// comment: a record with no confident sample-barcode call must not be
+/// evidence-eligible at all, not merged into a shared placeholder bucket.
+fn intern_sample(pb: &str, samples: &mut Vec<String>, sample_ids: &mut HashMap<String, u32>) -> u32 {
+    if let Some(&id) = sample_ids.get(pb) {
         id
     } else {
         let id = samples.len() as u32;
-        samples.push(pb.clone());
-        sample_ids.insert(pb, id);
+        samples.push(pb.to_string());
+        sample_ids.insert(pb.to_string(), id);
         id
     }
 }
@@ -616,6 +622,10 @@ fn collect_evidence(
         let Some((gene, _name)) = choose_gene(&record) else {
             continue;
         };
+        let Some(pb) = aux_string(&record, b"PB").filter(|v| !v.is_empty()) else {
+            metrics.no_sample_records += 1;
+            continue;
+        };
         let gene = if let Some(&id) = gene_ids.get(&gene) {
             id
         } else {
@@ -624,7 +634,7 @@ fn collect_evidence(
             gene_ids.insert(gene, id);
             id
         };
-        let sample = intern_sample(aux_string(&record, b"PB"), &mut samples, &mut sample_ids);
+        let sample = intern_sample(&pb, &mut samples, &mut sample_ids);
         metrics.eligible_records += 1;
         let key = RawKey { cell, sample, gene, umi };
         let ordinal = ordinal as u64;
@@ -662,6 +672,7 @@ struct RegionEvidence {
     samples: Vec<String>,
     records: u64,
     eligible_records: u64,
+    no_sample_records: u64,
 }
 
 fn merge_item(target: &mut Evidence, source: Evidence) {
@@ -728,6 +739,7 @@ fn collect_region(path: &Path, tid: u32, start: u64, end: u64) -> Result<RegionE
     let mut sample_ids = HashMap::<String, u32>::new();
     let mut records = 0_u64;
     let mut eligible_records = 0_u64;
+    let mut no_sample_records = 0_u64;
     for result in reader.records() {
         let record = result.context("reading BAM region in evidence pass")?;
         // An indexed query can return an alignment overlapping its left edge.
@@ -751,6 +763,10 @@ fn collect_region(path: &Path, tid: u32, start: u64, end: u64) -> Result<RegionE
         let Some((gene, _name)) = choose_gene(&record) else {
             continue;
         };
+        let Some(pb) = aux_string(&record, b"PB").filter(|v| !v.is_empty()) else {
+            no_sample_records += 1;
+            continue;
+        };
         let gene = if let Some(&id) = gene_ids.get(&gene) {
             id
         } else {
@@ -759,7 +775,7 @@ fn collect_region(path: &Path, tid: u32, start: u64, end: u64) -> Result<RegionE
             gene_ids.insert(gene, id);
             id
         };
-        let sample = intern_sample(aux_string(&record, b"PB"), &mut samples, &mut sample_ids);
+        let sample = intern_sample(&pb, &mut samples, &mut sample_ids);
         eligible_records += 1;
         let key = RawKey { cell, sample, gene, umi };
         let candidate = Evidence {
@@ -780,6 +796,7 @@ fn collect_region(path: &Path, tid: u32, start: u64, end: u64) -> Result<RegionE
         samples,
         records,
         eligible_records,
+        no_sample_records,
     })
 }
 
@@ -857,6 +874,7 @@ fn collect_evidence_indexed(
     for part in &parts {
         metrics.records += part.records;
         metrics.eligible_records += part.eligible_records;
+        metrics.no_sample_records += part.no_sample_records;
         let remap: Vec<u32> = part
             .genes
             .iter()
@@ -1272,14 +1290,15 @@ fn write_output(
                 .or_else(|| aux_string(&record, b"UB"))
                 .and_then(|v| Dna::pack(&v));
             let gene = choose_gene(&record).and_then(|(g, _)| gene_ids.get(&g).copied());
-            // Mirror intern_sample()'s original key construction exactly:
-            // no PB tag -> NO_SAMPLE; a PB tag present but somehow not in
-            // sample_ids (shouldn't happen, same BAM the ids were built
-            // from) -> None, same safe fall-through as an unknown gene.
-            let sample = match aux_string(&record, b"PB") {
-                None => Some(NO_SAMPLE),
-                Some(pb) => sample_ids.get(&pb).copied(),
-            };
+            // Mirror the eligibility gate in collect_evidence()/collect_region()
+            // exactly: missing/empty PB is never eligible (see RawKey::sample's
+            // doc comment) -- same safe fall-through to None as an unknown gene,
+            // not a NO_SAMPLE placeholder. A PB present but somehow not in
+            // sample_ids (shouldn't happen, same BAM the ids were built from)
+            // also falls through to None.
+            let sample = aux_string(&record, b"PB")
+                .filter(|v| !v.is_empty())
+                .and_then(|pb| sample_ids.get(&pb).copied());
             match (cell, sample, gene, umi) {
                 (Some(cell), Some(sample), Some(gene), Some(umi)) => {
                     Some(RawKey { cell, sample, gene, umi })
@@ -1378,10 +1397,11 @@ fn write_shard_output(
                 .or_else(|| aux_string(&record, b"UB"))
                 .and_then(|v| Dna::pack(&v));
             let gene = choose_gene(&record).and_then(|(g, _)| gene_ids.get(&g).copied());
-            let sample = match aux_string(&record, b"PB") {
-                None => Some(NO_SAMPLE),
-                Some(pb) => sample_ids.get(&pb).copied(),
-            };
+            // Mirror the eligibility gate exactly -- see write_output()'s
+            // matching comment.
+            let sample = aux_string(&record, b"PB")
+                .filter(|v| !v.is_empty())
+                .and_then(|pb| sample_ids.get(&pb).copied());
             match (cell, sample, gene, umi) {
                 (Some(cell), Some(sample), Some(gene), Some(umi)) => {
                     Some(RawKey { cell, sample, gene, umi })
@@ -1795,21 +1815,62 @@ mod tests {
     }
 
     #[test]
-    fn intern_sample_only_includes_pb_when_present() {
+    fn intern_sample_assigns_stable_ids_per_distinct_pb() {
         let mut samples = Vec::new();
         let mut sample_ids = HashMap::new();
-        assert_eq!(
-            intern_sample(None, &mut samples, &mut sample_ids),
-            NO_SAMPLE
-        );
-        let a = intern_sample(Some("D-A01".to_string()), &mut samples, &mut sample_ids);
-        let b = intern_sample(Some("D-A02".to_string()), &mut samples, &mut sample_ids);
-        let a_again = intern_sample(Some("D-A01".to_string()), &mut samples, &mut sample_ids);
-        assert_ne!(a, NO_SAMPLE);
-        assert_ne!(b, NO_SAMPLE);
+        let a = intern_sample("D-A01", &mut samples, &mut sample_ids);
+        let b = intern_sample("D-A02", &mut samples, &mut sample_ids);
+        let a_again = intern_sample("D-A01", &mut samples, &mut sample_ids);
         assert_ne!(a, b);
         assert_eq!(a, a_again);
         assert_eq!(samples.len(), 2);
+    }
+
+    /// A record with valid CB+UMI+GX but a missing or empty PB must be
+    /// dropped entirely, not folded into a shared placeholder bucket --
+    /// see RawKey::sample's doc comment (99.8% of real CAT06 cell barcodes
+    /// are shared by more than one sample, so a bucket that doesn't
+    /// discriminate by sample risks merging two different samples' real
+    /// molecules). probe-demux independently requires the same non-empty
+    /// PB and discards anything without it, so such reads could never
+    /// have become a real counted molecule downstream anyway.
+    #[test]
+    fn records_without_a_confident_sample_barcode_are_dropped_not_bucketed() {
+        use rust_htslib::bam::{header::HeaderRecord, record::Cigar, record::CigarString};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("input.bam");
+        let mut header = bam::Header::new();
+        header.push_record(HeaderRecord::new(b"SQ").push_tag(b"SN", "ENSG1").push_tag(b"LN", 1_000_000));
+        let mut writer = bam::Writer::from_path(&path, &header, bam::Format::Bam).unwrap();
+        let cigar = CigarString(vec![Cigar::Match(20)]);
+        // (name, cb, umi, pb) -- pb: None = no tag at all, Some("") = tag
+        // present but empty (a located-but-unresolved probe barcode).
+        for (name, cb, umi, pb) in [
+            ("no_pb_tag", "AAAACCCCGGGGTTTT", "AAAAAAAAAAAA", None),
+            ("empty_pb", "AAAACCCCGGGGTTTT", "CCCCCCCCCCCC", Some("")),
+            ("real_pb", "AAAACCCCGGGGTTTT", "GGGGGGGGGGGG", Some("D-A01")),
+        ] {
+            let mut record = bam::Record::new();
+            record.set(name.as_bytes(), Some(&cigar), b"ACGTACGTACGTACGTACGT", &[30; 20]);
+            record.set_tid(0);
+            record.set_pos(1);
+            record.set_flags(0);
+            record.push_aux(b"CB", Aux::String(cb)).unwrap();
+            record.push_aux(b"UR", Aux::String(umi)).unwrap();
+            record.push_aux(b"GX", Aux::String("ENSG1")).unwrap();
+            if let Some(pb) = pb {
+                record.push_aux(b"PB", Aux::String(pb)).unwrap();
+            }
+            writer.write(&record).unwrap();
+        }
+        drop(writer);
+
+        let mut metrics = Metrics::default();
+        let (evidence, ..) = collect_evidence(&path, 1, &mut metrics).unwrap();
+        assert_eq!(metrics.eligible_records, 1, "only the real-PB record is eligible");
+        assert_eq!(metrics.no_sample_records, 2, "both no-PB and empty-PB records are counted as dropped");
+        assert_eq!(evidence.len(), 1);
     }
 
     #[test]
@@ -1954,6 +2015,7 @@ mod tests {
                 .unwrap();
             record.push_aux(b"UR", Aux::String(umi)).unwrap();
             record.push_aux(b"GX", Aux::String("ENSG1")).unwrap();
+            record.push_aux(b"PB", Aux::String("D-A01")).unwrap();
             writer.write(&record).unwrap();
         }
         drop(writer);
