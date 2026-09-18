@@ -115,7 +115,7 @@ fn main() -> anyhow::Result<()> {
         total += 1;
         let raw = rec.seq();
         let o = orient(&raw, qual, &ocfg);
-        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg);
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg, false);
 
         let Some((r1s, _)) = e.r1 else {
             unlocated += 1;

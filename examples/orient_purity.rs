@@ -45,7 +45,7 @@ fn main() -> anyhow::Result<()> {
         let qual = rec.qual().unwrap_or(&[]);
         n += 1;
         let o = orient(&seq, qual, &ocfg);
-        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg);
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg, false);
         let confident = o.r1_tail_confirmed && e.polyt_run_len >= 10;
         let oi = match o.orientation {
             Orientation::P5Led => 0,

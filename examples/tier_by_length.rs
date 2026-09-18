@@ -73,7 +73,7 @@ fn main() -> anyhow::Result<()> {
         total += 1;
 
         let o = orient(&seq, qual, &ocfg);
-        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg);
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg, false);
 
         let tier = classify(&o, &e, &wl, cb_len, umi_len);
         let b = (raw_len / W).min(NB - 1);

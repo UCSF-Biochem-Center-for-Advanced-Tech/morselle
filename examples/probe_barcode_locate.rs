@@ -203,7 +203,7 @@ fn main() -> anyhow::Result<()> {
                 continue;
             }
             n_confident += 1;
-            let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg);
+            let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg, false);
             let Some(polyt_end) = e.polyt_end else {
                 continue;
             };

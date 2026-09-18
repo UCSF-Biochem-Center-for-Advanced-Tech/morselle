@@ -74,7 +74,7 @@ fn main() -> anyhow::Result<()> {
         let len = raw.len() as u64;
         all.push(len);
         let o = orient(&raw, &qual, &ocfg);
-        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg);
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg, false);
         if e.r1.is_none() {
             continue;
         }

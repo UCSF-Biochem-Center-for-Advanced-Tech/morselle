@@ -75,7 +75,7 @@ fn main() -> anyhow::Result<()> {
         let seq = rec.seq();
         let qual = rec.qual().unwrap_or(&[]);
         let o = orient(&seq, qual, &ocfg);
-        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg);
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg, false);
         let Some((r1s, _)) = e.r1 else { continue };
         if r1s + 16 > o.seq.len() {
             continue;

@@ -87,7 +87,7 @@ fn main() -> anyhow::Result<()> {
         let raw = rec.seq();
         reads += 1;
         let o = orient(&raw, &qual, &ocfg);
-        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg);
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg, false);
         let (Some((r1s, _)), true) = (e.r1, e.r2.is_some()) else {
             continue;
         };

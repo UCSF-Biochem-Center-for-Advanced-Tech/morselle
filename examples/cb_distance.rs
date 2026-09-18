@@ -63,7 +63,7 @@ fn main() -> anyhow::Result<()> {
         if o.orientation == Orientation::Unknown {
             continue;
         }
-        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg);
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg, false);
         let Some((r1s, _)) = e.r1 else {
             continue;
         };

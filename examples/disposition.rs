@@ -79,7 +79,7 @@ fn main() -> anyhow::Result<()> {
         total += 1;
 
         let o = orient(&seq, qual, &ocfg);
-        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg);
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg, false);
 
         let bucket = classify(&o, &e, &wl, &demux, cb_len, umi_len);
         counts[bucket as usize] += 1;

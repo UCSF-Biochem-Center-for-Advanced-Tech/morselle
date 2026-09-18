@@ -90,7 +90,7 @@ fn main() -> anyhow::Result<()> {
         let raw_qual = rec.qual().unwrap_or(&[]).to_vec();
 
         let o = orient(&raw_seq, &raw_qual, &ocfg);
-        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg);
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg, false);
 
         let Some((r1s, _)) = e.r1 else {
             // Unparseable: no CB bracket located.

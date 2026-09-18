@@ -60,7 +60,7 @@ fn main() -> anyhow::Result<()> {
                     continue;
                 }
             }
-            let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg);
+            let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg, false);
             let rl = e.polyt_run_len;
             run_len_sum += rl as u64;
             run_len_n += 1;
