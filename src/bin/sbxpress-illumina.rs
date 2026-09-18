@@ -546,6 +546,7 @@ fn convert_pair(
                         Some((0, CB_LEN + UMI_LEN)),
                         Some(CB_LEN + UMI_LEN),
                         extract_cfg,
+                        false, // no Flex support in this binary; see the extract_cfg literal above
                     );
                     let (cdna_start, cdna_end) = match e.r2 {
                         Some(range) => range,

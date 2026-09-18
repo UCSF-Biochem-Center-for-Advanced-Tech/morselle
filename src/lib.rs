@@ -194,6 +194,11 @@ struct Shared<'a> {
     orient_mode: OrientMode,
     extract_cfg: ExtractCfg,
     demuxer: Option<&'a Demuxer>,
+    /// Per-sample (indexed like `demuxer`'s `sample_ids()`) "does this
+    /// sample's declared name look like a Flex GEX library" -- the routing
+    /// signal for `ExtractCfg::flex_r2_boundary`'s hard-gate default. Empty
+    /// when `demuxer` is `None`.
+    gex_by_sample: &'a [bool],
     whitelist: Option<&'a Whitelist>,
     /// 10x Flex probe-barcode whitelist (FLEX_SUPPORT_PLAN.md Phase 1). `None`
     /// unless `--probe-barcode-whitelist` was given — zero cost otherwise.
@@ -307,6 +312,17 @@ pub fn run(cli: &Cli) -> Result<()> {
         .map(|s| Demuxer::new(s, cli.params.demux_cfg()))
         .transpose()?;
     let n_samples = demuxer.as_ref().map_or(1, |d| d.sample_ids().len());
+    // Naming-convention classification (matches this project's real sample
+    // sheets throughout, e.g. TSeq100_L1_GEX / TSeq100_L1_CRI): used only to
+    // route ExtractCfg::flex_r2_boundary's hard-gate default away from
+    // libraries the sheet itself says aren't Flex GEX. A sample the sheet
+    // doesn't clearly mark this way is treated as GEX by default (the
+    // `--flex` "assume GEX unless told otherwise" rule) -- never a
+    // correctness dependency, just an efficiency/precision routing hint.
+    let gex_by_sample: Vec<bool> = demuxer
+        .as_ref()
+        .map(|d| d.sample_ids().iter().map(|id| id.to_ascii_uppercase().contains("GEX")).collect())
+        .unwrap_or_default();
     let glevel = cli.params.output_gzip_level();
     let split = cli.params.split.max(1);
     // Each logical target gets `split` chunk files (_001.._00N). Layout is
@@ -353,6 +369,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         orient_mode: cli.params.orientation,
         extract_cfg,
         demuxer: demuxer.as_ref(),
+        gex_by_sample: &gex_by_sample,
         whitelist: whitelist.as_ref(),
         probe_wl: probe_wl.as_ref(),
         cb_len,
@@ -626,7 +643,28 @@ fn process_one(
         if o.orientation != Orientation::Unknown {
             stats.oriented += 1;
         }
-        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &sh.extract_cfg);
+
+        // Early, i5-ONLY library-type hint -- routes ExtractCfg::flex_r2_boundary's
+        // hard-gate default away from libraries the sample sheet's own i5 index
+        // confidently says aren't Flex GEX (e.g. CRISPR/Feature Barcoding sharing
+        // this invocation). Deliberately separate from `early_outcome` below: i5
+        // alone needs only `r1s` (`index_anchor_starts`'s i5 arm), so unlike the
+        // full i5+i7 dual lookup -- which needs `e.adapter_pos`, i.e. extract()'s
+        // own output -- this can run *before* extract() decides which boundary
+        // strategy to use. A read this doesn't confidently resolve (no sheet, or
+        // i5 itself unreadable) defaults to `false` -- `--flex` assumes every read
+        // is Flex GEX unless the sheet affirmatively says otherwise.
+        let likely_non_gex = sh
+            .demuxer
+            .and_then(|d| {
+                let r1s = o.cb_umi.map(|(s, _)| s)?;
+                let (i5s, _) = index_anchor_starts(r1s, None, sh.index_len);
+                let i5_region = i5s.and_then(|s| o.seq.get(s..s + sh.index_len));
+                d.assign(i5_region, None).sample
+            })
+            .map(|idx| !sh.gex_by_sample[idx])
+            .unwrap_or(false);
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &sh.extract_cfg, likely_non_gex);
 
         // Demux (early): i5/i7 assignment the moment R1 is located, before
         // any CB-specific work and independent of whether R2/cDNA is ever
@@ -1198,7 +1236,9 @@ fn detect_orientation(
         let seq = rec.seq();
         let qual = rec.qual().unwrap_or(&[]);
         let o = orient(&seq, qual, &cfg);
-        let e = extract(&o.seq, o.cb_umi, o.polyt_start, extract_cfg);
+        // Only `polyt_run_len` below is read (set before the boundary branch)
+        // -- this pre-scan never touches `e.r2`, so the routing hint is moot.
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, extract_cfg, false);
         if o.r1_tail_confirmed && e.polyt_run_len >= 10 {
             match o.orientation {
                 Orientation::P5Led => p5 += 1,

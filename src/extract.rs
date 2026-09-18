@@ -42,6 +42,18 @@ const FLEX_R2_END_ANCHOR: &[u8] = b"TGGAATTCTCGGGTGCCAAGGAACTCCAGTCAC";
 const FLEX_R2_END_ANCHOR_PREFIX_LEN: usize = 15;
 const FLEX_R2_END_ANCHOR_MAX_MM: u32 = 2;
 
+/// Max bp past `cdna_start` searched for [`FLEX_R2_END_ANCHOR`]. The real
+/// molecule structure fixes this distance: `BC10`(10) + a 29bp constant +
+/// `Ligated_Probe_insert`(50) = 89bp past the probe barcode, which itself
+/// starts ~10bp past `cdna_start` (`probe_barcode::DEFAULT_PROBE_OFFSET`,
+/// with its own `probe_barcode_window` of jitter) -- ~109bp worst case, so
+/// 150bp leaves real margin. This is every read's FIRST boundary check
+/// (library identity isn't known until demux, which itself runs *after*
+/// this), so an unbounded scan would waste a full-read pass on every
+/// CRISPR/Feature-Barcoding read (SBX reads run to 1000+bp) before ever
+/// falling back to the generic adapter search they actually need.
+const FLEX_R2_END_ANCHOR_MAX_SEARCH: usize = 150;
+
 /// Tuning for [`extract`].
 #[derive(Debug, Clone, Copy)]
 pub struct ExtractCfg {
@@ -57,7 +69,7 @@ pub struct ExtractCfg {
     /// fragment; the cap is applied by the emitter after reverse-complementing into
     /// R2 orientation, so it keeps the bases the R2 primer would read.
     pub max_r2_len: usize,
-    /// 10x Flex mode: prefer [`FLEX_R2_END_ANCHOR`] to bound R2's far end,
+    /// 10x Flex mode: require [`FLEX_R2_END_ANCHOR`] to bound R2's far end,
     /// instead of the generic `ILLUMINA_3P_ADAPTER` search + `min_cdna_len`
     /// floor. Flex GEX's R2 always contains a fixed-length probe insert that
     /// a plain length floor can't guarantee is actually present -- finding
@@ -66,15 +78,20 @@ pub struct ExtractCfg {
     /// reaches -- real data: only 13.5% of reads hit it) that lands the
     /// probe insert at a fixed, predictable position in the emitted R2.
     ///
-    /// Falls back to the generic-adapter/`min_cdna_len` path (same as
-    /// `false`) whenever the anchor isn't found -- deliberately a soft
-    /// preference, not a hard gate: a single `extract()` invocation
-    /// processes every library in a raw shard together (GEX, CRISPR/Feature
-    /// Barcoding, ...), demuxed only downstream of this call, so this flag
-    /// being on doesn't mean every read here is Flex GEX. A hard
-    /// anchor-required gate silently drops virtually all non-GEX reads
-    /// sharing the run (confirmed on real data). Leave `false` for non-Flex
-    /// (standard 3' capture, real free cDNA, no such landmark to find).
+    /// Hard gate by default (`--flex` assumes every read is Flex GEX; no
+    /// anchor found means no complete probe insert was captured, so R2 is
+    /// correctly rejected). The one exception is `extract()`'s
+    /// `likely_non_gex` parameter: a single invocation processes every
+    /// library in a raw shard together (GEX, CRISPR/Feature Barcoding, ...),
+    /// demuxed only downstream of this call, so this flag being on doesn't
+    /// mean every read is Flex GEX -- callers rule that out per-read via a
+    /// cheap early sample-sheet lookup (see `lib.rs::process_one`) rather
+    /// than this flag falling back silently for everyone (confirmed on real
+    /// data: a blanket fallback and a blanket hard gate are both wrong --
+    /// the former lands the probe insert at a jittery offset for GEX reads,
+    /// the latter drops virtually all non-GEX reads sharing the run). Leave
+    /// `false` for non-Flex (standard 3' capture, real free cDNA, no such
+    /// landmark to find).
     pub flex_r2_boundary: bool,
 }
 
@@ -265,24 +282,38 @@ fn adapter_single_indel(s: &[u8], a: &[u8], max_mm: u32) -> bool {
 /// read (end of `Ligated_Probe_insert`). Simple Hamming scan, no indel
 /// handling: the searched prefix is short enough that scanning every
 /// position already absorbs indel jitter without needing `find_adapter`'s
-/// extra indel-alignment machinery.
+/// extra indel-alignment machinery. Bounded to
+/// [`FLEX_R2_END_ANCHOR_MAX_SEARCH`] bp past `from` -- see its doc comment;
+/// this both caps the wasted work on non-GEX reads that will never match and
+/// avoids ever reporting a spurious, structurally-impossible match far into
+/// the read.
 fn find_flex_r2_end(seq: &[u8], from: usize) -> Option<usize> {
     let a = &FLEX_R2_END_ANCHOR[..FLEX_R2_END_ANCHOR_PREFIX_LEN];
     let m = a.len();
-    if seq.len() < from + m {
+    let end = seq.len().min(from + FLEX_R2_END_ANCHOR_MAX_SEARCH);
+    if end < from + m {
         return None;
     }
-    (from..=seq.len() - m).find(|&i| hamming_leq(&seq[i..i + m], a, FLEX_R2_END_ANCHOR_MAX_MM))
+    (from..=end - m).find(|&i| hamming_leq(&seq[i..i + m], a, FLEX_R2_END_ANCHOR_MAX_MM))
 }
 
 /// Bracket R1 (CB+UMI) and R2 (cDNA) on a canonical read.
 ///
 /// `cb_umi` and `polyt_start` come from [`crate::orient::Oriented`].
+///
+/// `likely_non_gex`: routing hint for [`ExtractCfg::flex_r2_boundary`] --
+/// true when the *caller* already has good reason (typically an early,
+/// i5-only sample-sheet lookup -- see `lib.rs::process_one`) to believe this
+/// read is NOT from a Flex GEX library, even though Flex mode is on for the
+/// whole run (raw shards mix every library together). Ignored when
+/// `cfg.flex_r2_boundary` is false. Always `false` is a safe default --
+/// `--flex` assumes every read is Flex GEX unless told otherwise.
 pub fn extract(
     seq: &[u8],
     cb_umi: Option<(usize, usize)>,
     polyt_start: Option<usize>,
     cfg: &ExtractCfg,
+    likely_non_gex: bool,
 ) -> Extracted {
     let mut polyt_end = None;
     let mut polyt_run_len = 0u16;
@@ -297,30 +328,32 @@ pub fn extract(
         polyt_run_len = cdna_start.saturating_sub(pts).min(u16::MAX as usize) as u16;
         polyt_end = Some(cdna_start);
 
-        // Flex: prefer the real probe-insert/constant boundary over a length
-        // floor -- see `ExtractCfg::flex_r2_boundary` and `FLEX_R2_END_ANCHOR`.
-        // Falls through to the generic-adapter/length-floor path below when
-        // not found, rather than rejecting outright: a single `extract()`
-        // invocation processes ALL libraries in a raw shard together (GEX,
-        // CRISPR/Feature Barcoding, ...), demuxed only *after* this point, so
-        // `--probe-barcode-whitelist` being set doesn't mean every read here
-        // is a Flex GEX read carrying this specific construct. A hard
-        // anchor-required gate would silently reject virtually all CRISPR
-        // reads sharing this run (confirmed on real CAT06 data: with a hard
-        // gate, the emitted-R2 length distribution was a single ~100bp GEX
-        // cluster with no shorter CRISPR-capture population at all -- they
-        // were gone, not mis-bounded). Falling back preserves today's
-        // existing (correct) CRISPR behavior exactly, at the cost of losing
-        // the clean "reject reads that can never match" accounting for the
-        // rare Flex GEX read whose anchor itself is too error-ridden to find.
-        let flex_end = cfg.flex_r2_boundary.then(|| find_flex_r2_end(seq, cdna_start)).flatten();
-        if let Some(cdna_end) = flex_end {
-            adapter_pos = Some(cdna_end);
-            adapter_trimmed = true;
-            if cdna_end > cdna_start {
-                r2 = Some((cdna_start, cdna_end));
+        if cfg.flex_r2_boundary && !likely_non_gex {
+            // Hard gate: the real probe-insert/constant boundary
+            // (FLEX_R2_END_ANCHOR) or nothing -- no fallback to the generic
+            // adapter/length floor. `--flex` defaults to assuming every read
+            // is Flex GEX; the caller is responsible for ruling that out via
+            // `likely_non_gex` (an early, cheap i5-only sample-sheet lookup)
+            // for libraries that don't carry this construct at all (CRISPR/
+            // Feature Barcoding sharing the same invocation) -- see
+            // `lib.rs::process_one`. A read where the anchor can't be
+            // confidently located didn't carry a complete probe insert,
+            // regardless of its raw length, so it's correctly rejected here
+            // rather than passed through to silently fail later in
+            // `probeset-align`.
+            if let Some(cdna_end) = find_flex_r2_end(seq, cdna_start) {
+                adapter_pos = Some(cdna_end);
+                adapter_trimmed = true;
+                if cdna_end > cdna_start {
+                    r2 = Some((cdna_start, cdna_end));
+                }
             }
         } else {
+            // Standard path: non-Flex mode, or Flex mode but the caller
+            // already ruled out this read carrying FLEX_R2_END_ANCHOR at
+            // all -- skip straight to the generic-adapter/length-floor
+            // logic rather than wasting a search that was never going to
+            // match.
             adapter_pos = find_adapter(seq, cdna_start, cfg.adapter_max_mm);
             let mut cdna_end = adapter_pos.unwrap_or(seq.len());
             adapter_trimmed = adapter_pos.is_some();
@@ -444,7 +477,7 @@ mod tests {
     fn trims_a_full_tso_between_cdna_and_adapter() {
         let cdna = b"GCTAGCTAGCATCGATCGTAGCTAGCATCGATCGATGCTAGCTAGCATCG";
         let seq = canonical(cdna, true, true);
-        let e = extract(&seq, Some((0, 28)), Some(28), &tso_cfg());
+        let e = extract(&seq, Some((0, 28)), Some(28), &tso_cfg(), false);
         assert!(e.tso_trimmed);
         let (s, t) = e.r2.unwrap();
         assert_eq!(&seq[s..t], revcomp(cdna).as_slice());
@@ -455,7 +488,7 @@ mod tests {
     fn leaves_the_tso_alone_by_default() {
         let cdna = b"GCTAGCTAGCATCGATCGTAGCTAGCATCGATCGATGCTAGCTAGCATCG";
         let seq = canonical(cdna, true, true);
-        let e = extract(&seq, Some((0, 28)), Some(28), &ecfg());
+        let e = extract(&seq, Some((0, 28)), Some(28), &ecfg(), false);
         assert!(!e.tso_trimmed);
         let (s, t) = e.r2.unwrap();
         // The TSO is still sitting on the end of the "cDNA".
@@ -467,7 +500,7 @@ mod tests {
         let cdna = b"GCTAGCTAGCATCGATCGTAGCTAGCATCGATCGATGCTAGCTAGCATCG";
         let mut seq = canonical(cdna, false, false);
         seq.extend_from_slice(&TSO_RC[..18]); // read stopped mid-TSO
-        let e = extract(&seq, Some((0, 28)), Some(28), &tso_cfg());
+        let e = extract(&seq, Some((0, 28)), Some(28), &tso_cfg(), false);
         assert!(e.tso_trimmed);
         let (s, t) = e.r2.unwrap();
         assert_eq!(&seq[s..t], revcomp(cdna).as_slice());
@@ -486,7 +519,7 @@ mod tests {
                 b'A'
             };
         }
-        assert!(extract(&seq, Some((0, 28)), Some(28), &tso_cfg()).tso_trimmed);
+        assert!(extract(&seq, Some((0, 28)), Some(28), &tso_cfg(), false).tso_trimmed);
 
         // 6 is not.
         let mut seq = canonical(cdna, true, true);
@@ -497,7 +530,7 @@ mod tests {
                 b'A'
             };
         }
-        assert!(!extract(&seq, Some((0, 28)), Some(28), &tso_cfg()).tso_trimmed);
+        assert!(!extract(&seq, Some((0, 28)), Some(28), &tso_cfg(), false).tso_trimmed);
     }
 
     #[test]
@@ -508,7 +541,7 @@ mod tests {
         cdna.extend_from_slice(&revcomp(TSO_RC));
         cdna.extend_from_slice(b"ATCGATCGATGCTAGCTAGCATCGATCGTC");
         let seq = canonical(&cdna, false, true);
-        let e = extract(&seq, Some((0, 28)), Some(28), &tso_cfg());
+        let e = extract(&seq, Some((0, 28)), Some(28), &tso_cfg(), false);
         assert!(!e.tso_trimmed);
         let (s, t) = e.r2.unwrap();
         assert_eq!(&seq[s..t], revcomp(&cdna).as_slice());
@@ -522,7 +555,7 @@ mod tests {
         seq.extend(std::iter::repeat_n(b'T', 30));
         seq.extend_from_slice(TSO_RC);
         seq.extend_from_slice(ILLUMINA_3P_ADAPTER);
-        let e = extract(&seq, Some((0, 28)), Some(28), &tso_cfg());
+        let e = extract(&seq, Some((0, 28)), Some(28), &tso_cfg(), false);
         assert!(e.tso_trimmed);
         assert!(e.r2.is_none());
     }
@@ -582,7 +615,7 @@ mod tests {
 
         let o = orient(&seq, &qual, &ocfg());
         assert_eq!(o.orientation, Orientation::P5Led);
-        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg());
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg(), false);
 
         // R1 == 28 bp and equals CB+UMI.
         let (r1s, r1e) = e.r1.unwrap();
@@ -613,7 +646,7 @@ mod tests {
         let qual = vec![b'I'; seq.len()];
 
         let o = orient(&seq, &qual, &ocfg());
-        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg());
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg(), false);
         assert!(!e.adapter_trimmed);
         let (r2s, r2e) = e.r2.unwrap();
         assert_eq!(r2e, o.seq.len());
@@ -650,7 +683,7 @@ mod tests {
         let qual = vec![b'I'; seq.len()];
 
         let o = orient(&seq, &qual, &ocfg());
-        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &flex_ecfg());
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &flex_ecfg(), false);
 
         let (r2s, r2e) = e.r2.expect("flex R2 should be located");
         assert_eq!(&o.seq[r2s..r2e], pre_anchor.as_slice());
@@ -681,20 +714,17 @@ mod tests {
         let qual = vec![b'I'; seq.len()];
 
         let o = orient(&seq, &qual, &ocfg());
-        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &flex_ecfg());
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &flex_ecfg(), false);
         let (r2s, r2e) = e.r2.expect("anchor within mismatch budget should still be found");
         assert_eq!(&o.seq[r2s..r2e], pre_anchor.as_slice());
     }
 
     #[test]
-    fn flex_r2_boundary_falls_back_when_anchor_is_absent() {
-        // Simulates a CRISPR/Feature-Barcoding read sharing the same
-        // flex_r2_boundary=true invocation as real Flex GEX reads (raw
-        // shards mix every library together, demuxed only after extract()):
-        // no FLEX_R2_END_ANCHOR anywhere, but otherwise a perfectly normal
-        // read. Must NOT be dropped -- falls back to the same
-        // generic-adapter/read-end/min_cdna_len behavior as non-Flex mode,
-        // so libraries that don't carry this construct are unaffected.
+    fn flex_r2_boundary_hard_gate_rejects_when_anchor_absent_and_gex_assumed() {
+        // likely_non_gex=false (the default -- caller has no reason to think
+        // otherwise): no FLEX_R2_END_ANCHOR anywhere. `--flex` assumes every
+        // read is Flex GEX unless told otherwise, so this is correctly
+        // rejected outright -- no fallback to read-end/min_cdna_len.
         let cb = b"AAACCCAAGAAACCCA";
         let umi = b"ACGTACGTACGT";
         let payload = b"GATTACAGATTACAGATTACAGATTACAGATTACAGATTACAGATTACAGATTACAGATTACA";
@@ -710,11 +740,68 @@ mod tests {
         let qual = vec![b'I'; seq.len()];
 
         let o = orient(&seq, &qual, &ocfg());
-        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &flex_ecfg());
-        let (r2s, r2e) = e.r2.expect("should fall back to read-end, not reject");
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &flex_ecfg(), false);
+        assert!(e.r2.is_none());
+        assert!(!e.adapter_trimmed);
+    }
+
+    #[test]
+    fn flex_r2_boundary_skips_search_for_known_non_gex_reads() {
+        // likely_non_gex=true: the caller's early i5-only sample-sheet
+        // lookup (lib.rs::process_one) already identified this as e.g. a
+        // CRISPR/Feature-Barcoding read sharing the same flex_r2_boundary=
+        // true invocation as real Flex GEX reads. Must go straight to the
+        // standard generic-adapter/read-end/min_cdna_len path -- same
+        // outcome as non-Flex mode -- without ever attempting the (futile)
+        // Flex anchor search.
+        let cb = b"AAACCCAAGAAACCCA";
+        let umi = b"ACGTACGTACGT";
+        let payload = b"GATTACAGATTACAGATTACAGATTACAGATTACAGATTACAGATTACAGATTACAGATTACA";
+        let mut seq = Vec::new();
+        seq.extend_from_slice(b"AACAAT");
+        seq.extend_from_slice(P5);
+        seq.extend_from_slice(b"ACGTACGTAC");
+        seq.extend_from_slice(R1_PRIMER);
+        seq.extend_from_slice(cb);
+        seq.extend_from_slice(umi);
+        seq.extend(std::iter::repeat(b'T').take(30));
+        seq.extend_from_slice(payload);
+        let qual = vec![b'I'; seq.len()];
+
+        let o = orient(&seq, &qual, &ocfg());
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &flex_ecfg(), true);
+        let (r2s, r2e) = e.r2.expect("known-non-GEX reads must not be dropped");
         assert_eq!(r2e, o.seq.len());
         assert_eq!(&o.seq[r2s..r2e], payload.as_slice());
         assert!(!e.adapter_trimmed);
+    }
+
+    #[test]
+    fn flex_r2_boundary_search_is_bounded_past_the_real_structural_range() {
+        // The anchor sits real bp past cdna_start (FLEX_R2_END_ANCHOR_MAX_SEARCH,
+        // ~150bp) -- a structurally-impossible position for the real
+        // Ligated_Probe_insert/constant junction. Under the hard-gate default
+        // (likely_non_gex=false) this must be rejected, not matched: confirms
+        // the search is actually bounded (an unbounded scan would wrongly
+        // find it and mis-locate the boundary far too late).
+        let cb = b"AAACCCAAGAAACCCA";
+        let umi = b"ACGTACGTACGT";
+        let padding = vec![b'G'; FLEX_R2_END_ANCHOR_MAX_SEARCH + 20];
+        let mut seq = Vec::new();
+        seq.extend_from_slice(b"AACAAT");
+        seq.extend_from_slice(P5);
+        seq.extend_from_slice(b"ACGTACGTAC");
+        seq.extend_from_slice(R1_PRIMER);
+        seq.extend_from_slice(cb);
+        seq.extend_from_slice(umi);
+        seq.extend(std::iter::repeat(b'T').take(30));
+        seq.extend_from_slice(&padding);
+        seq.extend_from_slice(FLEX_R2_END_ANCHOR);
+        let qual = vec![b'I'; seq.len()];
+
+        let o = orient(&seq, &qual, &ocfg());
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &flex_ecfg(), false);
+        assert!(e.r2.is_none(), "anchor beyond the search bound must not be found");
     }
 
     #[test]
@@ -731,7 +818,7 @@ mod tests {
         let qual = vec![b'I'; seq.len()];
 
         let o = orient(&seq, &qual, &ocfg());
-        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg());
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg(), false);
         let (r2s, r2e) = e.r2.expect("non-flex path should still emit R2 (long enough)");
         assert_eq!(r2e, o.seq.len());
         assert!(&o.seq[r2s..r2e] != pre_anchor.as_slice());
@@ -748,7 +835,7 @@ mod tests {
 
         let o = orient(&reversed, &qual, &ocfg());
         assert_eq!(o.orientation, Orientation::P7Led);
-        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg());
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg(), false);
         let (r1s, r1e) = e.r1.unwrap();
         assert_eq!(r1e - r1s, 28);
         assert_eq!(&o.seq[r1s..r1s + 16], cb);
@@ -765,7 +852,7 @@ mod tests {
         let qual = vec![b'I'; seq.len()];
 
         let o = orient(&seq, &qual, &ocfg());
-        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg());
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg(), false);
         assert!(e.r2.is_none());
         assert!(e.r1.is_some());
     }
