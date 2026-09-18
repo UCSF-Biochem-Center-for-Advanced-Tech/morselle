@@ -281,6 +281,11 @@ impl Params {
             adapter_max_mm: self.adapter_max_mm,
             trim_tso: self.trim_tso,
             max_r2_len: self.max_r2_len,
+            // Reuses --probe-barcode-whitelist's presence as the Flex-mode
+            // signal -- that flag is already how every other Flex-only code
+            // path (probe-barcode location) gets turned on, so this doesn't
+            // need a separate flag of its own.
+            flex_r2_boundary: self.probe_barcode_whitelist.is_some(),
         }
     }
 

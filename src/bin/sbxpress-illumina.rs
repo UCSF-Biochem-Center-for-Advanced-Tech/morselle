@@ -729,6 +729,9 @@ fn run(cli: Cli) -> Result<()> {
         adapter_max_mm: cli.adapter_max_mm,
         trim_tso: cli.trim_tso,
         max_r2_len: 0,
+        // No Flex support in this binary (already-demultiplexed Illumina
+        // R1/R2 input, no probe-barcode concept here).
+        flex_r2_boundary: false,
     };
     let emit_yc = !cli.no_emit_yc;
     let cli_trim_tso = cli.trim_tso;

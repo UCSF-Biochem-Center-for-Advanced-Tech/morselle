@@ -5,7 +5,9 @@
 //! - **R1** = the 28 bp CB+UMI block located by [`crate::orient`].
 //! - **R2** = cDNA between the dT-primer run end and the 3' read-through adapter
 //!   (`AGATCGGAAGAGC`), found by a cheap Hamming seed; if the read ends mid-cDNA
-//!   (no adapter), R2 runs to the read end.
+//!   (no adapter), R2 runs to the read end. **Standard 3' capture only** --
+//!   see [`ExtractCfg::flex_r2_boundary`] for 10x Flex, which bounds R2 by a
+//!   real structural landmark ([`FLEX_R2_END_ANCHOR`]) instead.
 //!
 //! All positions are returned as ranges into the canonical sequence — zero-copy;
 //! the caller slices `seq`/`qual`.
@@ -22,6 +24,24 @@ const TSO_RC: &[u8] = b"CCCATGTACTCTGCGTTGATACCACTGCTT";
 /// adapter. 12 bp with a 1-mismatch budget keeps false trims near zero.
 const MIN_PARTIAL_TSO: usize = 12;
 
+/// 10x Flex GEX/CRISPR construct: the constant sequence immediately following
+/// `Ligated_Probe_insert` (the 50bp gene/guide probe), in canonical (pre-RC)
+/// coordinates -- i.e. this marks the FAR end of the cDNA/R2 region for Flex
+/// reads, the same role `ILLUMINA_3P_ADAPTER` plays for standard 3' capture.
+/// Only a confident prefix is searched, not the full 33bp -- the boundary IS
+/// the prefix's start position, so a short high-confidence match locates it
+/// exactly as precisely as a full-length one while being far more tolerant
+/// of per-base sequencing error accumulating over a long required span.
+/// Empirically compared on real CAT06 Flex data (25-shard diagnostic,
+/// 2026-09-17): a 10-15bp prefix at max_mm 1-2 is found in ~82% of reads,
+/// vs 74.4% requiring the full 33bp at max_mm 2 -- and the resulting
+/// immediate-downstream probe match rate is identical either way (~48.5%),
+/// confirming the short prefix locates the same true boundary just as
+/// reliably. 15bp/max_mm 2 measured marginally best of the lengths tried.
+const FLEX_R2_END_ANCHOR: &[u8] = b"TGGAATTCTCGGGTGCCAAGGAACTCCAGTCAC";
+const FLEX_R2_END_ANCHOR_PREFIX_LEN: usize = 15;
+const FLEX_R2_END_ANCHOR_MAX_MM: u32 = 2;
+
 /// Tuning for [`extract`].
 #[derive(Debug, Clone, Copy)]
 pub struct ExtractCfg {
@@ -37,6 +57,25 @@ pub struct ExtractCfg {
     /// fragment; the cap is applied by the emitter after reverse-complementing into
     /// R2 orientation, so it keeps the bases the R2 primer would read.
     pub max_r2_len: usize,
+    /// 10x Flex mode: prefer [`FLEX_R2_END_ANCHOR`] to bound R2's far end,
+    /// instead of the generic `ILLUMINA_3P_ADAPTER` search + `min_cdna_len`
+    /// floor. Flex GEX's R2 always contains a fixed-length probe insert that
+    /// a plain length floor can't guarantee is actually present -- finding
+    /// the real boundary is a tighter cut (drops the uninformative tail past
+    /// the probe insert that the generic adapter search usually never
+    /// reaches -- real data: only 13.5% of reads hit it) that lands the
+    /// probe insert at a fixed, predictable position in the emitted R2.
+    ///
+    /// Falls back to the generic-adapter/`min_cdna_len` path (same as
+    /// `false`) whenever the anchor isn't found -- deliberately a soft
+    /// preference, not a hard gate: a single `extract()` invocation
+    /// processes every library in a raw shard together (GEX, CRISPR/Feature
+    /// Barcoding, ...), demuxed only downstream of this call, so this flag
+    /// being on doesn't mean every read here is Flex GEX. A hard
+    /// anchor-required gate silently drops virtually all non-GEX reads
+    /// sharing the run (confirmed on real data). Leave `false` for non-Flex
+    /// (standard 3' capture, real free cDNA, no such landmark to find).
+    pub flex_r2_boundary: bool,
 }
 
 /// Extraction result: ranges `[start, end)` into the canonical sequence.
@@ -221,6 +260,21 @@ fn adapter_single_indel(s: &[u8], a: &[u8], max_mm: u32) -> bool {
     false
 }
 
+/// Leftmost position ≥ `from` where a confident prefix of
+/// [`FLEX_R2_END_ANCHOR`] matches -- the real far boundary of R2 on a Flex
+/// read (end of `Ligated_Probe_insert`). Simple Hamming scan, no indel
+/// handling: the searched prefix is short enough that scanning every
+/// position already absorbs indel jitter without needing `find_adapter`'s
+/// extra indel-alignment machinery.
+fn find_flex_r2_end(seq: &[u8], from: usize) -> Option<usize> {
+    let a = &FLEX_R2_END_ANCHOR[..FLEX_R2_END_ANCHOR_PREFIX_LEN];
+    let m = a.len();
+    if seq.len() < from + m {
+        return None;
+    }
+    (from..=seq.len() - m).find(|&i| hamming_leq(&seq[i..i + m], a, FLEX_R2_END_ANCHOR_MAX_MM))
+}
+
 /// Bracket R1 (CB+UMI) and R2 (cDNA) on a canonical read.
 ///
 /// `cb_umi` and `polyt_start` come from [`crate::orient::Oriented`].
@@ -243,25 +297,50 @@ pub fn extract(
         polyt_run_len = cdna_start.saturating_sub(pts).min(u16::MAX as usize) as u16;
         polyt_end = Some(cdna_start);
 
-        adapter_pos = find_adapter(seq, cdna_start, cfg.adapter_max_mm);
-        let mut cdna_end = adapter_pos.unwrap_or(seq.len());
-        adapter_trimmed = adapter_pos.is_some();
-        // The TSO sits between the cDNA and the adapter on any fragment that
-        // reached the cDNA's 5' end. Trim before the length gate, so a fragment
-        // that is *only* TSO is rejected rather than emitted as cDNA.
-        if cfg.trim_tso && cdna_end > cdna_start {
-            if let Some(pos) = find_tso(seq, cdna_start, cdna_end) {
-                tso_pos = Some(pos);
-                tso_trimmed = true;
-                cdna_end = pos;
+        // Flex: prefer the real probe-insert/constant boundary over a length
+        // floor -- see `ExtractCfg::flex_r2_boundary` and `FLEX_R2_END_ANCHOR`.
+        // Falls through to the generic-adapter/length-floor path below when
+        // not found, rather than rejecting outright: a single `extract()`
+        // invocation processes ALL libraries in a raw shard together (GEX,
+        // CRISPR/Feature Barcoding, ...), demuxed only *after* this point, so
+        // `--probe-barcode-whitelist` being set doesn't mean every read here
+        // is a Flex GEX read carrying this specific construct. A hard
+        // anchor-required gate would silently reject virtually all CRISPR
+        // reads sharing this run (confirmed on real CAT06 data: with a hard
+        // gate, the emitted-R2 length distribution was a single ~100bp GEX
+        // cluster with no shorter CRISPR-capture population at all -- they
+        // were gone, not mis-bounded). Falling back preserves today's
+        // existing (correct) CRISPR behavior exactly, at the cost of losing
+        // the clean "reject reads that can never match" accounting for the
+        // rare Flex GEX read whose anchor itself is too error-ridden to find.
+        let flex_end = cfg.flex_r2_boundary.then(|| find_flex_r2_end(seq, cdna_start)).flatten();
+        if let Some(cdna_end) = flex_end {
+            adapter_pos = Some(cdna_end);
+            adapter_trimmed = true;
+            if cdna_end > cdna_start {
+                r2 = Some((cdna_start, cdna_end));
             }
-        }
-        // Retain the WHOLE adapter-trimmed cDNA fragment here; any `--max-r2-len`
-        // cap is applied at write time, after the fragment is reverse-complemented
-        // into R2 orientation, so the cap keeps the bases the R2 primer would
-        // actually read (see the emitter in lib.rs). See `ExtractCfg::max_r2_len`.
-        if cdna_end > cdna_start && cdna_end - cdna_start >= cfg.min_cdna_len {
-            r2 = Some((cdna_start, cdna_end));
+        } else {
+            adapter_pos = find_adapter(seq, cdna_start, cfg.adapter_max_mm);
+            let mut cdna_end = adapter_pos.unwrap_or(seq.len());
+            adapter_trimmed = adapter_pos.is_some();
+            // The TSO sits between the cDNA and the adapter on any fragment that
+            // reached the cDNA's 5' end. Trim before the length gate, so a fragment
+            // that is *only* TSO is rejected rather than emitted as cDNA.
+            if cfg.trim_tso && cdna_end > cdna_start {
+                if let Some(pos) = find_tso(seq, cdna_start, cdna_end) {
+                    tso_pos = Some(pos);
+                    tso_trimmed = true;
+                    cdna_end = pos;
+                }
+            }
+            // Retain the WHOLE adapter-trimmed cDNA fragment here; any `--max-r2-len`
+            // cap is applied at write time, after the fragment is reverse-complemented
+            // into R2 orientation, so the cap keeps the bases the R2 primer would
+            // actually read (see the emitter in lib.rs). See `ExtractCfg::max_r2_len`.
+            if cdna_end > cdna_start && cdna_end - cdna_start >= cfg.min_cdna_len {
+                r2 = Some((cdna_start, cdna_end));
+            }
         }
     }
 
@@ -454,6 +533,14 @@ mod tests {
             adapter_max_mm: 2,
             trim_tso: false,
             max_r2_len: 0,
+            flex_r2_boundary: false,
+        }
+    }
+
+    fn flex_ecfg() -> ExtractCfg {
+        ExtractCfg {
+            flex_r2_boundary: true,
+            ..ecfg()
         }
     }
 
@@ -531,6 +618,123 @@ mod tests {
         let (r2s, r2e) = e.r2.unwrap();
         assert_eq!(r2e, o.seq.len());
         assert_eq!(&o.seq[r2s..r2e], cdna);
+    }
+
+    /// Build a canonical Flex read: [leader][P5][i5][R1 primer][CB][UMI]
+    /// [dT run][junk before the anchor, standing in for BC10+constant29]
+    /// [FLEX_R2_END_ANCHOR][trailing junk, standing in for i7/P7]. Mirrors
+    /// `synthetic()`, but with the Flex-specific tail instead of the
+    /// standard-3'-capture `ILLUMINA_3P_ADAPTER` tail.
+    fn synthetic_flex(cb: &[u8], umi: &[u8], pre_anchor: &[u8], dt: usize) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(b"AACAAT");
+        v.extend_from_slice(P5);
+        v.extend_from_slice(b"ACGTACGTAC");
+        v.extend_from_slice(R1_PRIMER);
+        v.extend_from_slice(cb);
+        v.extend_from_slice(umi);
+        v.extend(std::iter::repeat(b'T').take(dt));
+        v.extend_from_slice(pre_anchor);
+        v.extend_from_slice(FLEX_R2_END_ANCHOR);
+        v.extend_from_slice(b"ACGTACGTACACGTACGTAC"); // trailing i7/P7-ish junk
+        v
+    }
+
+    #[test]
+    fn flex_r2_boundary_stops_exactly_at_the_anchor() {
+        let cb = b"AAACCCAAGAAACCCA";
+        let umi = b"ACGTACGTACGT";
+        // Stand-in for BC10(10)+constant29(29): any 39bp, content doesn't matter.
+        let pre_anchor = b"GATTACAGATTACAGATTACAGATTACAGATTACAGAT";
+        let seq = synthetic_flex(cb, umi, pre_anchor, 30);
+        let qual = vec![b'I'; seq.len()];
+
+        let o = orient(&seq, &qual, &ocfg());
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &flex_ecfg());
+
+        let (r2s, r2e) = e.r2.expect("flex R2 should be located");
+        assert_eq!(&o.seq[r2s..r2e], pre_anchor.as_slice());
+        assert!(e.adapter_trimmed);
+        assert_eq!(e.adapter_pos, Some(r2e));
+    }
+
+    #[test]
+    fn flex_r2_boundary_tolerates_mismatches_within_budget() {
+        let cb = b"AAACCCAAGAAACCCA";
+        let umi = b"ACGTACGTACGT";
+        let pre_anchor = b"GATTACAGATTACAGATTACAGATTACAGATTACAGAT";
+        let mut anchor = FLEX_R2_END_ANCHOR.to_vec();
+        // 2 mismatches inside the searched prefix (positions 3 and 9 of the
+        // first FLEX_R2_END_ANCHOR_PREFIX_LEN bases) -- within max_mm budget.
+        anchor[3] = if anchor[3] == b'A' { b'C' } else { b'A' };
+        anchor[9] = if anchor[9] == b'A' { b'C' } else { b'A' };
+        let mut seq = Vec::new();
+        seq.extend_from_slice(b"AACAAT");
+        seq.extend_from_slice(P5);
+        seq.extend_from_slice(b"ACGTACGTAC");
+        seq.extend_from_slice(R1_PRIMER);
+        seq.extend_from_slice(cb);
+        seq.extend_from_slice(umi);
+        seq.extend(std::iter::repeat(b'T').take(30));
+        seq.extend_from_slice(pre_anchor);
+        seq.extend_from_slice(&anchor);
+        let qual = vec![b'I'; seq.len()];
+
+        let o = orient(&seq, &qual, &ocfg());
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &flex_ecfg());
+        let (r2s, r2e) = e.r2.expect("anchor within mismatch budget should still be found");
+        assert_eq!(&o.seq[r2s..r2e], pre_anchor.as_slice());
+    }
+
+    #[test]
+    fn flex_r2_boundary_falls_back_when_anchor_is_absent() {
+        // Simulates a CRISPR/Feature-Barcoding read sharing the same
+        // flex_r2_boundary=true invocation as real Flex GEX reads (raw
+        // shards mix every library together, demuxed only after extract()):
+        // no FLEX_R2_END_ANCHOR anywhere, but otherwise a perfectly normal
+        // read. Must NOT be dropped -- falls back to the same
+        // generic-adapter/read-end/min_cdna_len behavior as non-Flex mode,
+        // so libraries that don't carry this construct are unaffected.
+        let cb = b"AAACCCAAGAAACCCA";
+        let umi = b"ACGTACGTACGT";
+        let payload = b"GATTACAGATTACAGATTACAGATTACAGATTACAGATTACAGATTACAGATTACAGATTACA";
+        let mut seq = Vec::new();
+        seq.extend_from_slice(b"AACAAT");
+        seq.extend_from_slice(P5);
+        seq.extend_from_slice(b"ACGTACGTAC");
+        seq.extend_from_slice(R1_PRIMER);
+        seq.extend_from_slice(cb);
+        seq.extend_from_slice(umi);
+        seq.extend(std::iter::repeat(b'T').take(30));
+        seq.extend_from_slice(payload);
+        let qual = vec![b'I'; seq.len()];
+
+        let o = orient(&seq, &qual, &ocfg());
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &flex_ecfg());
+        let (r2s, r2e) = e.r2.expect("should fall back to read-end, not reject");
+        assert_eq!(r2e, o.seq.len());
+        assert_eq!(&o.seq[r2s..r2e], payload.as_slice());
+        assert!(!e.adapter_trimmed);
+    }
+
+    #[test]
+    fn flex_r2_boundary_is_off_by_default_non_flex_path_unaffected() {
+        // The same read that gets correctly bounded under flex_ecfg() should,
+        // under the plain (non-Flex) ecfg(), fall through to the standard
+        // generic-adapter/read-end behavior -- it has neither
+        // ILLUMINA_3P_ADAPTER nor a length below min_cdna_len, so R2 just
+        // runs to the read's own end, ignoring FLEX_R2_END_ANCHOR entirely.
+        let cb = b"AAACCCAAGAAACCCA";
+        let umi = b"ACGTACGTACGT";
+        let pre_anchor = b"GATTACAGATTACAGATTACAGATTACAGATTACAGAT";
+        let seq = synthetic_flex(cb, umi, pre_anchor, 30);
+        let qual = vec![b'I'; seq.len()];
+
+        let o = orient(&seq, &qual, &ocfg());
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg());
+        let (r2s, r2e) = e.r2.expect("non-flex path should still emit R2 (long enough)");
+        assert_eq!(r2e, o.seq.len());
+        assert!(&o.seq[r2s..r2e] != pre_anchor.as_slice());
     }
 
     #[test]

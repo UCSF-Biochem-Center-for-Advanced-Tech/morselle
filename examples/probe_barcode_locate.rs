@@ -160,6 +160,7 @@ fn main() -> anyhow::Result<()> {
         adapter_max_mm: 2,
         trim_tso: false,
         max_r2_len: 0,
+        flex_r2_boundary: false,
     };
 
     const PB_LEN: usize = 10;

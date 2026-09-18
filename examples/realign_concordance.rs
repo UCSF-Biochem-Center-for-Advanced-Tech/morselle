@@ -58,6 +58,7 @@ fn main() -> anyhow::Result<()> {
         adapter_max_mm: 2,
         trim_tso: false,
         max_r2_len: 0,
+        flex_r2_boundary: false,
     };
 
     let mut trusted: HashMap<u32, u32> = HashMap::new(); // exact/within-1 CB → count

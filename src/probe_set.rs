@@ -36,16 +36,24 @@ use crate::hamming_index::HammingIndex;
 /// BAM, only tags).
 const SYNTHETIC_CONTIG_LEN: i64 = 1_000_000;
 
-/// Empirically confirmed center of the probe-sequence window, in bp from
-/// the start of the emitted R2 read. FLEX_SUPPORT_PLAN.md Phase 6: a real
-/// CAT06 sample's exact-match scan against the real probe set peaked hard
-/// at offset 69 (13.9% of all reads at that single offset vs. a
-/// double-digit-lower tail at neighboring offsets — the same
-/// `dt_run_end`-measurement-jitter shape seen for the probe barcode and the
-/// CRISPR anchor), not at 0 — this is *not* the same offset as the CRISPR
-/// anchor's (~10): GEX and CRISPR are physically different library
-/// constructs sharing only the same universal spacer/CB+UMI mechanism.
-pub const DEFAULT_PROBE_SEQ_OFFSET: usize = 69;
+/// Center of the probe-sequence window, in bp from the start of the emitted
+/// R2 read.
+///
+/// Was empirically 69 (FLEX_SUPPORT_PLAN.md Phase 6) when `extract()` bounded
+/// R2's far end with the generic Illumina adapter search, which mostly
+/// failed to find anything (13.5% hit rate on real data) and fell back to
+/// the raw read's own end -- an arbitrary, per-read-variable amount of
+/// trailing junk past the real probe insert, hence the wide empirical spread
+/// and the offset landing well past 0.
+///
+/// Now 0: `extract()`'s `ExtractCfg::flex_r2_boundary` (2026-09-17) bounds R2
+/// at the real structural landmark -- the constant sequence immediately
+/// following `Ligated_Probe_insert` -- so the probe insert is the first
+/// thing in the emitted R2, always, for any read where `extract()` located
+/// that boundary at all. `--window` still absorbs the residual few-bp jitter
+/// from `extract()`'s own anchor-match tolerance, just centered at 0 now
+/// instead of a wide, mostly-arbitrary spread.
+pub const DEFAULT_PROBE_SEQ_OFFSET: usize = 0;
 
 /// A probe-set reference row (real cellranger schema:
 /// `gene_id,probe_seq,probe_id,included,region,gene_name`), `included=TRUE`
@@ -430,8 +438,10 @@ ENSG2,SHORT,p2,TRUE,spliced,GENE2
         let f = write_csv(REAL_SHAPE);
         let r = ProbeSetReference::load(f.path()).unwrap();
         let matcher = ProbeMatcher::build(&r.probes, 1, 15);
-        // 5bp early: still within the +-15 window.
-        let read = read_with_probe_at(DEFAULT_PROBE_SEQ_OFFSET - 5, b"AAAACCCCGGGGTTTTACGTACGTA");
+        // 5bp late: still within the +-15 window. (Not "early" -- offset 0
+        // has no room to go earlier; residual extract()-side anchor jitter
+        // only ever pushes the probe insert a few bp *later* than 0.)
+        let read = read_with_probe_at(DEFAULT_PROBE_SEQ_OFFSET + 5, b"AAAACCCCGGGGTTTTACGTACGTA");
         assert_eq!(matcher.locate(&read), Some(0));
     }
 

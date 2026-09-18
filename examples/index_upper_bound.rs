@@ -97,6 +97,7 @@ fn main() -> anyhow::Result<()> {
         adapter_max_mm: 2,
         trim_tso: false,
         max_r2_len: 0,
+        flex_r2_boundary: false,
     };
 
     let mut total = 0u64;
