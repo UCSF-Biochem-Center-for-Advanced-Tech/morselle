@@ -154,9 +154,68 @@ for the constraints found above, not just port the shell logic:
   `read_depth_comparison_plan.md`'s CP1–CP3 checkpoints (each ≤~8.1B raw
   reads total across all 4 libraries, safely under a working ~10B ceiling
   for what this comparison actually needs) as the real path forward instead.
-- **Not yet implemented, real next step when there's time**: the
-  `(cell, sample)`-hash-sharded `molecules` rewrite described above. Until
-  it lands, keep any `sbx10x-molecules --evidence-workers N>1` run scoped to
-  a bounded raw-read budget (~10B or less, matching what CP1–CP3 need) rather
-  than a full 30B+-read production library, since the real memory ceiling
-  scales with total UMI-node count, not thread count.
+- ~~Not yet implemented, real next step when there's time: the
+  `(cell, sample)`-hash-sharded `molecules` rewrite described above.~~ —
+  **implemented and in real use, 2026-09-17**: `--shards 8
+  --shard-concurrency 8` (see `sbx10x-molecules --help`) is exactly this
+  design and is what `read_depth_comparison.sh`'s CP1–CP4 checkpoints
+  actually run. See "`sbx10x-molecules` real wall-clock vs. Cell Ranger,
+  2026-09-19" below — it solved the memory problem but is now the
+  pipeline's dominant real *time* cost, not yet investigated.
+
+## `sbx10x-molecules` real wall-clock vs. Cell Ranger, 2026-09-19
+
+Separate, not-yet-started investigation — self-contained enough to pick up
+in a fresh session with no memory of how it was found. Written from CAT06's
+real CP1 run (`read_depth_comparison_plan.md`, restarted 2026-09-18 with
+`sbxpress` 0.4.0's composite-cell-barcode fix); see that doc for full CAT06
+context if needed, but this specific question stands on its own.
+
+**Real numbers, both sides measured directly, not estimated:**
+
+- `sbx10x-molecules` on CP1's `L1_gex.bam` (`--shards 8
+  --shard-concurrency 8 --threads 16`): **33,427.9s (9.28h)** —
+  `read_depth_comparison_out/cp1/molecules/L1_gex.metrics.json`'s
+  `elapsed_secs`.
+- Same stage on CP1's `L2_gex.bam`, same flags, same real box, same day:
+  **10,178.0s (2.83h)** — `.../cp1/molecules/L2_gex.metrics.json`. **3.3x
+  faster than L1, unexplained.** Both libraries came from the same
+  159-shard raw-read subset (`read_depth_comparison_out/cp1_shards.txt`),
+  so this isn't an input-size difference by construction — worth checking
+  real per-library read/molecule/collision counts (`probeset-align`'s own
+  metrics, `molecules`' `collision_groups`/`raw_nodes` figures) for what
+  actually differs.
+- Cell Ranger's real, directly comparable stage — `ALIGN_AND_COUNT`
+  (alignment + UMI counting combined, one stage) on the same L1 library,
+  real Illumina full-depth run: **12,569.6s (3.49h), 207.7 core-hours** —
+  from the real preserved Martian pipestance's `_perf` JSON:
+  `illumina_data/RZ16443_L1_multi_full/_perf` (flatten `forks[].fork_stats`
+  per entry; fqname
+  `...SC_MULTI_CORE.MULTI_GEM_WELL_PROCESSOR.COUNT_GEM_WELL_PROCESSOR._BASIC_SC_RNA_COUNTER._MATRIX_COMPUTER.ALIGN_AND_COUNT`).
+  **sbxpress's `molecules` stage alone, on L1, is 2.7x longer than Cell
+  Ranger's entire align+count stage** — real, large, unexplained gap; not
+  yet investigated at the code/algorithm level (only the earlier memory
+  investigation above has been done, which explains RSS, not wall-clock).
+
+**Not yet checked, real starting points for a fresh investigation:**
+
+- Where real wall-clock actually goes across `molecules`' own phases
+  (`evidence` collection / `umi_correct` / `molecule_aggregate` / final BAM
+  write) — the binary already logs phase-boundary progress lines (see
+  `[sbxpress molecules] phase=...` in `cp1/logs/molecules_L{1,2}.log`);
+  real per-phase timing hasn't been extracted and diffed between L1 and L2.
+  yet.
+- Whether `--shards 8` is actually a good choice for wall-clock (it was
+  chosen for a real memory constraint — see the OOM finding above — not
+  profiled for speed); a real per-shard timing breakdown from the same logs
+  would show whether shards are balanced or whether a few stragglers
+  dominate (the same kind of imbalance `--split`'s round-robin bug caused
+  elsewhere in this pipeline, real precedent worth checking for here too).
+- Whether Cell Ranger's `ALIGN_AND_COUNT`'s 207.7 core-hours at 12,569.6s
+  wall-clock (~16.5 average concurrent cores) vs. sbxpress's `--threads 16`
+  (also nominally 16-wide) is actually running at comparable real
+  parallelism, or whether one side is spending a lot of that wall-clock
+  under-parallelized (e.g. serialized phases, lock contention) — real
+  `/usr/bin/time -v` or a sampling profiler (see `PROFILING.md`) on a
+  `molecules` run would settle this rather than guessing from the
+  aggregate numbers alone.
