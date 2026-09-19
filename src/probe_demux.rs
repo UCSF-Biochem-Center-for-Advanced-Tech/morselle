@@ -1,11 +1,32 @@
-//! Assign cell barcodes to samples by their dominant declared probe-barcode
-//! set (FLEX_SUPPORT_PLAN.md Phase 2).
+//! Assign cell barcodes to samples by their declared probe-barcode set
+//! (FLEX_SUPPORT_PLAN.md Phase 2).
 //!
 //! Published-algorithm parity notes (see FLEX_SUPPORT_PLAN.md "Where this
 //! plan corrects the initial design"): assignment sums molecule counts across
 //! a sample's *whole declared set* (which can be >1 probe barcode — real
 //! `config.csv` example: `Pos,D-A01|D-A02`) before comparing samples, not a
 //! naive top-single-barcode vote.
+//!
+//! Composite cell barcode (verified against 10x's own "Cell Ranger's Flex
+//! Algorithm" support doc, "Multiplex workflow" + "High occupancy GEM
+//! filtering"): in real Flex multiplex pooling, the true cell barcode is the
+//! *(GEM barcode, Probe Barcode)* pair, not the GEM barcode alone — multiple
+//! fixed, permeabilized samples are pooled before loading, so it is normal
+//! and expected for one physical GEM droplet to legitimately hold cells from
+//! more than one sample. `assign` therefore emits one `Assigned` row *per
+//! sample* whose declared set clears `min_molecules` for a GEM (not a single
+//! winner-take-all call), and only discards a GEM outright (`HighOccupancyGem`)
+//! when its number of clearing samples exceeds a negative-binomial-fit
+//! 99.9th-percentile cutoff on the observed per-GEM occupancy distribution —
+//! mirroring 10x's real "High occupancy GEM filtering" step, which estimates
+//! NB(r, p=0.5) from the data (r from the observed mean, p fixed at 0.5) and
+//! discards only that rare chip-loading-artifact tail (their own worked
+//! examples: >7 probe barcodes/GEM for a 16-plex run, >19 for 96-plex).
+//! Earlier revision of this module treated *any* second sample clearing the
+//! floor as an all-or-nothing reject — real CAT06 data showed that fires on
+//! 60%+ of GEMs with enough signal to assign, which cannot be real
+//! multiplet/doublet biology at that rate and was discarding the majority of
+//! otherwise-real, correctly multiplexed cells.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File};
@@ -44,8 +65,9 @@ pub struct Cli {
     pub output: PathBuf,
 
     /// Minimum molecules a sample's declared probe-barcode set must capture
-    /// for a cell barcode to be Assigned (also the floor a *second* sample
-    /// must clear for HighOccupancy — see [`assign`]).
+    /// for a GEM to be Assigned to that sample. A GEM can independently clear
+    /// this floor for more than one sample — see [`assign`]'s module-level
+    /// doc comment on composite `(GEM, ProbeBarcode)` cell barcodes.
     #[arg(long, default_value_t = 10)]
     pub min_molecules: u64,
 }
@@ -58,16 +80,22 @@ pub struct DemuxCfg {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
+    /// This GEM independently cleared `min_molecules` for `sample_id`'s
+    /// declared set. Ordinary, expected outcome — including when another
+    /// sample also has its own `Assigned` row for the same `cell_barcode`
+    /// (real Flex multiplex pooling: see the module doc comment).
     Assigned,
     /// Below `min_molecules` total, or no sample's declared set captured
-    /// enough of it to call — low-confidence/noisy, not a doublet signature.
+    /// enough of it to call — low-confidence/noisy.
     Unassigned,
-    /// A *second* sample's declared set also independently clears
-    /// `min_molecules` for this cell barcode — a real cross-sample doublet
-    /// signature (two samples' probe barcodes both genuinely present in the
-    /// same droplet), distinct from ordinary background noise. See
-    /// [`gem_overlap`] for the whole-experiment version of this diagnostic.
-    HighOccupancy,
+    /// This GEM's number of independently-clearing samples exceeds the
+    /// negative-binomial 99.9th-percentile cutoff fit to the whole run's
+    /// observed per-GEM occupancy distribution — the rare chip-loading-
+    /// artifact tail 10x's own "High occupancy GEM filtering" step targets,
+    /// not ordinary multi-sample pooling. All of this GEM's molecules are
+    /// excluded from every sample. See [`gem_overlap`] for the
+    /// whole-experiment version of the underlying overlap diagnostic.
+    HighOccupancyGem,
 }
 
 impl Status {
@@ -75,12 +103,14 @@ impl Status {
         match self {
             Status::Assigned => "Assigned",
             Status::Unassigned => "Unassigned",
-            Status::HighOccupancy => "HighOccupancy",
+            Status::HighOccupancyGem => "HighOccupancyGem",
         }
     }
 }
 
-/// One cell barcode's sample-assignment result.
+/// One cell barcode's sample-assignment result. A single `cell_barcode` can
+/// produce more than one `Assigned` row (one per sample whose declared set
+/// independently clears the floor) — see the module doc comment.
 #[derive(Debug, Clone)]
 pub struct Assignment {
     pub cell_barcode: String,
@@ -88,31 +118,70 @@ pub struct Assignment {
     pub sample_id: Option<String>,
     /// Distinct probe-barcode ids observed for this CB, sorted.
     pub probe_barcodes: Vec<String>,
-    /// Total molecules across all probe barcodes observed for this CB.
+    /// This row's own molecule count: `sample_id`'s declared-set sum when
+    /// `Assigned`, the whole GEM's total otherwise.
     pub molecules: u64,
-    /// Dominant sample's molecules / total molecules.
+    /// This row's sample's molecules / the whole GEM's total molecules
+    /// (dominant-sample fraction when not `Assigned`).
     pub purity: f64,
+    /// Number of samples whose declared set independently cleared
+    /// `min_molecules` for this GEM (10x's own "Probe barcodes per GEM").
+    pub occupancy: usize,
     pub status: Status,
 }
 
-/// Assign every cell barcode in `tally` (keyed `(cell_barcode, probe_barcode_id)
-/// -> molecule count`) to a sample from `sheet`.
+/// Negative binomial NB(r, p) 99.9th-percentile quantile, via the standard
+/// PMF recurrence `P(k) = P(k-1) * p * (k-1+r) / k`, `P(0) = (1-p)^r` — exact
+/// for real-valued `r` without a gamma-function dependency. Returns the
+/// smallest `k` whose CDF clears `quantile`. `r <= 0.0` (no occupied GEMs to
+/// fit against) disables the filter by returning `u64::MAX`.
+fn negbinom_quantile(r: f64, p: f64, quantile: f64) -> u64 {
+    if r <= 0.0 {
+        return u64::MAX;
+    }
+    let mut pmf = (1.0 - p).powf(r); // P(0)
+    let mut cdf = pmf;
+    let mut k: u64 = 0;
+    while cdf < quantile && k < 100_000 {
+        k += 1;
+        pmf *= p * (k as f64 - 1.0 + r) / k as f64;
+        cdf += pmf;
+    }
+    k
+}
+
+/// Assign every cell barcode (GEM) in `tally` (keyed `(cell_barcode,
+/// probe_barcode_id) -> molecule count`) to every sample from `sheet` whose
+/// declared probe-barcode set it genuinely carries.
 ///
-/// For each CB: sum molecule counts across each sample's *whole* declared
-/// probe-barcode set, rank samples by that sum, and call the top sample
-/// Assigned when its sum clears `cfg.min_molecules`. HighOccupancy fires when
-/// a *second* sample's sum also independently clears the same floor — using
-/// one symmetric threshold for "a sample is really present" keeps the rule
-/// simple and self-contained per CB (the separate [`gem_overlap`] diagnostic
-/// covers the whole-experiment probe-barcode-pair view, e.g. for comparison
-/// against a real `frp_gem_barcode_overlap.csv`).
+/// Two passes, mirroring 10x's real "Assign reads to samples" then "Filter
+/// high occupancy GEMs" steps (see the module doc comment):
+///
+/// 1. For each GEM: sum molecule counts across each sample's *whole* declared
+///    probe-barcode set, and collect the set of samples whose sum clears
+///    `cfg.min_molecules` ("occupancy"). Fit NB(r, p=0.5) to the observed
+///    occupancy distribution across all occupied GEMs (r = the observed
+///    mean, matching NB's mean = r at p=0.5) and take its 99.9th-percentile
+///    quantile as the high-occupancy-GEM cutoff.
+/// 2. For each GEM: zero occupancy is `Unassigned`; occupancy above the
+///    cutoff is `HighOccupancyGem` (one row, no sample, all molecules
+///    excluded); otherwise emit one `Assigned` row *per* clearing sample,
+///    each carrying that sample's own molecule sum and purity.
 pub fn assign(sheet: &ProbeSampleSheet, tally: &BTreeMap<(String, String), u64>, cfg: &DemuxCfg) -> Vec<Assignment> {
     let mut per_cb: BTreeMap<&str, BTreeMap<&str, u64>> = BTreeMap::new();
     for ((cb, pb), &n) in tally {
         *per_cb.entry(cb.as_str()).or_default().entry(pb.as_str()).or_insert(0) += n;
     }
 
-    let mut out = Vec::with_capacity(per_cb.len());
+    struct CbInfo<'a> {
+        cb: &'a str,
+        total: u64,
+        probe_barcodes: Vec<String>,
+        /// Samples whose declared set clears `min_molecules`, desc by sum.
+        occupants: Vec<(&'a str, u64)>,
+    }
+
+    let mut infos: Vec<CbInfo> = Vec::with_capacity(per_cb.len());
     for (cb, pb_counts) in per_cb {
         let total: u64 = pb_counts.values().sum();
         let probe_barcodes: Vec<String> = pb_counts.keys().map(|s| s.to_string()).collect();
@@ -130,27 +199,58 @@ pub fn assign(sheet: &ProbeSampleSheet, tally: &BTreeMap<(String, String), u64>,
             })
             .collect();
         sample_sums.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+        let occupants: Vec<(&str, u64)> =
+            sample_sums.into_iter().filter(|&(_, n)| n >= cfg.min_molecules).collect();
 
-        let (best_id, best_sum) = sample_sums.first().copied().unwrap_or(("", 0));
-        let second_sum = sample_sums.get(1).map_or(0, |&(_, n)| n);
-        let purity = if total > 0 { best_sum as f64 / total as f64 } else { 0.0 };
+        infos.push(CbInfo { cb, total, probe_barcodes, occupants });
+    }
 
-        let (status, sample_id) = if best_sum >= cfg.min_molecules && second_sum >= cfg.min_molecules {
-            (Status::HighOccupancy, None)
-        } else if best_sum >= cfg.min_molecules {
-            (Status::Assigned, Some(best_id.to_string()))
+    let occupied: Vec<u64> = infos.iter().filter(|i| !i.occupants.is_empty()).map(|i| i.occupants.len() as u64).collect();
+    let r_hat = if occupied.is_empty() {
+        0.0
+    } else {
+        occupied.iter().sum::<u64>() as f64 / occupied.len() as f64
+    };
+    let occupancy_cutoff = negbinom_quantile(r_hat, 0.5, 0.999);
+
+    let mut out = Vec::with_capacity(infos.len());
+    for info in infos {
+        let occupancy = info.occupants.len();
+        if occupancy == 0 {
+            out.push(Assignment {
+                cell_barcode: info.cb.to_string(),
+                sample_id: None,
+                probe_barcodes: info.probe_barcodes,
+                molecules: info.total,
+                purity: 0.0,
+                occupancy,
+                status: Status::Unassigned,
+            });
+        } else if occupancy as u64 > occupancy_cutoff {
+            let best_sum = info.occupants[0].1;
+            let purity = if info.total > 0 { best_sum as f64 / info.total as f64 } else { 0.0 };
+            out.push(Assignment {
+                cell_barcode: info.cb.to_string(),
+                sample_id: None,
+                probe_barcodes: info.probe_barcodes,
+                molecules: info.total,
+                purity,
+                occupancy,
+                status: Status::HighOccupancyGem,
+            });
         } else {
-            (Status::Unassigned, None)
-        };
-
-        out.push(Assignment {
-            cell_barcode: cb.to_string(),
-            sample_id,
-            probe_barcodes,
-            molecules: total,
-            purity,
-            status,
-        });
+            for (sample_id, sum) in &info.occupants {
+                out.push(Assignment {
+                    cell_barcode: info.cb.to_string(),
+                    sample_id: Some(sample_id.to_string()),
+                    probe_barcodes: info.probe_barcodes.clone(),
+                    molecules: *sum,
+                    purity: if info.total > 0 { *sum as f64 / info.total as f64 } else { 0.0 },
+                    occupancy,
+                    status: Status::Assigned,
+                });
+            }
+        }
     }
     out
 }
@@ -269,10 +369,22 @@ pub fn read_bam_tally(path: &Path) -> Result<BTreeMap<(String, String), u64>> {
 #[derive(Debug, Serialize)]
 pub struct Metrics {
     pub elapsed_secs: f64,
+    /// Distinct GEM barcodes seen (not row count — a GEM legitimately
+    /// present in more than one sample produces more than one row).
     pub cell_barcodes: usize,
+    /// `Assigned` rows (one GEM present in 2 samples counts as 2).
     pub assigned: usize,
     pub unassigned: usize,
-    pub high_occupancy: usize,
+    /// Distinct GEMs discarded by the negative-binomial high-occupancy-GEM
+    /// tail filter — see the module doc comment. Expect this to be small; a
+    /// large value here (or `occupancy_cutoff` far below the sheet's sample
+    /// count) means the run doesn't fit 10x's own "usually >90% of cells
+    /// pass" expectation and is worth a closer look.
+    pub high_occupancy_gems: usize,
+    /// NB(r, p=0.5) fit's `r` (the observed mean occupancy across occupied
+    /// GEMs) and the resulting 99.9th-percentile cutoff actually applied.
+    pub occupancy_r: f64,
+    pub occupancy_cutoff: u64,
     pub per_sample: Vec<SampleCount>,
 }
 
@@ -284,16 +396,17 @@ pub struct SampleCount {
 
 fn write_sample_assignment(assignments: &[Assignment], path: &Path) -> Result<()> {
     let mut w = BufWriter::new(File::create(path)?);
-    writeln!(w, "cell_barcode,sample_id,probe_barcodes,molecules,purity,status")?;
+    writeln!(w, "cell_barcode,sample_id,probe_barcodes,molecules,purity,occupancy,status")?;
     for a in assignments {
         writeln!(
             w,
-            "{},{},{},{},{:.4},{}",
+            "{},{},{},{},{:.4},{},{}",
             a.cell_barcode,
             a.sample_id.as_deref().unwrap_or(""),
             a.probe_barcodes.join("|"),
             a.molecules,
             a.purity,
+            a.occupancy,
             a.status.as_str(),
         )?;
     }
@@ -337,6 +450,23 @@ fn write_per_sample_barcodes(sheet: &ProbeSampleSheet, assignments: &[Assignment
     Ok(())
 }
 
+/// `<sample>.probe_barcodes.txt`: this sample's declared probe-barcode ids,
+/// one per line, straight from the sample sheet (not derived from
+/// assignments — a sample's declared set is static). Feeds
+/// `cr-bam-to-mtx --probe-barcodes` so that a GEM shared with another sample
+/// (see the module doc comment) only contributes *this* sample's own
+/// molecules to *this* sample's matrix, not the shared GEM's whole total.
+fn write_per_sample_probe_barcodes(sheet: &ProbeSampleSheet, out_dir: &Path) -> Result<()> {
+    for s in &sheet.samples {
+        let path = out_dir.join(format!("{}.probe_barcodes.txt", s.id));
+        let mut w = BufWriter::new(File::create(&path)?);
+        for pb in &s.probe_barcode_ids {
+            writeln!(w, "{pb}")?;
+        }
+    }
+    Ok(())
+}
+
 fn write_gem_overlap(rows: &[OverlapRow], path: &Path) -> Result<()> {
     let mut w = BufWriter::new(File::create(path)?);
     writeln!(w, "barcode1,barcode2,barcode1_gems,barcode2_gems,common_gems,overlap")?;
@@ -352,10 +482,16 @@ fn write_gem_overlap(rows: &[OverlapRow], path: &Path) -> Result<()> {
 
 fn build_metrics(sheet: &ProbeSampleSheet, assignments: &[Assignment], elapsed_secs: f64) -> Metrics {
     let mut per_sample_counts: HashMap<&str, usize> = HashMap::new();
+    let mut distinct_cbs: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut occupancy_by_cb: HashMap<&str, usize> = HashMap::new();
     let mut assigned = 0;
     let mut unassigned = 0;
-    let mut high_occupancy = 0;
+    // One row per GEM for this status (unlike Assigned, never duplicated
+    // across samples), so the row count is already the distinct-GEM count.
+    let mut high_occupancy_gems = 0;
     for a in assignments {
+        distinct_cbs.insert(a.cell_barcode.as_str());
+        occupancy_by_cb.insert(a.cell_barcode.as_str(), a.occupancy);
         match a.status {
             Status::Assigned => {
                 assigned += 1;
@@ -364,15 +500,29 @@ fn build_metrics(sheet: &ProbeSampleSheet, assignments: &[Assignment], elapsed_s
                 }
             }
             Status::Unassigned => unassigned += 1,
-            Status::HighOccupancy => high_occupancy += 1,
+            Status::HighOccupancyGem => high_occupancy_gems += 1,
         }
     }
+    let occupied: Vec<u64> = occupancy_by_cb
+        .values()
+        .filter(|&&occ| occ > 0)
+        .map(|&occ| occ as u64)
+        .collect();
+    let occupancy_r = if occupied.is_empty() {
+        0.0
+    } else {
+        occupied.iter().sum::<u64>() as f64 / occupied.len() as f64
+    };
+    let occupancy_cutoff = negbinom_quantile(occupancy_r, 0.5, 0.999);
+
     Metrics {
         elapsed_secs,
-        cell_barcodes: assignments.len(),
+        cell_barcodes: distinct_cbs.len(),
         assigned,
         unassigned,
-        high_occupancy,
+        high_occupancy_gems,
+        occupancy_r,
+        occupancy_cutoff,
         per_sample: sheet
             .samples
             .iter()
@@ -403,6 +553,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         .with_context(|| format!("creating {}", cli.output.display()))?;
     write_sample_assignment(&assignments, &cli.output.join("sample_assignment.csv"))?;
     write_per_sample_barcodes(&sheet, &assignments, &cli.output)?;
+    write_per_sample_probe_barcodes(&sheet, &cli.output)?;
     write_gem_overlap(&overlap, &cli.output.join("gem_barcode_overlap.csv"))?;
 
     let metrics = build_metrics(&sheet, &assignments, started.elapsed().as_secs_f64());
@@ -414,7 +565,9 @@ pub fn run(cli: &Cli) -> Result<()> {
         cell_barcodes = metrics.cell_barcodes,
         assigned = metrics.assigned,
         unassigned = metrics.unassigned,
-        high_occupancy = metrics.high_occupancy,
+        high_occupancy_gems = metrics.high_occupancy_gems,
+        occupancy_r = format!("{:.3}", metrics.occupancy_r),
+        occupancy_cutoff = metrics.occupancy_cutoff,
         elapsed = format!("{:.1}s", metrics.elapsed_secs),
         out = %cli.output.display(),
         "RUN SUMMARY"
@@ -466,11 +619,24 @@ mod tests {
     }
 
     #[test]
-    fn two_samples_each_clearing_the_floor_is_high_occupancy() {
+    fn two_samples_each_clearing_the_floor_both_get_assigned() {
+        // Real Flex multiplex pooling: a GEM legitimately holding cells from
+        // two different pooled samples is the expected case, not a doublet
+        // to reject outright -- see the module doc comment. With only 3
+        // possible samples in this toy sheet, occupancy=2 is nowhere near
+        // any realistic high-occupancy-GEM cutoff.
         let t = tally(&[("CB1", "D-A01", 50), ("CB1", "D-A03", 40)]);
         let out = assign(&sheet(), &t, &DemuxCfg { min_molecules: 10 });
-        assert_eq!(out[0].status, Status::HighOccupancy);
-        assert_eq!(out[0].sample_id, None);
+        assert_eq!(out.len(), 2);
+        let pos = out.iter().find(|a| a.sample_id.as_deref() == Some("Pos")).unwrap();
+        assert_eq!(pos.status, Status::Assigned);
+        assert_eq!(pos.molecules, 50);
+        assert_eq!(pos.occupancy, 2);
+        assert!((pos.purity - 50.0 / 90.0).abs() < 1e-9);
+        let rz = out.iter().find(|a| a.sample_id.as_deref() == Some("RZ211")).unwrap();
+        assert_eq!(rz.status, Status::Assigned);
+        assert_eq!(rz.molecules, 40);
+        assert!((rz.purity - 40.0 / 90.0).abs() < 1e-9);
     }
 
     #[test]
@@ -489,8 +655,54 @@ mod tests {
         let t = tally(&[("CB1", "D-A01", 20), ("CB1", "A-F04", 15)]); // A-F04 not declared by anyone
         let out = assign(&sheet(), &t, &DemuxCfg { min_molecules: 10 });
         assert_eq!(out[0].status, Status::Assigned);
-        assert_eq!(out[0].molecules, 35);
+        // molecules is this row's own sample sum (20), not the GEM total
+        // (35) -- A-F04's 15 molecules aren't Pos's to claim.
+        assert_eq!(out[0].molecules, 20);
         assert!((out[0].purity - 20.0 / 35.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn negbinom_quantile_matches_hand_computed_values() {
+        // r=2.0, p=0.5: cdf crosses 0.999 at k=12 (hand-verified via the
+        // same P(k)=P(k-1)*p*(k-1+r)/k recurrence, P(0)=(1-p)^r=0.25).
+        assert_eq!(negbinom_quantile(2.0, 0.5, 0.999), 12);
+        // r<=0 (no occupied GEMs to fit) disables the filter.
+        assert_eq!(negbinom_quantile(0.0, 0.5, 0.999), u64::MAX);
+    }
+
+    #[test]
+    fn high_occupancy_gem_tail_is_filtered_but_ordinary_multi_sample_gems_are_not() {
+        // 40 samples, one probe barcode each. 39 "normal" GEMs each hold
+        // only one sample's worth of signal (occupancy=1); one "artifact"
+        // GEM holds every sample's probe barcode at once (occupancy=40) --
+        // the kind of GEM 10x's real high-occupancy-GEM filter targets
+        // (chip clog / wetting failure), not ordinary pooling.
+        let samples: Vec<ProbeSample> = (1..=40)
+            .map(|i| ProbeSample { id: format!("S{i}"), probe_barcode_ids: vec![format!("P{i}")] })
+            .collect();
+        let big_sheet = ProbeSampleSheet { samples };
+
+        let mut entries: Vec<(String, String, u64)> = Vec::new();
+        for i in 1..=39 {
+            entries.push((format!("NORMAL{i}"), format!("P{i}"), 20));
+        }
+        for i in 1..=40 {
+            entries.push(("ARTIFACT".to_string(), format!("P{i}"), 20));
+        }
+        let t: BTreeMap<(String, String), u64> =
+            entries.into_iter().map(|(cb, pb, n)| ((cb, pb), n)).collect();
+
+        let out = assign(&big_sheet, &t, &DemuxCfg { min_molecules: 10 });
+
+        let normal_rows: Vec<&Assignment> = out.iter().filter(|a| a.cell_barcode.starts_with("NORMAL")).collect();
+        assert_eq!(normal_rows.len(), 39);
+        assert!(normal_rows.iter().all(|a| a.status == Status::Assigned));
+
+        let artifact_rows: Vec<&Assignment> = out.iter().filter(|a| a.cell_barcode == "ARTIFACT").collect();
+        assert_eq!(artifact_rows.len(), 1, "the artifact GEM must be filtered as one row, not 40 Assigned rows");
+        assert_eq!(artifact_rows[0].status, Status::HighOccupancyGem);
+        assert_eq!(artifact_rows[0].sample_id, None);
+        assert_eq!(artifact_rows[0].occupancy, 40);
     }
 
     #[test]

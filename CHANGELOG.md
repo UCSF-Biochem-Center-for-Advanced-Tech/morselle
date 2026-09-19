@@ -6,7 +6,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-09-18
+
 ### Added
+- `probe-demux` writes `<sample>.probe_barcodes.txt` (that sample's declared
+  probe-barcode ids, straight from the sample sheet) alongside
+  `<sample>.barcodes.txt`.
+- `matrix --probe-barcodes <file>`: an optional per-sample probe-barcode
+  allow-list. Needed by the composite-cell-barcode change below — once a GEM
+  can legitimately appear in more than one sample's `--cell-barcodes`, each
+  sample's `matrix` run must also gate on `PB` matching its own declared
+  set, or a shared GEM's other-sample molecules leak into both matrices.
+  New `probe_barcodes_skipped` metric records how many counted molecules
+  the allow-list excluded.
 - `sbxpress extract --no-gzip` writes plain, uncompressed FASTQ instead of
   gzip. Profiling `extract` (see `PROFILING.md`) found gzip output
   compression consuming 54% of its CPU time — worse, since every worker
@@ -40,6 +52,33 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   no i5/i7 present, needs its own demux mechanism entirely, and must never
   be pointed at this flag. Demux stays fully opt-in either way: unset, no
   index-based splitting is attempted regardless of what's in the raw reads.
+- **Breaking**: `probe-demux`'s cell barcode is now the composite (GEM
+  barcode, Probe Barcode) pair, matching 10x's own "Cell Ranger's Flex
+  Algorithm" support doc, rather than treating the GEM barcode alone as the
+  cell. A GEM that independently clears `--min-molecules` for more than one
+  sample's declared probe-barcode set now produces one `Assigned` row per
+  clearing sample (each carrying that sample's own molecule count and
+  purity), instead of the previous all-or-nothing reject. Real CAT06 L1
+  data showed that reject firing on 60.5% of barcodes with enough signal to
+  assign — far too high a rate to be real cross-sample doublet biology —
+  discarding the majority of otherwise-real, correctly multiplexed cells.
+  `Status::HighOccupancy` is renamed `Status::HighOccupancyGem` and now
+  means something narrower and rarer: a GEM's occupancy (number of
+  independently-clearing samples) exceeds a negative-binomial-fit (`r` from
+  the observed mean, `p=0.5`) 99.9th-percentile cutoff on the run's whole
+  occupancy distribution — mirroring 10x's own "High occupancy GEM
+  filtering" step, which targets chip-loading artifacts (partial clogs,
+  wetting failures), not ordinary multi-sample pooling. Measured end-to-end
+  impact on a real 25-shard L1 GEX run: demux assigned-barcode count
+  26,667 → 424,711 (~16x), final called cells 18,825 → 332,192 (~17.6x),
+  closing the gap to Illumina's real L1 total (427,331) from 22.7x under to
+  1.29x under.
+- `sample_assignment.csv` gains an `occupancy` column, and `molecules`/
+  `purity` are now per-assigned-sample (that sample's own sum/fraction of
+  the GEM total) rather than the whole GEM's total — see above.
+- `probe_demux_metrics.json`'s `high_occupancy` field is renamed
+  `high_occupancy_gems` and now counts only the rare NB-tail-filtered GEMs;
+  new `occupancy_r`/`occupancy_cutoff` fields record the fitted parameters.
 
 ## [0.3.8] — 2026-09-14
 

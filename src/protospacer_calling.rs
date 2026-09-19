@@ -620,6 +620,7 @@ mod tests {
             records: 0,
             molecules,
             barcodes_skipped: 0,
+            probe_barcodes_skipped: 0,
         }
     }
 

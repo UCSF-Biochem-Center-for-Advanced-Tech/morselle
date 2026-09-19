@@ -36,6 +36,7 @@ fn extract_cfg() -> ExtractCfg {
         adapter_max_mm: 2,
         trim_tso: false,
         max_r2_len: 0,
+        flex_r2_boundary: false,
     }
 }
 
@@ -88,13 +89,13 @@ fn bench_orient_extract(c: &mut Criterion) {
     c.bench_function("orient_extract/gex_homopolymer_path", |b| {
         b.iter(|| {
             let o = orient(black_box(&gex_seq), black_box(&gex_qual), &ocfg);
-            black_box(extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg))
+            black_box(extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg, false))
         })
     });
     c.bench_function("orient_extract/flex_tail_fallback_path", |b| {
         b.iter(|| {
             let o = orient(black_box(&flex_seq), black_box(&flex_qual), &ocfg);
-            black_box(extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg))
+            black_box(extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg, false))
         })
     });
 }

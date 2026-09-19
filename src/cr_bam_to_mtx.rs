@@ -64,6 +64,20 @@ pub struct Cli {
     /// Write plain .tsv/.mtx instead of gzip-compressed files.
     #[arg(long)]
     pub no_gzip: bool,
+
+    /// Optional per-sample probe-barcode allow-list (one 10x Flex `PB` tag
+    /// value per line, plain or .gz) -- see `probe_demux.rs`'s
+    /// `<sample>.probe_barcodes.txt`. A cell barcode (GEM) can legitimately
+    /// be shared across more than one sample under Flex multiplex pooling
+    /// (see FLEX_SUPPORT_PLAN.md / 10x's "Cell Ranger's Flex Algorithm":
+    /// the real cell barcode is the (GEM, Probe Barcode) pair, not the GEM
+    /// alone), so listing such a GEM in more than one sample's
+    /// `--cell-barcodes` is correct but would otherwise pull *every*
+    /// sample's molecules for that GEM into *each* sample's matrix. Pass
+    /// this alongside `--cell-barcodes` to additionally require a counted
+    /// record's `PB` be in this sample's own declared set.
+    #[arg(long, value_name = "PROBE_BARCODES")]
+    pub probe_barcodes: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -84,6 +98,9 @@ pub(crate) struct Matrix {
     /// Counted molecules skipped because their barcode wasn't in the
     /// template (only nonzero with `--skip-unlisted-barcodes`).
     pub(crate) barcodes_skipped: u64,
+    /// Counted molecules skipped because their `PB` tag wasn't in
+    /// `--probe-barcodes`'s allow-list (only nonzero with that flag set).
+    pub(crate) probe_barcodes_skipped: u64,
 }
 
 /// Machine-readable run accounting, following the main `sbx10x` app.
@@ -106,6 +123,8 @@ struct Metrics {
     gem_group: Option<u32>,
     skip_unlisted_barcodes: bool,
     barcodes_skipped: u64,
+    used_probe_barcode_allowlist: bool,
+    probe_barcodes_skipped: u64,
 }
 
 /// Run the BAM-to-matrix application.
@@ -114,6 +133,7 @@ pub fn run(cli: &Cli) -> Result<()> {
     if cli.gem_group == 0 {
         bail!("--gem-group must be greater than zero");
     }
+    let probe_barcode_allowlist = cli.probe_barcodes.as_deref().map(read_probe_barcodes).transpose()?;
     let matrix = read_matrix(
         &cli.bam,
         cli.features.as_deref(),
@@ -121,6 +141,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         cli.cell_barcodes.as_deref(),
         cli.gem_group,
         cli.skip_unlisted_barcodes,
+        probe_barcode_allowlist.as_ref(),
     )?;
     fs::create_dir_all(&cli.output)
         .with_context(|| format!("creating {}", cli.output.display()))?;
@@ -152,6 +173,8 @@ pub fn run(cli: &Cli) -> Result<()> {
         gem_group: cli.cell_barcodes.as_ref().map(|_| cli.gem_group),
         skip_unlisted_barcodes: cli.skip_unlisted_barcodes,
         barcodes_skipped: matrix.barcodes_skipped,
+        used_probe_barcode_allowlist: cli.probe_barcodes.is_some(),
+        probe_barcodes_skipped: matrix.probe_barcodes_skipped,
     };
     let metrics_path = cli.output.join("metrics_summary.json");
     fs::write(&metrics_path, serde_json::to_string_pretty(&metrics)?)
@@ -256,6 +279,17 @@ fn read_cell_barcodes(path: &Path, gem_group: u32) -> Result<Vec<String>> {
         .collect()
 }
 
+fn read_probe_barcodes(path: &Path) -> Result<std::collections::HashSet<String>> {
+    let mut set = std::collections::HashSet::new();
+    for line in text_reader(path)?.lines() {
+        let trimmed = line?.trim().to_owned();
+        if !trimmed.is_empty() {
+            set.insert(trimmed);
+        }
+    }
+    Ok(set)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn read_matrix(
     path: &Path,
@@ -264,6 +298,7 @@ fn read_matrix(
     cell_barcode_whitelist: Option<&Path>,
     gem_group: u32,
     skip_unlisted_barcodes: bool,
+    probe_barcode_allowlist: Option<&std::collections::HashSet<String>>,
 ) -> Result<Matrix> {
     let mut reader =
         bam::Reader::from_path(path).with_context(|| format!("opening BAM {}", path.display()))?;
@@ -279,12 +314,22 @@ fn read_matrix(
         .collect();
     let mut molecule_keys: Vec<(usize, String)> = Vec::new();
     let mut records = 0_u64;
+    let mut probe_barcodes_skipped = 0_u64;
 
     for result in reader.records() {
         let record = result.context("reading BAM record")?;
         records += 1;
         if aux_i64(&record, b"xf")?.unwrap_or(0) & 8 == 0 {
             continue;
+        }
+        if let Some(allowlist) = probe_barcode_allowlist {
+            match aux_string(&record, b"PB")? {
+                Some(pb) if allowlist.contains(&pb) => {}
+                _ => {
+                    probe_barcodes_skipped += 1;
+                    continue;
+                }
+            }
         }
         let cb = aux_string(&record, b"CB")?
             .context("xf bit 8 record is missing corrected barcode tag CB")?;
@@ -344,6 +389,7 @@ fn read_matrix(
         records,
         molecules: molecule_keys.len() as u64 - barcodes_skipped,
         barcodes_skipped,
+        probe_barcodes_skipped,
     })
 }
 
@@ -551,6 +597,7 @@ mod tests {
             records: 3,
             molecules: 2,
             barcodes_skipped: 0,
+            probe_barcodes_skipped: 0,
         };
         let dir = tempfile::tempdir().unwrap();
         write_matrix(&matrix, dir.path(), false).unwrap();
@@ -579,6 +626,7 @@ mod tests {
             records: 6,
             molecules: 6,
             barcodes_skipped: 0,
+            probe_barcodes_skipped: 0,
         };
         let dir = tempfile::tempdir().unwrap();
         write_matrix(&matrix, dir.path(), false).unwrap();
@@ -607,6 +655,7 @@ mod tests {
             records: 6,
             molecules: 6,
             barcodes_skipped: 0,
+            probe_barcodes_skipped: 0,
         };
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("raw_feature_bc_matrix.h5");
@@ -676,7 +725,7 @@ mod tests {
         let barcodes_file = dir.path().join("only_one.txt");
         fs::write(&barcodes_file, "AAAAAAAAAAAAAAAA\n").unwrap();
 
-        let err = read_matrix(&bam, None, None, Some(&barcodes_file), 1, false).unwrap_err();
+        let err = read_matrix(&bam, None, None, Some(&barcodes_file), 1, false, None).unwrap_err();
         assert!(err.to_string().contains("absent from barcode template"));
     }
 
@@ -687,10 +736,63 @@ mod tests {
         let barcodes_file = dir.path().join("only_one.txt");
         fs::write(&barcodes_file, "AAAAAAAAAAAAAAAA\n").unwrap();
 
-        let matrix = read_matrix(&bam, None, None, Some(&barcodes_file), 1, true).unwrap();
+        let matrix = read_matrix(&bam, None, None, Some(&barcodes_file), 1, true, None).unwrap();
         assert_eq!(matrix.barcodes, ["AAAAAAAAAAAAAAAA-1"]);
         assert_eq!(matrix.barcodes_skipped, 1);
         assert_eq!(matrix.molecules, 1);
         assert_eq!(matrix.counts.len(), 1);
+    }
+
+    /// A single shared cell barcode (one real Flex GEM) carrying molecules
+    /// under two different probe barcodes -- the exact shape probe_demux.rs
+    /// now legitimately lists in more than one sample's --cell-barcodes.
+    fn shared_gem_two_probe_barcodes_bam(dir: &Path) -> PathBuf {
+        let path = dir.join("in.bam");
+        let mut header = bam::Header::new();
+        header.push_record(
+            bam::header::HeaderRecord::new(b"SQ")
+                .push_tag(b"SN", "chr1")
+                .push_tag(b"LN", 1000),
+        );
+        let mut writer = bam::Writer::from_path(&path, &header, bam::Format::Bam).unwrap();
+        let cigar = bam::record::CigarString(vec![bam::record::Cigar::Match(10)]);
+        for (i, (pb, gene)) in [("D-A01", "GENE1"), ("D-A02", "GENE2")].into_iter().enumerate() {
+            let mut r = bam::Record::new();
+            r.set(b"read", Some(&cigar), b"ACGTACGTAC", &[30; 10]);
+            r.set_tid(0);
+            r.set_pos(i as i64);
+            r.push_aux(b"CB", Aux::String("AAAAAAAAAAAAAAAA-1")).unwrap();
+            r.push_aux(b"UB", Aux::String("UMI0000AAAA")).unwrap();
+            r.push_aux(b"GX", Aux::String(gene)).unwrap();
+            r.push_aux(b"PB", Aux::String(pb)).unwrap();
+            r.push_aux(b"xf", Aux::I32(25)).unwrap();
+            writer.write(&r).unwrap();
+        }
+        drop(writer);
+        path
+    }
+
+    #[test]
+    fn without_a_probe_barcode_allowlist_a_shared_gem_counts_both_samples_molecules() {
+        // Documents the real cross-contamination risk a shared GEM creates
+        // when --probe-barcodes is not used.
+        let dir = tempfile::tempdir().unwrap();
+        let bam = shared_gem_two_probe_barcodes_bam(dir.path());
+        let matrix = read_matrix(&bam, None, None, None, 1, false, None).unwrap();
+        assert_eq!(matrix.molecules, 2);
+        assert_eq!(matrix.counts.len(), 2);
+    }
+
+    #[test]
+    fn probe_barcode_allowlist_keeps_only_that_samples_own_molecules() {
+        let dir = tempfile::tempdir().unwrap();
+        let bam = shared_gem_two_probe_barcodes_bam(dir.path());
+        let allowlist: std::collections::HashSet<String> = ["D-A01".to_string()].into();
+
+        let matrix = read_matrix(&bam, None, None, None, 1, false, Some(&allowlist)).unwrap();
+        assert_eq!(matrix.molecules, 1);
+        assert_eq!(matrix.probe_barcodes_skipped, 1);
+        assert_eq!(matrix.features.len(), 1);
+        assert_eq!(matrix.features[0].id, "GENE1");
     }
 }

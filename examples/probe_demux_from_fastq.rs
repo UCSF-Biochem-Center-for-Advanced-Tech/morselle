@@ -87,11 +87,11 @@ fn main() -> anyhow::Result<()> {
                 *per_sample.entry(a.sample_id.as_deref().unwrap()).or_insert(0) += 1;
             }
             Unassigned => unassigned += 1,
-            HighOccupancy => high_occ += 1,
+            HighOccupancyGem => high_occ += 1,
         }
     }
     println!("\ncell barcodes total: {}", assignments.len());
-    println!("Assigned: {assigned}  Unassigned: {unassigned}  HighOccupancy: {high_occ}");
+    println!("Assigned: {assigned}  Unassigned: {unassigned}  HighOccupancyGem: {high_occ}");
     println!("\nper-sample raw Assigned CB counts (pre-cell-calling, --min-molecules={min_molecules}):");
     let mut rows: Vec<_> = sheet.samples.iter().map(|s| (s.id.as_str(), per_sample.get(s.id.as_str()).copied().unwrap_or(0))).collect();
     for (id, count) in &rows {
