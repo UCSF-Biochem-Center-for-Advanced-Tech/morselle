@@ -37,13 +37,25 @@
 #   scripts/run_flex_multi.sh [--crispr-bam BAM --guide-features TSV] \
 #     <gex.bam> <probe_demux_out_dir> <output_dir> [extra `sbxpress cells` args...]
 #
-# Output, per declared sample:
+# Output:
+#   <output_dir>/crispr_molecules.bam              (only with --crispr-bam; shared
+#                                                     across all samples -- see below)
 #   <output_dir>/<sample_id>/gex_raw/{raw_feature_bc_matrix.h5,raw_feature_bc_matrix/}
 #   <output_dir>/<sample_id>/gex_outs/{filtered_feature_bc_matrix.h5,filtered_barcodes.csv,...}
 #   <output_dir>/<sample_id>/crispr_raw/...        (only with --crispr-bam)
 #   <output_dir>/<sample_id>/crispr_outs/{filtered_feature_bc_matrix.h5,
 #     protospacer_calls_per_cell.csv,protospacer_calls_summary.csv,
 #     protospacer_umi_thresholds.csv,protospacer_umi_thresholds.json}
+#
+# `molecules --tagseq "$crispr_bam"` runs ONCE, before the per-sample loop,
+# not once per sample -- it processes the whole pooled multi-sample guide BAM
+# regardless of which sample invokes it (real check on CAT06 CP1 data: the
+# output BAM was byte-identical, same size, across 3 different samples' runs
+# of the old per-sample-loop version), so repeating it per sample was pure
+# waste: ~44-47 real minutes redone 8 extra times for a 9-sample run, ~6.75
+# real hours thrown away per library. Matches how the GEX side already builds
+# its shared molecules BAM once (by the caller, before this script even
+# starts) rather than per sample.
 
 set -euo pipefail
 
@@ -93,6 +105,12 @@ shopt -u nullglob
 
 mkdir -p "$out_dir"
 
+crispr_molecules="$out_dir/crispr_molecules.bam"
+if [ -n "$crispr_bam" ] && [ ! -f "$crispr_molecules" ]; then
+  echo "-- molecules (CRISPR, --tagseq, whole pooled guide BAM, once) --"
+  sbxpress molecules "$crispr_bam" --tagseq -o "$crispr_molecules"
+fi
+
 for barcodes in "${barcode_files[@]}"; do
   sample=$(basename "$barcodes" .barcodes.txt)
   sample_dir="$out_dir/$sample"
@@ -122,12 +140,8 @@ for barcodes in "${barcode_files[@]}"; do
     continue
   fi
 
-  crispr_molecules="$sample_dir/crispr_molecules.bam"
   crispr_raw="$sample_dir/crispr_raw"
   crispr_outs="$sample_dir/crispr_outs"
-
-  echo "-- molecules (CRISPR, --tagseq) --"
-  sbxpress molecules "$crispr_bam" --tagseq -o "$crispr_molecules"
 
   echo "-- matrix (CRISPR) --"
   sbxpress matrix "$crispr_molecules" --cell-barcodes "$gex_cells" --probe-barcodes "$probes" --skip-unlisted-barcodes \
