@@ -33,8 +33,20 @@
 # barcode column only -- not the pre-cell-calling probe-demux list), so a
 # sample with no GEX cells called gets no CRISPR counting either.
 #
+# CRISPR `molecules` does NOT use `--tagseq`: that mode exists for a
+# genuinely different protocol -- pooled, non-single-cell libraries where one
+# barcode is a whole sample at tens-of-millions-of-reads depth (see
+# `sbx10x-molecules --help`'s own doc comment on the flag). Real CAT06 CRISPR
+# Guide Capture data is ordinary single-cell depth (real per-cell counts:
+# 6-7 UMIs/cell against a 3-UMI call floor -- see `protospacer_calling.rs`),
+# same order of magnitude as GEX, so `--tagseq`'s skip of cross-guide UMI
+# collision adjudication *and* directional UMI error-correction was very
+# likely hurting accuracy right at the threshold decision boundary rather
+# than helping, not just mismatched by name.
+#
 # Usage:
 #   scripts/run_flex_multi.sh [--crispr-bam BAM --guide-features TSV] \
+#     [--jobs N] \
 #     <gex.bam> <probe_demux_out_dir> <output_dir> [extra `sbxpress cells` args...]
 #
 # Output:
@@ -47,30 +59,42 @@
 #     protospacer_calls_per_cell.csv,protospacer_calls_summary.csv,
 #     protospacer_umi_thresholds.csv,protospacer_umi_thresholds.json}
 #
-# `molecules --tagseq "$crispr_bam"` runs ONCE, before the per-sample loop,
-# not once per sample -- it processes the whole pooled multi-sample guide BAM
+# `molecules "$crispr_bam"` runs ONCE, before the per-sample loop, not once
+# per sample -- it processes the whole pooled multi-sample guide BAM
 # regardless of which sample invokes it (real check on CAT06 CP1 data: the
 # output BAM was byte-identical, same size, across 3 different samples' runs
 # of the old per-sample-loop version), so repeating it per sample was pure
-# waste: ~44-47 real minutes redone 8 extra times for a 9-sample run, ~6.75
-# real hours thrown away per library. Matches how the GEX side already builds
-# its shared molecules BAM once (by the caller, before this script even
-# starts) rather than per sample.
+# waste: tens of real minutes redone 8 extra times for a 9-sample run, hours
+# thrown away per library. Matches how the GEX side already builds its
+# shared molecules BAM once (by the caller, before this script even starts)
+# rather than per sample.
+#
+# Per-sample work (GEX matrix+cells, then CRISPR matrix+cells+protospacer-call)
+# runs in PARALLEL across samples via `--jobs` (default: all samples at
+# once), not sequentially. Each sample's own work only reads the shared,
+# already-built BAMs (gex.bam / crispr_molecules.bam) and is I/O-bound and
+# lightweight on CPU/memory (real measured ~1-2GB RSS per `matrix`-building
+# process on CAT06), so concurrent samples are safe on any box with real
+# headroom -- this turns an N-samples-times-one-scan sequential wall clock
+# into roughly one scan's worth of wall clock. Lower --jobs on a
+# memory/IO-constrained box.
 
 set -euo pipefail
 
 usage() {
-  echo "usage: $(basename "$0") [--crispr-bam BAM --guide-features TSV] <gex.bam> <probe_demux_out_dir> <output_dir> [extra 'sbxpress cells' args...]" >&2
+  echo "usage: $(basename "$0") [--crispr-bam BAM --guide-features TSV] [--jobs N] <gex.bam> <probe_demux_out_dir> <output_dir> [extra 'sbxpress cells' args...]" >&2
   exit 1
 }
 
 crispr_bam=""
 guide_features=""
+jobs=""
 positional=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --crispr-bam) crispr_bam=${2:?missing value for --crispr-bam}; shift 2 ;;
     --guide-features) guide_features=${2:?missing value for --guide-features}; shift 2 ;;
+    --jobs) jobs=${2:?missing value for --jobs}; shift 2 ;;
     --) shift; positional+=("$@"); break ;;
     *) positional+=("$1"); shift ;;
   esac
@@ -107,11 +131,16 @@ mkdir -p "$out_dir"
 
 crispr_molecules="$out_dir/crispr_molecules.bam"
 if [ -n "$crispr_bam" ] && [ ! -f "$crispr_molecules" ]; then
-  echo "-- molecules (CRISPR, --tagseq, whole pooled guide BAM, once) --"
-  sbxpress molecules "$crispr_bam" --tagseq -o "$crispr_molecules"
+  echo "-- molecules (CRISPR, whole pooled guide BAM, once) --"
+  sbxpress molecules "$crispr_bam" -o "$crispr_molecules"
 fi
 
-for barcodes in "${barcode_files[@]}"; do
+[ -n "$jobs" ] || jobs=${#barcode_files[@]}
+
+run_sample() {
+  set -euo pipefail
+  local barcodes=$1
+  local sample sample_dir gex_raw gex_outs probes n
   sample=$(basename "$barcodes" .barcodes.txt)
   sample_dir="$out_dir/$sample"
   gex_raw="$sample_dir/gex_raw"
@@ -120,38 +149,48 @@ for barcodes in "${barcode_files[@]}"; do
 
   if [ ! -s "$barcodes" ]; then
     echo "== $sample: 0 assigned barcodes, skipping (nothing to call) =="
-    continue
+    return 0
   fi
   n=$(wc -l < "$barcodes")
   echo "== $sample: $n assigned barcode(s) =="
 
-  echo "-- matrix (GEX) --"
+  local extra=()
+  [ -z "${CELLS_EXTRA_ARGS:-}" ] || read -ra extra <<< "$CELLS_EXTRA_ARGS"
+
+  echo "-- $sample: matrix (GEX) --"
   sbxpress matrix "$gex_bam" --cell-barcodes "$barcodes" --probe-barcodes "$probes" --skip-unlisted-barcodes -o "$gex_raw"
 
-  echo "-- cells (GEX) --"
-  sbxpress cells "$gex_raw/raw_feature_bc_matrix.h5" -o "$gex_outs" "${cells_extra_args[@]}"
+  echo "-- $sample: cells (GEX) --"
+  sbxpress cells "$gex_raw/raw_feature_bc_matrix.h5" -o "$gex_outs" "${extra[@]}"
 
-  [ -n "$crispr_bam" ] || continue
+  [ -n "$crispr_bam" ] || { echo "== $sample: done =="; return 0; }
 
+  local gex_cells crispr_raw crispr_outs
   gex_cells="$sample_dir/gex_cells.txt"
   tail -n +2 "$gex_outs/filtered_barcodes.csv" | cut -d, -f2 > "$gex_cells"
   if [ ! -s "$gex_cells" ]; then
     echo "== $sample: 0 GEX cells called, skipping CRISPR counting =="
-    continue
+    return 0
   fi
 
   crispr_raw="$sample_dir/crispr_raw"
   crispr_outs="$sample_dir/crispr_outs"
 
-  echo "-- matrix (CRISPR) --"
+  echo "-- $sample: matrix (CRISPR) --"
   sbxpress matrix "$crispr_molecules" --cell-barcodes "$gex_cells" --probe-barcodes "$probes" --skip-unlisted-barcodes \
     --features "$guide_features" -o "$crispr_raw"
 
-  echo "-- cells (CRISPR, --tagseq-barcodes) --"
+  echo "-- $sample: cells (CRISPR, --tagseq-barcodes) --"
   sbxpress cells "$crispr_raw/raw_feature_bc_matrix.h5" --tagseq-barcodes "$gex_cells" -o "$crispr_outs"
 
-  echo "-- protospacer-call --"
+  echo "-- $sample: protospacer-call --"
   sbxpress protospacer-call "$crispr_outs/filtered_feature_bc_matrix.h5" -o "$crispr_outs"
-done
+  echo "== $sample: done =="
+}
+export -f run_sample
+export out_dir demux_dir gex_bam crispr_bam guide_features crispr_molecules
+export CELLS_EXTRA_ARGS="${cells_extra_args[*]:-}"
+
+printf '%s\n' "${barcode_files[@]}" | xargs -P "$jobs" -I{} bash -c 'run_sample "{}"'
 
 echo "done: per-sample GEX matrices + cell-calling$([ -n "$crispr_bam" ] && echo " + CRISPR counting/protospacer calling") in $out_dir"
