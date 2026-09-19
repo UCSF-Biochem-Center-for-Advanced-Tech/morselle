@@ -477,6 +477,39 @@ cellranger's undocumented exact algorithm — worth revisiting if cellranger's
 real CRISPR-calling implementation details ever become available, but not
 something to paper over with an unprincipled fit adjustment now.
 
+### Amendment (2026-09-19) — `--tagseq` was wrong for CRISPR; known unimplemented scope
+
+Two findings from reviewing 10x's real "Cell Ranger's CRISPR Guide Capture
+Algorithm" doc against this phase's actual CAT06 output:
+
+- **`molecules --tagseq` for the CRISPR side, as originally specified above
+  and implemented in `run_flex_multi.sh`, was the wrong mode.** `--tagseq`
+  exists for a genuinely different protocol — pooled, non-single-cell
+  libraries where one barcode is a whole sample at tens-of-millions-of-reads
+  depth (see its doc comment in `sbx10x-molecules`). Real CAT06 CRISPR Guide
+  Capture data is ordinary single-cell depth (real per-cell counts: 6-7
+  UMIs/cell against the `--min-umi 3` call floor above), the same order of
+  magnitude as GEX, so `--tagseq`'s skip of cross-guide UMI collision
+  adjudication *and* directional UMI error-correction was very likely
+  hurting accuracy right at the threshold decision boundary, not just a
+  naming mismatch. Fixed: `run_flex_multi.sh` now runs plain `molecules` (no
+  `--tagseq`) for the CRISPR stream. `cells --tagseq-barcodes` is unrelated
+  (an external cell-identity override — CRISPR piggybacks on GEX-called
+  cells, matching 10x's real design: "cell calling is done using the Gene
+  Expression data") and is unaffected.
+- **Known unimplemented, out of scope for now**: 10x's real algorithm also
+  covers "by target" grouping (multiple guide RNA constructs per target
+  gene, results groupable by feature or by target) and downstream
+  perturbation analysis (sSeq differential expression for Perturbation
+  Efficiency / Perturbation Effects, log2-fold-change reporting). Neither
+  exists in `protospacer_calling.rs` or anywhere else in sbxpress — this
+  project's scope has been matching cellranger's raw counts/calls, not full
+  secondary statistical analysis. Also moot for CAT06 specifically:
+  `feature_reference_RZ.csv` has no `target_gene_id`/`target_gene_name`
+  column, so even cellranger has nothing to group by on this real dataset.
+  Revisit if a future pooled-screen dataset (multiple guides/gene, real
+  perturbation-effect questions) needs it.
+
 ## Phase 6 — End-to-end verification against ground truth
 
 - Per-phase spot checks as described above (Phase 0 coordinate harness, Phase 2 vs. `frp_gem_barcode_overlap.csv`/`cells_per_tag.json`, Phase 4 vs. feature-reference hit rates).
