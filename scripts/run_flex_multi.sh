@@ -19,6 +19,14 @@
 # that flag `matrix` (correctly, for its original single-sample use case)
 # hard-errors on the first one it meets.
 #
+# `--probe-barcodes` on both `matrix` calls is also load-bearing, not
+# optional: probe-demux's cell barcode is the composite (GEM, ProbeBarcode)
+# pair (real Flex multiplex pooling -- see probe_demux.rs's module doc
+# comment), so a GEM legitimately assigned to more than one sample now
+# appears in more than one sample's <sample_id>.barcodes.txt. Without this
+# flag, each sample's matrix would also pull in every OTHER sample's
+# molecules for that shared GEM.
+#
 # CRISPR identity piggybacks on GEX-defined cell identity (matching real 10x
 # biology, and FLEX_SUPPORT_PLAN.md Phase 5's own design): the CRISPR side
 # uses each sample's Phase 3 GEX-*called* cell list (`gex_outs/filtered_barcodes.csv`,
@@ -90,6 +98,7 @@ for barcodes in "${barcode_files[@]}"; do
   sample_dir="$out_dir/$sample"
   gex_raw="$sample_dir/gex_raw"
   gex_outs="$sample_dir/gex_outs"
+  probes="$demux_dir/$sample.probe_barcodes.txt"
 
   if [ ! -s "$barcodes" ]; then
     echo "== $sample: 0 assigned barcodes, skipping (nothing to call) =="
@@ -99,7 +108,7 @@ for barcodes in "${barcode_files[@]}"; do
   echo "== $sample: $n assigned barcode(s) =="
 
   echo "-- matrix (GEX) --"
-  sbxpress matrix "$gex_bam" --cell-barcodes "$barcodes" --skip-unlisted-barcodes -o "$gex_raw"
+  sbxpress matrix "$gex_bam" --cell-barcodes "$barcodes" --probe-barcodes "$probes" --skip-unlisted-barcodes -o "$gex_raw"
 
   echo "-- cells (GEX) --"
   sbxpress cells "$gex_raw/raw_feature_bc_matrix.h5" -o "$gex_outs" "${cells_extra_args[@]}"
@@ -121,7 +130,7 @@ for barcodes in "${barcode_files[@]}"; do
   sbxpress molecules "$crispr_bam" --tagseq -o "$crispr_molecules"
 
   echo "-- matrix (CRISPR) --"
-  sbxpress matrix "$crispr_molecules" --cell-barcodes "$gex_cells" --skip-unlisted-barcodes \
+  sbxpress matrix "$crispr_molecules" --cell-barcodes "$gex_cells" --probe-barcodes "$probes" --skip-unlisted-barcodes \
     --features "$guide_features" -o "$crispr_raw"
 
   echo "-- cells (CRISPR, --tagseq-barcodes) --"
