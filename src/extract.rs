@@ -93,6 +93,26 @@ pub struct ExtractCfg {
     /// `false` for non-Flex (standard 3' capture, real free cDNA, no such
     /// landmark to find).
     pub flex_r2_boundary: bool,
+    /// When `flex_r2_boundary` is on and [`FLEX_R2_END_ANCHOR`] can't be
+    /// confidently located (even with its own indel tolerance), fall back to
+    /// accepting R2 up to [`FLEX_R2_END_ANCHOR_MAX_SEARCH`] anyway *if* that
+    /// span is at least this long -- rather than rejecting the read
+    /// outright. Real, measured rationale: on real CAT06 data, requiring the
+    /// literal anchor discarded a large population of reads whose
+    /// hit-rate-among-survivors was statistically identical to the reads
+    /// that *did* verify (96.4-96.5% either way) -- i.e. most of what the
+    /// hard gate excludes isn't garbage, it's real, otherwise-valid reads
+    /// that simply can't be verified via this one specific landmark (didn't
+    /// sequence far enough to reach it, or carry more errors than even the
+    /// indel-tolerant search's budget allows). A length floor sized to
+    /// *structurally guarantee the real probe sequence fits* gives these
+    /// reads a fair shot at `probeset-align`/`probe_barcode` matching
+    /// instead of being dropped before ever trying. Default derivation is
+    /// real, not guessed: probe length is 50bp (confirmed directly from
+    /// `Chromium_Human_Transcriptome_Probe_Set_v2.0.0_GRCh38-2024-A.csv`)
+    /// plus `ProbeMatcher`'s own real default search jitter (`--window 15`)
+    /// = 65bp worst case.
+    pub flex_min_cdna_len_no_anchor: usize,
 }
 
 /// Extraction result: ranges `[start, end)` into the canonical sequence.
@@ -277,16 +297,58 @@ fn adapter_single_indel(s: &[u8], a: &[u8], max_mm: u32) -> bool {
     false
 }
 
-/// Leftmost position ≥ `from` where a confident prefix of
-/// [`FLEX_R2_END_ANCHOR`] matches -- the real far boundary of R2 on a Flex
-/// read (end of `Ligated_Probe_insert`). Simple Hamming scan, no indel
-/// handling: the searched prefix is short enough that scanning every
-/// position already absorbs indel jitter without needing `find_adapter`'s
-/// extra indel-alignment machinery. Bounded to
-/// [`FLEX_R2_END_ANCHOR_MAX_SEARCH`] bp past `from` -- see its doc comment;
-/// this both caps the wasted work on non-GEX reads that will never match and
-/// avoids ever reporting a spurious, structurally-impossible match far into
-/// the read.
+/// All single-position deletions of `seq` (one per position).
+fn single_deletion_variants(seq: &[u8]) -> impl Iterator<Item = Vec<u8>> + '_ {
+    (0..seq.len()).map(move |i| {
+        let mut v = Vec::with_capacity(seq.len() - 1);
+        v.extend_from_slice(&seq[..i]);
+        v.extend_from_slice(&seq[i + 1..]);
+        v
+    })
+}
+
+/// All single-position insertions into `seq` (every position, every
+/// non-redundant base).
+fn single_insertion_variants(seq: &[u8]) -> impl Iterator<Item = Vec<u8>> + '_ {
+    (0..=seq.len()).flat_map(move |i| {
+        let existing = if i < seq.len() { seq[i] } else { b'\0' };
+        b"ACGT".iter().filter(move |&&b| b != existing).map(move |&b| {
+            let mut v = Vec::with_capacity(seq.len() + 1);
+            v.extend_from_slice(&seq[..i]);
+            v.push(b);
+            v.extend_from_slice(&seq[i..]);
+            v
+        })
+    })
+}
+
+/// Leftmost position ≥ `from` where a confident (possibly single-indel-
+/// shifted) prefix of [`FLEX_R2_END_ANCHOR`] matches -- the real far
+/// boundary of R2 on a Flex read (end of `Ligated_Probe_insert`).
+///
+/// Tries the exact-length (substitution-only) window at every offset first,
+/// same as originally; a real, single-base indel landing *before* the
+/// anchor is already absorbed by sliding `from` forward. But a real indel
+/// landing *inside* the 15bp comparison span itself misaligns every base
+/// after it, so no substitution-only offset can find it regardless of where
+/// the window starts -- real SBX errors are dominated by single-base
+/// indels, not substitutions (see `probe_set.rs`'s
+/// `single_deletion_variants`/`single_insertion_variants` doc comments and
+/// FLEX_SUPPORT_PLAN.md's real error-profile finding: 85.2% deletion, 9.2%
+/// insertion of recoverable Hamming-miss shapes). Falls back to trying each
+/// single-deletion/-insertion variant of the anchor prefix at every offset
+/// too, mirroring that same fix. Real measured cost of the original,
+/// substitution-only-only version on real CAT06 data: hard-gating on it
+/// dropped `class_full` from 66.07% to 56.39% on the same raw shards
+/// (23,185,519 fewer real, probe-matching reads) with *no* improvement in
+/// hit-rate-among-survivors (96.4% -> 96.5%, unchanged) -- the signature of
+/// a real, fixable recall gap in anchor detection, not a genuine precision
+/// gain from being stricter.
+///
+/// Bounded to [`FLEX_R2_END_ANCHOR_MAX_SEARCH`] bp past `from` -- see its
+/// doc comment; this both caps the wasted work on non-GEX reads that will
+/// never match and avoids ever reporting a spurious, structurally-
+/// impossible match far into the read.
 fn find_flex_r2_end(seq: &[u8], from: usize) -> Option<usize> {
     let a = &FLEX_R2_END_ANCHOR[..FLEX_R2_END_ANCHOR_PREFIX_LEN];
     let m = a.len();
@@ -294,7 +356,26 @@ fn find_flex_r2_end(seq: &[u8], from: usize) -> Option<usize> {
     if end < from + m {
         return None;
     }
-    (from..=end - m).find(|&i| hamming_leq(&seq[i..i + m], a, FLEX_R2_END_ANCHOR_MAX_MM))
+    if let Some(i) = (from..=end - m).find(|&i| hamming_leq(&seq[i..i + m], a, FLEX_R2_END_ANCHOR_MAX_MM)) {
+        return Some(i);
+    }
+    if end >= from + (m - 1) {
+        for variant in single_deletion_variants(a) {
+            let w = variant.len();
+            if let Some(i) = (from..=end - w).find(|&i| hamming_leq(&seq[i..i + w], &variant, FLEX_R2_END_ANCHOR_MAX_MM)) {
+                return Some(i);
+            }
+        }
+    }
+    if end >= from + (m + 1) {
+        for variant in single_insertion_variants(a) {
+            let w = variant.len();
+            if let Some(i) = (from..=end - w).find(|&i| hamming_leq(&seq[i..i + w], &variant, FLEX_R2_END_ANCHOR_MAX_MM)) {
+                return Some(i);
+            }
+        }
+    }
+    None
 }
 
 /// Bracket R1 (CB+UMI) and R2 (cDNA) on a canonical read.
@@ -329,22 +410,37 @@ pub fn extract(
         polyt_end = Some(cdna_start);
 
         if cfg.flex_r2_boundary && !likely_non_gex {
-            // Hard gate: the real probe-insert/constant boundary
-            // (FLEX_R2_END_ANCHOR) or nothing -- no fallback to the generic
-            // adapter/length floor. `--flex` defaults to assuming every read
+            // Verified boundary: the real probe-insert/constant boundary
+            // (FLEX_R2_END_ANCHOR). `--flex` defaults to assuming every read
             // is Flex GEX; the caller is responsible for ruling that out via
             // `likely_non_gex` (an early, cheap i5-only sample-sheet lookup)
             // for libraries that don't carry this construct at all (CRISPR/
             // Feature Barcoding sharing the same invocation) -- see
-            // `lib.rs::process_one`. A read where the anchor can't be
-            // confidently located didn't carry a complete probe insert,
-            // regardless of its raw length, so it's correctly rejected here
-            // rather than passed through to silently fail later in
-            // `probeset-align`.
+            // `lib.rs::process_one`.
             if let Some(cdna_end) = find_flex_r2_end(seq, cdna_start) {
                 adapter_pos = Some(cdna_end);
                 adapter_trimmed = true;
                 if cdna_end > cdna_start {
+                    r2 = Some((cdna_start, cdna_end));
+                }
+            } else {
+                // Anchor not confidently located, even with its own indel
+                // tolerance -- real data shows this population's
+                // hit-rate-among-survivors is statistically identical to the
+                // verified population (96.4-96.5% either way), so most of it
+                // isn't garbage; it just can't be verified via this one
+                // landmark (didn't sequence far enough to reach it, or
+                // carries more errors than even the indel-tolerant search's
+                // budget). Fall back to a length floor sized to structurally
+                // guarantee the real probe sequence fits, rather than
+                // rejecting outright -- see `flex_min_cdna_len_no_anchor`'s
+                // doc comment for the real derivation. `adapter_trimmed`
+                // stays false here: this boundary is a length floor, not a
+                // verified landmark, and downstream accounting (e.g.
+                // `per_sample_early_boundary_found`) should reflect that
+                // honestly.
+                let cdna_end = seq.len().min(cdna_start + FLEX_R2_END_ANCHOR_MAX_SEARCH);
+                if cdna_end >= cdna_start + cfg.flex_min_cdna_len_no_anchor {
                     r2 = Some((cdna_start, cdna_end));
                 }
             }
@@ -567,6 +663,7 @@ mod tests {
             trim_tso: false,
             max_r2_len: 0,
             flex_r2_boundary: false,
+            flex_min_cdna_len_no_anchor: 65,
         }
     }
 
@@ -720,11 +817,69 @@ mod tests {
     }
 
     #[test]
-    fn flex_r2_boundary_hard_gate_rejects_when_anchor_absent_and_gex_assumed() {
+    fn flex_r2_boundary_recovers_a_single_deletion_in_the_anchor() {
+        // Real SBX error mode (85.2% of recoverable Hamming-miss shapes):
+        // a genuine anchor with one base deleted from inside the searched
+        // prefix. A pure substitution-only scan can never find this at any
+        // offset, since every base after the deletion point is shifted by 1.
+        let cb = b"AAACCCAAGAAACCCA";
+        let umi = b"ACGTACGTACGT";
+        let pre_anchor = b"GATTACAGATTACAGATTACAGATTACAGATTACAGAT";
+        let mut anchor = FLEX_R2_END_ANCHOR.to_vec();
+        anchor.remove(7); // delete one base from inside the 15bp prefix
+        let mut seq = Vec::new();
+        seq.extend_from_slice(b"AACAAT");
+        seq.extend_from_slice(P5);
+        seq.extend_from_slice(b"ACGTACGTAC");
+        seq.extend_from_slice(R1_PRIMER);
+        seq.extend_from_slice(cb);
+        seq.extend_from_slice(umi);
+        seq.extend(std::iter::repeat(b'T').take(30));
+        seq.extend_from_slice(pre_anchor);
+        seq.extend_from_slice(&anchor);
+        let qual = vec![b'I'; seq.len()];
+
+        let o = orient(&seq, &qual, &ocfg());
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &flex_ecfg(), false);
+        let (r2s, _r2e) = e.r2.expect("single-deletion-shifted anchor should still be found");
+        assert_eq!(&o.seq[r2s..r2s + pre_anchor.len()], pre_anchor.as_slice());
+    }
+
+    #[test]
+    fn flex_r2_boundary_recovers_a_single_insertion_in_the_anchor() {
+        // Rarer real shape (9.2% of recoverable Hamming-miss shapes) but
+        // real: one extra base inserted inside the searched prefix.
+        let cb = b"AAACCCAAGAAACCCA";
+        let umi = b"ACGTACGTACGT";
+        let pre_anchor = b"GATTACAGATTACAGATTACAGATTACAGATTACAGAT";
+        let mut anchor = FLEX_R2_END_ANCHOR.to_vec();
+        anchor.insert(7, b'G'); // insert one extra base inside the 15bp prefix
+        let mut seq = Vec::new();
+        seq.extend_from_slice(b"AACAAT");
+        seq.extend_from_slice(P5);
+        seq.extend_from_slice(b"ACGTACGTAC");
+        seq.extend_from_slice(R1_PRIMER);
+        seq.extend_from_slice(cb);
+        seq.extend_from_slice(umi);
+        seq.extend(std::iter::repeat(b'T').take(30));
+        seq.extend_from_slice(pre_anchor);
+        seq.extend_from_slice(&anchor);
+        let qual = vec![b'I'; seq.len()];
+
+        let o = orient(&seq, &qual, &ocfg());
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &flex_ecfg(), false);
+        let (r2s, _r2e) = e.r2.expect("single-insertion-shifted anchor should still be found");
+        assert_eq!(&o.seq[r2s..r2s + pre_anchor.len()], pre_anchor.as_slice());
+    }
+
+    #[test]
+    fn flex_r2_boundary_rejects_when_anchor_absent_and_payload_too_short_for_a_probe() {
         // likely_non_gex=false (the default -- caller has no reason to think
-        // otherwise): no FLEX_R2_END_ANCHOR anywhere. `--flex` assumes every
-        // read is Flex GEX unless told otherwise, so this is correctly
-        // rejected outright -- no fallback to read-end/min_cdna_len.
+        // otherwise): no FLEX_R2_END_ANCHOR anywhere, AND the payload (63bp)
+        // is below flex_min_cdna_len_no_anchor's real 65bp floor (50bp probe
+        // + 15bp real search jitter) -- too short to structurally contain a
+        // real probe match either way, so correctly rejected even under the
+        // length-floor fallback.
         let cb = b"AAACCCAAGAAACCCA";
         let umi = b"ACGTACGTACGT";
         let payload = b"GATTACAGATTACAGATTACAGATTACAGATTACAGATTACAGATTACAGATTACAGATTACA";
@@ -743,6 +898,66 @@ mod tests {
         let e = extract(&o.seq, o.cb_umi, o.polyt_start, &flex_ecfg(), false);
         assert!(e.r2.is_none());
         assert!(!e.adapter_trimmed);
+    }
+
+    #[test]
+    fn flex_r2_boundary_falls_back_to_a_length_floor_when_anchor_absent_but_payload_long_enough() {
+        // Same shape as the too-short case, but 70bp of payload -- clears
+        // flex_min_cdna_len_no_anchor's real 65bp floor even with no
+        // FLEX_R2_END_ANCHOR anywhere. Real rationale: this read's
+        // hit-rate-among-survivors on real CAT06 data is statistically the
+        // same as the verified-anchor population (96.4-96.5% either way),
+        // so it deserves a real shot at probeset-align/probe_barcode
+        // matching instead of being dropped outright.
+        let cb = b"AAACCCAAGAAACCCA";
+        let umi = b"ACGTACGTACGT";
+        let payload = b"GATTACAGATTACAGATTACAGATTACAGATTACAGATTACAGATTACAGATTACAGATTACAGATTACA";
+        assert!(payload.len() >= 65);
+        let mut seq = Vec::new();
+        seq.extend_from_slice(b"AACAAT");
+        seq.extend_from_slice(P5);
+        seq.extend_from_slice(b"ACGTACGTAC");
+        seq.extend_from_slice(R1_PRIMER);
+        seq.extend_from_slice(cb);
+        seq.extend_from_slice(umi);
+        seq.extend(std::iter::repeat(b'T').take(30));
+        seq.extend_from_slice(payload);
+        let qual = vec![b'I'; seq.len()];
+
+        let o = orient(&seq, &qual, &ocfg());
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &flex_ecfg(), false);
+        let (r2s, r2e) = e.r2.expect("long-enough payload should fall back to a length floor");
+        assert_eq!(&o.seq[r2s..r2e], payload.as_slice());
+        // Not a verified landmark -- honest accounting, unlike the real
+        // anchor-found path.
+        assert!(!e.adapter_trimmed);
+    }
+
+    #[test]
+    fn flex_min_cdna_len_no_anchor_is_configurable() {
+        let cb = b"AAACCCAAGAAACCCA";
+        let umi = b"ACGTACGTACGT";
+        let payload = b"GATTACAGATTACAGATTACA"; // 22bp -- below the real 65bp default
+        let mut seq = Vec::new();
+        seq.extend_from_slice(b"AACAAT");
+        seq.extend_from_slice(P5);
+        seq.extend_from_slice(b"ACGTACGTAC");
+        seq.extend_from_slice(R1_PRIMER);
+        seq.extend_from_slice(cb);
+        seq.extend_from_slice(umi);
+        seq.extend(std::iter::repeat(b'T').take(30));
+        seq.extend_from_slice(payload);
+        let qual = vec![b'I'; seq.len()];
+        let o = orient(&seq, &qual, &ocfg());
+
+        // Default (65) rejects a 22bp payload.
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &flex_ecfg(), false);
+        assert!(e.r2.is_none());
+
+        // Lowering the floor to <= payload.len() accepts it.
+        let lenient = ExtractCfg { flex_min_cdna_len_no_anchor: payload.len(), ..flex_ecfg() };
+        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &lenient, false);
+        assert!(e.r2.is_some());
     }
 
     #[test]
@@ -781,9 +996,13 @@ mod tests {
         // The anchor sits real bp past cdna_start (FLEX_R2_END_ANCHOR_MAX_SEARCH,
         // ~150bp) -- a structurally-impossible position for the real
         // Ligated_Probe_insert/constant junction. Under the hard-gate default
-        // (likely_non_gex=false) this must be rejected, not matched: confirms
-        // the search is actually bounded (an unbounded scan would wrongly
-        // find it and mis-locate the boundary far too late).
+        // (likely_non_gex=false) this must not be matched as the verified
+        // landmark: confirms the search is actually bounded (an unbounded
+        // scan would wrongly find it and mis-locate the boundary far too
+        // late). The padding alone clears flex_min_cdna_len_no_anchor's real
+        // 65bp floor though, so the length-floor fallback correctly still
+        // emits an R2 -- bounded at the search limit, never at the real
+        // (too-far-away) anchor position.
         let cb = b"AAACCCAAGAAACCCA";
         let umi = b"ACGTACGTACGT";
         let padding = vec![b'G'; FLEX_R2_END_ANCHOR_MAX_SEARCH + 20];
@@ -801,7 +1020,9 @@ mod tests {
 
         let o = orient(&seq, &qual, &ocfg());
         let e = extract(&o.seq, o.cb_umi, o.polyt_start, &flex_ecfg(), false);
-        assert!(e.r2.is_none(), "anchor beyond the search bound must not be found");
+        let (r2s, r2e) = e.r2.expect("length floor should still fire past the search bound");
+        assert_eq!(r2e - r2s, FLEX_R2_END_ANCHOR_MAX_SEARCH, "bounded at the search limit, not the real anchor");
+        assert!(!e.adapter_trimmed, "not a verified landmark match");
     }
 
     #[test]

@@ -216,6 +216,32 @@ pub struct Params {
     #[arg(long, default_value_t = false)]
     pub processing_tags: bool,
 
+    /// This run is 10x Flex chemistry: hard-gate GEX-routed samples' R2 on
+    /// locating the real Flex end-boundary anchor (a structural landmark)
+    /// instead of the generic adapter-search + length-floor a non-Flex 3'/5'
+    /// run uses. The sole trigger for that hard gate -- deliberately NOT
+    /// inferred from `--probe-barcode-whitelist`'s presence or from any
+    /// sample name: "GEX" is a completely ordinary substring in real,
+    /// non-Flex 3'/5' sample names too (this project's own CAT02 data, e.g.),
+    /// so tying Flex-only behavior to a naming heuristic would silently
+    /// mass-reject real non-Flex GEX reads that have no such anchor to find.
+    /// `--probe-barcode-whitelist` remains independently required for actual
+    /// probe-barcode identification; the two are orthogonal.
+    #[arg(long, default_value_t = false)]
+    pub flex: bool,
+
+    /// With `--flex`, when the real Flex R2 end-boundary anchor can't be
+    /// confidently located, fall back to accepting R2 anyway if it's at
+    /// least this long -- rather than rejecting the read outright. Real
+    /// derivation: 50bp probe length (confirmed from
+    /// `Chromium_Human_Transcriptome_Probe_Set_v2.0.0_GRCh38-2024-A.csv`)
+    /// plus `ProbeMatcher`'s own real default search jitter (`--window 15`
+    /// on `sbxpress-probeset-align`) = 65bp worst case. See
+    /// `ExtractCfg::flex_min_cdna_len_no_anchor`'s doc comment for the full
+    /// real-data rationale.
+    #[arg(long, default_value_t = 65)]
+    pub flex_min_cdna_len_no_anchor: usize,
+
     /// 10x Flex probe-barcode whitelist (e.g. `flex-v2-384.txt`). When set,
     /// locates + identifies the probe barcode on each read and adds
     /// `PR:Z:<raw>`/`PB:Z:<corrected id>` to the FASTQ comment (requires
@@ -281,11 +307,11 @@ impl Params {
             adapter_max_mm: self.adapter_max_mm,
             trim_tso: self.trim_tso,
             max_r2_len: self.max_r2_len,
-            // Reuses --probe-barcode-whitelist's presence as the Flex-mode
-            // signal -- that flag is already how every other Flex-only code
-            // path (probe-barcode location) gets turned on, so this doesn't
-            // need a separate flag of its own.
-            flex_r2_boundary: self.probe_barcode_whitelist.is_some(),
+            // Explicit --flex is the sole trigger, deliberately decoupled
+            // from --probe-barcode-whitelist's presence and from sample
+            // naming -- see --flex's own doc comment for why.
+            flex_r2_boundary: self.flex,
+            flex_min_cdna_len_no_anchor: self.flex_min_cdna_len_no_anchor,
         }
     }
 
@@ -344,5 +370,21 @@ mod tests {
     fn processing_tags_are_opt_in_without_minimap2() {
         assert!(!parse(&[]).processing_tags);
         assert!(parse(&["--processing-tags"]).processing_tags);
+    }
+
+    #[test]
+    fn flex_r2_boundary_is_driven_by_the_explicit_flex_flag_alone() {
+        // --probe-barcode-whitelist's mere presence must NOT imply Flex mode:
+        // "GEX" in a sample name is ordinary for real non-Flex 3'/5' data
+        // too, so an implicit trigger would silently mass-reject non-Flex
+        // reads. --flex is the only thing that may turn this on.
+        assert!(!parse(&[]).extract_cfg().flex_r2_boundary);
+        assert!(!parse(&["--minimap2", "--probe-barcode-whitelist", "wl.txt"])
+            .extract_cfg()
+            .flex_r2_boundary);
+        assert!(parse(&["--flex"]).extract_cfg().flex_r2_boundary);
+        assert!(parse(&["--flex", "--minimap2", "--probe-barcode-whitelist", "wl.txt"])
+            .extract_cfg()
+            .flex_r2_boundary);
     }
 }
