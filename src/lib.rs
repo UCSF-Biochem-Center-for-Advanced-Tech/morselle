@@ -18,6 +18,7 @@ pub mod gzin;
 pub mod hamming_index;
 pub mod homopolymer;
 pub mod io;
+pub mod orchestrator;
 pub mod orient;
 pub mod overlap;
 pub mod pipeline;
@@ -45,7 +46,7 @@ use crate::config::Cli;
 use crate::demux::{index_anchor_starts, DemuxVia, Demuxer, Outcome};
 use crate::extract::{extract, ExtractCfg};
 use crate::gzin::{open_fastx, open_fastx_scan};
-use crate::io::{discover_fastqs, PairShardWriter, ShardWriter};
+use crate::io::{discover_fastqs, pair_shard_paths, PairShardWriter, ShardWriter};
 use crate::orient::{orient, OrientCfg, OrientMode};
 use crate::pipeline::{CbStatus, Orientation, ReadClass};
 use crate::probe_barcode::ProbeWhitelist;
@@ -124,6 +125,13 @@ struct Stats {
     // probe barcode (FLEX_SUPPORT_PLAN.md Phase 1)
     probe_located: u64,
     probe_hit: u64,
+    /// `probe_hit` reads that *also* landed on an assigned (non-Undetermined)
+    /// sample from the outer index-based demux -- the real 4-way join (CB +
+    /// UMI + Sample Barcode + Probe Assigned) requested to replace
+    /// `probe_hit` alone as a "pre-dedup" proxy, since `probe_hit` on its own
+    /// still includes reads whose outer sample/library demux was
+    /// Undetermined.
+    probe_hit_sample_assigned: u64,
 }
 
 impl Stats {
@@ -167,6 +175,7 @@ impl Stats {
         self.via_conflict += o.via_conflict;
         self.probe_located += o.probe_located;
         self.probe_hit += o.probe_hit;
+        self.probe_hit_sample_assigned += o.probe_hit_sample_assigned;
         self.undetermined_early += o.undetermined_early;
         self.index_unreachable += o.index_unreachable;
         self.via_dual_early += o.via_dual_early;
@@ -258,6 +267,84 @@ struct Shared<'a> {
     chunk_counter: &'a AtomicUsize,
 }
 
+/// One planned output target (one sample × one `--split` chunk) — exactly
+/// the file(s) a real `run()` would open via [`PairShardWriter::create`],
+/// computed without opening or writing anything.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ManifestTarget {
+    pub sample: String,
+    pub s_num: usize,
+    pub chunk: usize,
+    /// Routing hint: does this sample's data belong to `probeset-align`
+    /// (GEX) or `guides` (CRISPR/Feature Barcoding)? Reuses the exact same
+    /// naming heuristic `run()` already applies for `flex_r2_boundary`
+    /// (`gex_by_sample`, above) — sample id contains "GEX", case
+    /// insensitive — rather than inventing a second, possibly-diverging
+    /// rule. Defaults to `true` (GEX) when there's no sample sheet to read
+    /// a real sample id from, matching this crate's existing "assume GEX
+    /// unless told otherwise" default.
+    pub gex: bool,
+    pub r2_path: PathBuf,
+    pub r1_path: Option<PathBuf>,
+}
+
+/// `sbx10x extract --print-manifest`'s output: the planned target list for a
+/// real run with the same flags. `version` lets a consumer (e.g. `sbxpress
+/// pipeline`) detect a schema it doesn't understand instead of silently
+/// misreading it.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Manifest {
+    pub version: u32,
+    pub targets: Vec<ManifestTarget>,
+}
+
+/// Compute the target list a real `run(cli)` would produce, doing only the
+/// cheap sample-sheet/demux setup (no FASTQ scan, no writer opened). Single
+/// source of truth for both `--print-manifest` and the real `run()` path
+/// below, which builds its `targets: Vec<PairShardWriter>` over the exact
+/// same `(prefix, s_num, chunk)` sequence.
+pub fn plan_targets(cli: &Cli) -> Result<Manifest> {
+    let sheet = match &cli.bclconvert_samplesheet {
+        Some(path) => Some(SampleSheet::load(path)?),
+        None => None,
+    };
+    let demuxer = sheet
+        .as_ref()
+        .map(|s| Demuxer::new(s, cli.params.demux_cfg()))
+        .transpose()?;
+    let glevel = cli.params.output_gzip_level();
+    let split = cli.params.split.max(1);
+    let emit_r1 = !cli.params.minimap2;
+
+    let mut targets = Vec::new();
+    let mut push = |sample: &str, s_num: usize, gex: bool| {
+        for c in 0..split {
+            let chunk = c + 1;
+            let (r1_path, r2_path) =
+                pair_shard_paths(&cli.out_dir, sample, s_num, chunk, glevel, emit_r1);
+            targets.push(ManifestTarget {
+                sample: sample.to_string(),
+                s_num,
+                chunk,
+                gex,
+                r2_path,
+                r1_path,
+            });
+        }
+    };
+    match &demuxer {
+        Some(d) => {
+            for (i, id) in d.sample_ids().iter().enumerate() {
+                let gex = id.to_ascii_uppercase().contains("GEX");
+                push(id, i + 1, gex);
+            }
+            push("Undetermined", 0, true);
+        }
+        None => push("sbxpress", 1, true),
+    }
+    Ok(Manifest { version: 1, targets })
+}
+
 /// Entry point invoked by the binary. Orients each read to canonical P5→P7,
 /// extracts R1 (CB+UMI) and R2 (cDNA), and — when a sample sheet is given —
 /// demultiplexes by i5/i7 into per-sample FASTQs (plus `Undetermined`). Without a
@@ -265,6 +352,11 @@ struct Shared<'a> {
 pub fn run(cli: &Cli) -> Result<()> {
     if cli.params.cellranger && cli.params.minimap2 {
         anyhow::bail!("--cellranger and --minimap2 are mutually exclusive output presets");
+    }
+    if cli.print_manifest {
+        let manifest = plan_targets(cli)?;
+        println!("{}", serde_json::to_string(&manifest)?);
+        return Ok(());
     }
     let t_start = Instant::now();
     let sheet = match &cli.bclconvert_samplesheet {
@@ -896,6 +988,7 @@ fn process_one(
         // same inputs (`r1s`/`e.adapter_pos`/`o.seq` are unchanged since
         // then), so this is the identical result, not a fresh decision.
         let mut index_route = 5; // XI=5: demultiplexing was not requested.
+        let mut sample_assigned = false;
         let target_idx = if sh.demuxer.is_some() {
             let outcome = early_outcome.expect("demuxer set and R1 located => early_outcome computed");
             index_route = match outcome.via {
@@ -915,6 +1008,7 @@ fn process_one(
             match outcome.sample {
                 Some(i) => {
                     stats.per_sample[i] += 1;
+                    sample_assigned = true;
                     i
                 }
                 None => {
@@ -980,6 +1074,9 @@ fn process_one(
                     stats.probe_located += 1;
                     if hit.id.is_some() {
                         stats.probe_hit += 1;
+                        if sample_assigned {
+                            stats.probe_hit_sample_assigned += 1;
+                        }
                     }
                     append_probe_tags(&mut header, &hit.raw, hit.id.as_deref());
                 }
@@ -1410,6 +1507,7 @@ fn build_metrics(
             located: stats.probe_located,
             hit: stats.probe_hit,
             hit_rate: pct(stats.probe_hit, stats.probe_located),
+            hit_sample_assigned: stats.probe_hit_sample_assigned,
         }),
     }
 }
@@ -1463,6 +1561,7 @@ fn report(stats: &Stats, demuxer: Option<&Demuxer>, t: &Timing) {
                 "{:.1}",
                 100.0 * stats.probe_hit as f64 / stats.probe_located.max(1) as f64
             ),
+            hit_sample_assigned = stats.probe_hit_sample_assigned,
             "probe barcode"
         );
     }
@@ -1548,6 +1647,7 @@ fn report(stats: &Stats, demuxer: Option<&Demuxer>, t: &Timing) {
 mod tests {
     use super::*;
     use crate::anchors::revcomp;
+    use clap::Parser;
 
     /// The optimized R2 emitter must produce byte-identical output to the original
     /// `revcomp(seq[start..end])` + reversed-qual + truncate approach it replaced.
@@ -1569,6 +1669,42 @@ mod tests {
         let mut buf = Vec::new();
         push_fastq(&mut buf, id, &r2_seq, &r2_qual);
         buf
+    }
+
+    #[test]
+    fn plan_targets_without_sample_sheet_is_one_target_per_chunk() {
+        let cli = Cli::parse_from([
+            "sbx10x",
+            "--fastqs",
+            "in.fastq.gz",
+            "--out-dir",
+            "/tmp/plan_targets_test_out",
+            "--minimap2",
+            "--split",
+            "3",
+        ]);
+        let manifest = plan_targets(&cli).unwrap();
+        assert_eq!(manifest.version, 1);
+        assert_eq!(manifest.targets.len(), 3);
+        for (i, target) in manifest.targets.iter().enumerate() {
+            assert_eq!(target.sample, "sbxpress");
+            assert_eq!(target.s_num, 1);
+            assert_eq!(target.chunk, i + 1);
+            assert!(target.gex, "no-sheet run defaults to GEX routing");
+            assert!(target.r1_path.is_none(), "--minimap2 emits R2 only");
+            assert!(target.r2_path.ends_with(format!("sbxpress_S1_L001_R2_{:03}.fastq.gz", i + 1)));
+        }
+    }
+
+    #[test]
+    fn plan_targets_matches_pair_shard_writer_naming() {
+        let cli = Cli::parse_from(["sbx10x", "--fastqs", "in.fastq.gz", "--out-dir", "/tmp/x"]);
+        let manifest = plan_targets(&cli).unwrap();
+        assert_eq!(manifest.targets.len(), 1);
+        let target = &manifest.targets[0];
+        // Without --minimap2, both R1 and R2 are emitted.
+        assert!(target.r1_path.is_some());
+        assert!(target.r2_path.ends_with("sbxpress_S1_L001_R2_001.fastq.gz"));
     }
 
     #[test]

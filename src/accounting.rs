@@ -129,6 +129,13 @@ pub struct ProbeBarcodeMetrics {
     pub hit: u64,
     /// hit / located.
     pub hit_rate: f64,
+    /// Of `hit`, how many also landed on an assigned (non-Undetermined)
+    /// sample from the outer index-based demux -- the real 4-way join (CB +
+    /// UMI + Sample Barcode + Probe Assigned), a tighter "pre-dedup" proxy
+    /// than `hit` alone (which doesn't require the outer sample/library
+    /// demux to have succeeded). `0` when no `--bclconvert-samplesheet` was
+    /// given (no outer demux to join against).
+    pub hit_sample_assigned: u64,
 }
 
 impl Metrics {
