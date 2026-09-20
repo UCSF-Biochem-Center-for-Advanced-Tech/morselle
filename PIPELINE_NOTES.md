@@ -158,64 +158,153 @@ for the constraints found above, not just port the shell logic:
   `(cell, sample)`-hash-sharded `molecules` rewrite described above.~~ —
   **implemented and in real use, 2026-09-17**: `--shards 8
   --shard-concurrency 8` (see `sbx10x-molecules --help`) is exactly this
-  design and is what `read_depth_comparison.sh`'s CP1–CP4 checkpoints
-  actually run. See "`sbx10x-molecules` real wall-clock vs. Cell Ranger,
-  2026-09-19" below — it solved the memory problem but is now the
-  pipeline's dominant real *time* cost, not yet investigated.
+  design. **Correction, 2026-09-19**: CP1's *L1* run did **not** actually use
+  `--shard-concurrency` — it started before that flag existed in
+  `read_depth_comparison.sh` (see the dated evidence in the section below) —
+  only CP1's *L2* run did. So "CP1's checkpoints actually run this" was only
+  true from L2 onward, not for the L1 numbers already on record. It solved
+  the memory problem; see "`sbx10x-molecules` real wall-clock vs. Cell
+  Ranger, 2026-09-19" below for the current, corrected read on real *time*
+  cost.
 
 ## `sbx10x-molecules` real wall-clock vs. Cell Ranger, 2026-09-19
 
-Separate, not-yet-started investigation — self-contained enough to pick up
-in a fresh session with no memory of how it was found. Written from CAT06's
-real CP1 run (`read_depth_comparison_plan.md`, restarted 2026-09-18 with
-`sbxpress` 0.4.0's composite-cell-barcode fix); see that doc for full CAT06
-context if needed, but this specific question stands on its own.
+In-progress investigation, updated same-day as first written. Written from
+CAT06's real CP1 run (`read_depth_comparison_plan.md`, restarted
+2026-09-18 with `sbxpress` 0.4.0's composite-cell-barcode fix); see that doc
+for full CAT06 context if needed, but this specific question stands on its
+own.
 
-**Real numbers, both sides measured directly, not estimated:**
+**Real numbers, all four measured directly, not estimated:**
 
-- `sbx10x-molecules` on CP1's `L1_gex.bam` (`--shards 8
-  --shard-concurrency 8 --threads 16`): **33,427.9s (9.28h)** —
-  `read_depth_comparison_out/cp1/molecules/L1_gex.metrics.json`'s
-  `elapsed_secs`.
-- Same stage on CP1's `L2_gex.bam`, same flags, same real box, same day:
-  **10,178.0s (2.83h)** — `.../cp1/molecules/L2_gex.metrics.json`. **3.3x
-  faster than L1, unexplained.** Both libraries came from the same
-  159-shard raw-read subset (`read_depth_comparison_out/cp1_shards.txt`),
-  so this isn't an input-size difference by construction — worth checking
-  real per-library read/molecule/collision counts (`probeset-align`'s own
-  metrics, `molecules`' `collision_groups`/`raw_nodes` figures) for what
-  actually differs.
-- Cell Ranger's real, directly comparable stage — `ALIGN_AND_COUNT`
-  (alignment + UMI counting combined, one stage) on the same L1 library,
-  real Illumina full-depth run: **12,569.6s (3.49h), 207.7 core-hours** —
-  from the real preserved Martian pipestance's `_perf` JSON:
-  `illumina_data/RZ16443_L1_multi_full/_perf` (flatten `forks[].fork_stats`
-  per entry; fqname
-  `...SC_MULTI_CORE.MULTI_GEM_WELL_PROCESSOR.COUNT_GEM_WELL_PROCESSOR._BASIC_SC_RNA_COUNTER._MATRIX_COMPUTER.ALIGN_AND_COUNT`).
-  **sbxpress's `molecules` stage alone, on L1, is 2.7x longer than Cell
-  Ranger's entire align+count stage** — real, large, unexplained gap; not
-  yet investigated at the code/algorithm level (only the earlier memory
-  investigation above has been done, which explains RSS, not wall-clock).
+| | sbxpress `molecules` (CP1 checkpoint subset) | Cell Ranger `ALIGN_AND_COUNT` (real Illumina full-depth run) |
+|---|---|---|
+| L1 | **33,427.9s (9.28h)** — `cp1/molecules/L1_gex.metrics.json`'s `elapsed_secs` | **12,569.6s (3.49h), 207.7 core-hours** — `illumina_data/RZ16443_L1_multi_full/_perf` |
+| L2 | **10,178.0s (2.83h)** — `cp1/molecules/L2_gex.metrics.json`'s `elapsed_secs` | **1,031.3s (17.2min), 30.0 core-hours** — `illumina_data/RZ16443_L2_multi_full/_perf` |
 
-**Not yet checked, real starting points for a fresh investigation:**
+(Cell Ranger figures pulled by flattening `forks[].fork_stats` in each
+pipestance's `_perf` JSON — a flat list of 432 stage entries, not a nested
+tree — and matching `fqname` ending in
+`..._MATRIX_COMPUTER.ALIGN_AND_COUNT`, the real directly-comparable
+alignment+UMI-counting combined stage.)
+
+**The sbxpress L1-vs-L2 3.3x gap is explained, and it isn't an algorithm
+difference — corrects the "unexplained" claim this section originally
+made.** Real, dated evidence:
+
+- `--shard-concurrency` (the flag that runs shards' evidence/correct/
+  aggregate concurrently instead of one at a time) was committed at
+  **2026-09-17 08:32:06** (`git log` on `src/bin/sbx10x-molecules.rs`,
+  commit `e4dd33e`).
+- `read_depth_comparison.sh` was edited to actually pass
+  `--shard-concurrency 8` on the command line at **2026-09-17 19:04**
+  (file mtime).
+- `L1_gex.bam`/`L1_gex.metrics.json` finished at **2026-09-17 09:18** — only
+  46 minutes after the flag was *committed*, for a run that took 9.28h, so
+  it must have *started* around 2026-09-17 00:00, well before either the
+  commit or the script edit existed. **L1 ran with shards processed fully
+  sequentially, not concurrently**, confirmed directly from
+  `cp1/logs/molecules_L1.log`: every `phase=shard_quant start shard=N/8` is
+  immediately followed by that same shard's `complete` before the next
+  `start` appears anywhere in the file — zero interleaving.
+- `L2_gex.bam`/`L2_gex.metrics.json` finished at **2026-09-18 00:56**, after
+  the 19:04 script edit. `cp1/logs/molecules_L2.log` confirms real 8-way
+  concurrency: all 8 `phase=evidence_collect mode=serial start` lines fire
+  back-to-back at the top of the log (lines 68–75), before any shard's
+  `complete`.
+- So the 3.3x speedup is (at least mostly) "L2 got real 8-way parallelism
+  during evidence-collect/correct/aggregate and L1 didn't" — not a per-library
+  skew or algorithm difference. **This means L1's 33,427.9s figure is the
+  unparallelized baseline, not a fair "current sbxpress" number** — L2's
+  10,178.0s is the one actually representative of what `--shards 8
+  --shard-concurrency 8` produces today.
+
+**Two real caveats that make the Cell Ranger comparison less clean than
+this section originally implied — flagged, not yet resolved:**
+
+1. **Depth mismatch, both L1 and L2.** Cell Ranger's figures are from
+   real **full-depth** Illumina runs (`illumina_data/*/outs/qc_library_metrics.csv`,
+   `Number of reads` for the GEX fastq ID: L1 = **2,963,748,016**, L2 =
+   **2,187,154,595**). sbxpress's CP1 figures are from a **deliberately
+   reduced checkpoint subset** (`records` in the `molecules` metrics.json:
+   L1 = 1,922,327,467, L2 = 1,637,555,509 — by design, CP1 targets ≤~8.1B
+   raw reads total across all 4 libraries, not full depth). Neither
+   comparison above is apples-to-apples on input scale; this was true of
+   the original L1-only comparison too, just not flagged until now.
+2. **Cell Ranger's own L1 vs. L2 numbers don't internally hang together.**
+   L1 has only 1.35x more full-depth reads than L2 (2.96B vs. 2.19B), but
+   `ALIGN_AND_COUNT` walltime differs by **12.2x** (12,569.6s vs. 1,031.3s)
+   and core-hours by 6.9x (207.7 vs. 30.0) — average concurrency was
+   actually *higher* for the smaller L2 job (~104.8 cores vs. ~59.5 for
+   L1). A 35% read-count difference cannot explain a 12x runtime
+   difference by itself. Real cause unknown: could be a genuine property
+   of these two libraries (very different cell count or saturation
+   profile), or an artifact of Illumina-cluster scheduling/contention
+   unrelated to input size. **Until this is understood, neither Cell
+   Ranger figure alone should be treated as a stable per-read baseline**,
+   and a naive "sbxpress L2 / Cell Ranger L2" ratio (≈9.9x) would be at
+   least as likely to reflect this Cell-Ranger-side anomaly as a real
+   sbxpress regression — not being quoted as a headline number for that
+   reason.
+
+**Net, honest read as of 2026-09-19:** sbxpress's `molecules` stage is
+slower than Cell Ranger's combined align+count stage by somewhere in a wide
+band (the L1 comparison says ~2.7x; a naive L2 comparison says ~9.9x), but
+neither multiplier should be trusted as precise given the depth mismatch
+and the unexplained Cell-Ranger-side L1/L2 inconsistency above. The
+*qualitative* gap (sbxpress markedly slower) is real and worth continuing
+to investigate at the code level (see the shard-granularity and
+serial-evidence-collection findings already in this doc's design-
+considerations section); the *precise multiplier* is not yet trustworthy
+enough to quote on its own.
+
+**Not yet checked, real starting points for continuing this investigation:**
 
 - Where real wall-clock actually goes across `molecules`' own phases
   (`evidence` collection / `umi_correct` / `molecule_aggregate` / final BAM
-  write) — the binary already logs phase-boundary progress lines (see
-  `[sbxpress molecules] phase=...` in `cp1/logs/molecules_L{1,2}.log`);
-  real per-phase timing hasn't been extracted and diffed between L1 and L2.
-  yet.
+  write) — the binary's phase-boundary log lines (`[sbxpress molecules]
+  phase=...` in `cp1/logs/molecules_L{1,2}.log`) carry **no timestamps**,
+  only record/group counts, so phase *order* is confirmed but real
+  per-phase *duration* — and therefore a real I/O-vs-algorithm-time split —
+  is not yet extractable from existing logs. Needs the binary's `eprintln!`
+  phase lines instrumented with real elapsed-time-since-start before the
+  next run, then a fresh run (L2 is the cheap, known-good, real-concurrency
+  target) to capture it.
 - Whether `--shards 8` is actually a good choice for wall-clock (it was
   chosen for a real memory constraint — see the OOM finding above — not
-  profiled for speed); a real per-shard timing breakdown from the same logs
-  would show whether shards are balanced or whether a few stragglers
-  dominate (the same kind of imbalance `--split`'s round-robin bug caused
-  elsewhere in this pipeline, real precedent worth checking for here too).
-- Whether Cell Ranger's `ALIGN_AND_COUNT`'s 207.7 core-hours at 12,569.6s
-  wall-clock (~16.5 average concurrent cores) vs. sbxpress's `--threads 16`
-  (also nominally 16-wide) is actually running at comparable real
-  parallelism, or whether one side is spending a lot of that wall-clock
-  under-parallelized (e.g. serialized phases, lock contention) — real
-  `/usr/bin/time -v` or a sampling profiler (see `PROFILING.md`) on a
-  `molecules` run would settle this rather than guessing from the
-  aggregate numbers alone.
+  profiled for speed); a real per-shard timing breakdown (once phase
+  timestamps exist) would show whether shards are balanced or whether a
+  few stragglers dominate (the same kind of imbalance `--split`'s
+  round-robin bug caused elsewhere in this pipeline, real precedent worth
+  checking for here too). **Partially answered, 2026-09-19**: tested
+  `--shards 16 --shard-concurrency 12 --threads 8` on L2 (2x today's shard
+  count, 1.5x today's concurrency) — real result **9,430.0s vs. the
+  baseline's 10,178.0s, only ~7.3% faster (1.08x)**
+  (`molecules/L2_gex_shardtest_s16c12.bam.metrics.json`), far short of what
+  "8 of 512 cores busy" would predict if shard-concurrency alone were the
+  bottleneck. **This points at `collect_evidence`'s single-threaded-per-shard
+  hot loop (confirmed serial in the source, see the design-considerations
+  section above) as the real remaining constraint** — more/smaller
+  concurrent shards doesn't parallelize the work *inside* each shard's own
+  evidence-collection pass, so widening `--shards`/`--shard-concurrency`
+  further is likely to keep giving diminishing returns. Real next step:
+  parallelize `collect_evidence` itself (round-robin sub-split each shard's
+  input at `collate()` time, read the sub-chunks concurrently, merge with
+  the already-existing, already-tested `merge_evidence_maps`) rather than
+  continuing to tune shard/concurrency counts alone. Minor caveat on this
+  comparison: the test run's metrics show a `no_sample_records` counter the
+  original L2 run's metrics didn't have (codebase evolved between the two
+  runs, unrelated to this test) — accounts for the small
+  `eligible_records` difference between the two, not the timing gap.
+- Why Cell Ranger's own L1 vs. L2 `ALIGN_AND_COUNT` times differ 12.2x for
+  only 1.35x more input reads (caveat 2 above) — real prerequisite for
+  trusting either Cell Ranger figure as a baseline; check `_perf`'s
+  per-substage breakdown within `ALIGN_AND_COUNT` for both pipestances
+  before assuming it's a library-biology difference rather than a
+  cluster-scheduling artifact.
+- Whether Cell Ranger's `ALIGN_AND_COUNT` is running at comparable real
+  parallelism to sbxpress's `--threads`/`--shard-concurrency` or whether
+  one side is spending a lot of wall-clock under-parallelized (e.g.
+  serialized phases, lock contention) — real `/usr/bin/time -v` or a
+  sampling profiler (see `PROFILING.md`) on a `molecules` run would settle
+  this rather than guessing from aggregate numbers alone.

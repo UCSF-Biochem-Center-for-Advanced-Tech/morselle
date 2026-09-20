@@ -1565,6 +1565,7 @@ dependencies = [
  "flate2",
  "hdf5",
  "hdf5-sys",
+ "libc",
  "needletail",
  "rand",
  "rand_chacha",

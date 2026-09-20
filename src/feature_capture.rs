@@ -357,9 +357,20 @@ pub fn run(cli: &Cli) -> Result<()> {
     let mut matched = 0u64;
     let mut per_feature = vec![0u64; reference.features.len()];
 
-    let mut fastq = parse_fastx_file(&cli.r2_fastq)
-        .with_context(|| format!("opening {}", cli.r2_fastq.display()))?;
-    while let Some(rec) = fastq.next() {
+    // See `probe_set.rs`'s identical handling: a genuinely empty R2 input
+    // is a valid "zero reads" case (e.g. an orchestrator's chunk that
+    // happened to get no reads), not a fatal error.
+    let mut fastq = match parse_fastx_file(&cli.r2_fastq) {
+        Ok(reader) => Some(reader),
+        Err(err) if err.kind == needletail::errors::ParseErrorKind::EmptyFile => {
+            info!(path = %cli.r2_fastq.display(), "R2 input is empty; writing header-only output");
+            None
+        }
+        Err(err) => {
+            return Err(err).with_context(|| format!("opening {}", cli.r2_fastq.display()));
+        }
+    };
+    while let Some(rec) = fastq.as_mut().and_then(|f| f.next()) {
         let rec = rec.context("reading R2 FASTQ record")?;
         reads += 1;
         let header_line = String::from_utf8_lossy(rec.id());

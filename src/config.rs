@@ -39,6 +39,15 @@ pub struct Cli {
     #[arg(long, default_value_t = 0)]
     pub threads: usize,
 
+    /// Print the planned per-sample/per-chunk output target list as
+    /// versioned JSON (see `plan_targets`/`Manifest` in `lib.rs`) and exit
+    /// without opening any writers or scanning any FASTQ. Single source of
+    /// truth for a real run's exact output filenames -- used by `sbxpress
+    /// pipeline` to predict FIFO paths before spawning `extract`, instead of
+    /// re-deriving `PairShardWriter`'s naming convention independently.
+    #[arg(long, default_value_t = false)]
+    pub print_manifest: bool,
+
     #[command(flatten)]
     pub params: Params,
 }

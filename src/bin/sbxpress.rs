@@ -5,8 +5,10 @@
 //! behavior while presenting one stable user-facing CLI.
 
 use std::env;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, ExitCode};
+
+use sbx10x::orchestrator::helper_dir;
 
 const HELP: &str = "sbxpress — SBX single-cell gene-expression processing\n\n\
 Usage: sbxpress <COMMAND> [ARGUMENTS]\n\n\
@@ -22,23 +24,9 @@ Commands:\n\
   probe-demux  Assign cell barcodes to samples by probe barcode (10x Flex)\n\
   guides     Assign Feature Barcoding reads (CRISPR guides, antibody/CMO tags) to features\n\
   protospacer-call  Call CRISPR guide identity per cell (adaptive UMI threshold)\n\
-  probeset-align  Assign 10x Flex GEX reads to genes via the real probe-set reference\n\n\
+  probeset-align  Assign 10x Flex GEX reads to genes via the real probe-set reference\n\
+  pipeline   Run the full pipeline end to end (extract -> ... -> protospacer-call)\n\n\
 Run 'sbxpress <COMMAND> --help' for command-specific options.\n";
-
-fn helper_dir(executable: &Path) -> Option<PathBuf> {
-    if let Some(value) = env::var_os("SBXPRESS_LIBEXEC") {
-        return Some(PathBuf::from(value));
-    }
-    let bin = executable.parent()?;
-    // Installed layout: <prefix>/bin/sbxpress and <prefix>/libexec/sbxpress/*.
-    let installed = bin.parent()?.join("libexec/sbxpress");
-    if installed.is_dir() {
-        Some(installed)
-    } else {
-        // Cargo layout: target/{debug,release}/ contains every binary.
-        Some(bin.to_path_buf())
-    }
-}
 
 fn engine(command: &str) -> Option<&'static str> {
     match command {
@@ -53,6 +41,7 @@ fn engine(command: &str) -> Option<&'static str> {
         "guides" => Some("sbxpress-guides"),
         "protospacer-call" => Some("sbxpress-protospacer-call"),
         "probeset-align" => Some("sbxpress-probeset-align"),
+        "pipeline" => Some("sbxpress-pipeline"),
         _ => None,
     }
 }
@@ -128,6 +117,7 @@ mod tests {
         assert_eq!(engine("guides"), Some("sbxpress-guides"));
         assert_eq!(engine("protospacer-call"), Some("sbxpress-protospacer-call"));
         assert_eq!(engine("probeset-align"), Some("sbxpress-probeset-align"));
+        assert_eq!(engine("pipeline"), Some("sbxpress-pipeline"));
         assert_eq!(engine("minimap"), None);
     }
 }

@@ -6,6 +6,59 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `sbxpress pipeline` (new binary `sbxpress-pipeline`): a real orchestrator
+  that runs the full `extract -> probeset-align`/`guides -> molecules ->
+  probe-demux -> matrix -> cells -> protospacer-call` pipeline end to end,
+  in place of shell-script orchestration (`scripts/run_full_cat06.sh`,
+  `scripts/sbxpress-gex-pipeline.sh`). Purely additive — those scripts and
+  every standalone `sbxpress <verb>` command are unaffected and continue to
+  work exactly as before.
+  - By default, streams `extract`'s output directly into `probeset-align`/
+    `guides` via named pipes with **zero intermediate FASTQ files**: no
+    disk write, no disk read, no gzip compress/decompress round trip for
+    that hop. Falls back to real materialized files (`--materialize-extract`,
+    or automatically when the requested `--cpus`/`--max-memory-gb` budget
+    can't fit `extract` and every reader process running concurrently) —
+    each materialized chunk is deleted immediately once its align process
+    consumes it, unless `--keep-intermediates` is set.
+  - `--resumable`: checkpoints every stage's real output (under
+    `<out-dir>/.checkpoints/`) and restarts from the last completed
+    checkpoint after an interrupted run, instead of redoing finished work.
+    Forces materialized intermediates pipeline-wide (streaming and
+    resumability are fundamentally in tension — a crash mid-FIFO-stream
+    leaves nothing on disk to resume from) and defers all cleanup until the
+    whole pipeline reports final success.
+  - `--cpus`/`--max-memory-gb` (0 = auto-detect) drive real scheduling
+    decisions: the extract->align fan-out width, and `sbx10x-molecules`'s
+    `--shards`/`--shard-concurrency` (molecules is the pipeline's dominant
+    memory *and* wall-clock cost — see `PIPELINE_NOTES.md`). Both heuristics
+    are seeded from one real library's measurements and are explicitly not
+    validated across library sizes/compositions — `--molecule-shards`/
+    `--molecule-shard-concurrency`/`--split` always override them.
+  - Real progress reporting: every relayed sub-app log line gets a real
+    wall-clock timestamp + elapsed-since-start prefix (retroactively fixing
+    the lack of timestamps in stages' own `phase=...`-style progress lines,
+    e.g. `sbx10x-molecules`'s), plus a time-based heartbeat
+    (`--progress-interval`, default 30s) that fires regardless of whether
+    any stage produced output in that window, so a long-running stage never
+    looks stalled. `--progress-file` redirects this to a file, kept
+    separate from stderr by default so warnings/errors don't interleave
+    with throughput lines when replaying a run offline.
+- `sbxpress extract --print-manifest`: prints the planned output targets
+  (sample, chunk, GEX/non-GEX routing, R1/R2 paths) as versioned JSON to
+  stdout and exits, without scanning any FASTQ input or opening any writer.
+  Lets an external orchestrator (`sbxpress pipeline`, above) know the exact
+  filenames extract will produce — e.g. to pre-create named pipes at them —
+  without re-deriving this crate's naming convention by hand.
+- `sbxpress-probeset-align`/`sbxpress-guides` now handle a genuinely empty
+  R2 input (a zero-byte file, or a named pipe whose writer closed having
+  written nothing) as a valid "zero reads" case, writing a real header-only
+  output BAM instead of erroring. Previously any empty chunk — a real
+  scenario when an upstream fan-out width doesn't divide evenly into the
+  real read count — crashed the whole stage with "Failed to read the first
+  two bytes. Is the file empty?".
+
 ## [0.4.0] — 2026-09-18
 
 ### Added

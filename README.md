@@ -159,6 +159,14 @@ Use separate thread values for concurrent runs; the defaults are intentionally
 conservative. The script writes its canonical `genes.mtx` to
 `OUT/reference/genes.mtx` unless `--genes-mtx` is supplied.
 
+**See also**: `sbxpress pipeline` is a newer, in-binary orchestrator covering
+the same `extract -> ... -> cells` scope (plus `probeset-align`/`guides` and
+`protospacer-call` for Flex/CRISPR runs), with real CPU/memory-aware
+scheduling and, by default, zero intermediate FASTQ files (streamed via named
+pipes instead of written to disk). It's an alternative to this script, not
+yet a replacement for it at the same production scale — see `sbxpress
+pipeline --help` and `PIPELINE_NOTES.md`.
+
 The installed `sbxpress annotate` stage assigns alignments against a GENCODE-style
 GTF and adds 10x-compatible `GX`, `GN`, `TX`, `AN`, and `RE` tags:
 
@@ -478,6 +486,11 @@ Library crate (`src/`), each module a pipeline stage:
 
 FASTQ parsing uses [needletail](https://crates.io/crates/needletail) and gzip uses
 [flate2](https://crates.io/crates/flate2) with the zlib backend.
+
+This table covers the `extract` engine's own modules. `orchestrator.rs` (not
+listed above — a different module from `pipeline.rs`'s per-read state types)
+is the `sbxpress pipeline` command's scheduler/streaming/checkpointing
+implementation; see "Raw SBX to counts pipeline" above.
 
 **Input parallelism.** Serial gzip inflate caps one file to one core, so the executor
 adapts to the file count (override with `--reader-threads`):

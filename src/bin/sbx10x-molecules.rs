@@ -3,7 +3,7 @@ use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicU64, AtomicUsize, Ordering},
     Arc, Mutex,
 };
 use std::time::Instant;
@@ -85,6 +85,48 @@ struct Cli {
     /// collection and correction run fully concurrently.
     #[arg(long, default_value_t = 1)]
     shard_concurrency: usize,
+    /// Split each shard's input into N sub-files during collate(), then read
+    /// them with N-way parallelism during evidence collection instead of one
+    /// single-threaded scan per shard. Real motivation: measured this
+    /// session (PIPELINE_NOTES.md) that widening --shards/--shard-concurrency
+    /// alone only bought ~7% real wall-clock (9,430s vs. 10,178s on CAT06
+    /// L2, doubling shard count and going 1.5x wider on concurrency) because
+    /// collect_evidence() -- the record-scanning hot loop that builds the
+    /// evidence map -- is single-threaded per shard regardless of
+    /// --shard-concurrency (confirmed directly in the source). This flag
+    /// parallelizes that scan itself, the same way --evidence-workers
+    /// already parallelizes the non-sharded path's indexed-region scan.
+    /// Real resource cost, stated plainly: total concurrent
+    /// evidence-collection threads become `--shard-concurrency` x
+    /// `--shard-split`, size against real available cores; and there is a
+    /// real, transient ~2x per-shard evidence-memory bump during the
+    /// remap+merge step, since each sub-chunk's local evidence map and its
+    /// remapped copy are briefly both alive before the tree-reduce frees
+    /// the originals -- the same shape --evidence-workers' existing
+    /// indexed-region remap/merge already has, not a new risk category.
+    /// Default 1 = today's behavior, unchanged: collate()'s per-shard
+    /// routing formula reduces to exactly today's one-file-per-shard layout
+    /// at shard_split=1 by construction, not a special case.
+    #[arg(long, default_value_t = 1)]
+    shard_split: usize,
+    /// Number of `collate()` input readers to run concurrently (default 1 =
+    /// today's exact sequential behavior, unchanged). Real motivation:
+    /// makes it safe to point `--bam` at live FIFOs fed by still-running
+    /// `probeset-align`/`guides` processes instead of finished files (see
+    /// `sbxpress pipeline`'s align->molecules streaming) -- with sequential
+    /// draining, all but one of those processes would block forever on a
+    /// full pipe buffer waiting for a reader that never comes until
+    /// collate() works its way to them. Each shard's output writer is
+    /// `Mutex`-protected (locked only for the `.write()` call itself, same
+    /// granularity `io.rs`'s `ShardWriter` already uses), and each shard's
+    /// `--shard-split` round-robin counter becomes atomic, so the exact
+    /// balance guarantee still holds -- only the number of concurrent
+    /// readers changes, not which records a shard's sub-files receive in
+    /// aggregate. Safe to raise independently of `--shard-split`/
+    /// `--shard-concurrency`; all three are separate, multiplicative
+    /// thread budgets, size the sum against real available cores.
+    #[arg(long, default_value_t = 1)]
+    collate_workers: usize,
     /// Pooled-sample mode: a barcode is a whole sample sequenced far deeper
     /// than a single cell, not a droplet. At that depth, cross-gene UMI
     /// collisions (the same (cell, UMI) independently drawn by two
@@ -524,15 +566,81 @@ fn shard_hash(cb: &[u8], pb: Option<&[u8]>) -> u32 {
 /// All input files must share the same header (verified once, from the
 /// first file, and reused for every shard writer and every subsequent
 /// input file).
-fn collate(inputs: &[PathBuf], threads: usize, shard_paths: &[PathBuf]) -> Result<()> {
-    let first = inputs
-        .first()
-        .context("collate() requires at least one input BAM")?;
-    let header = {
-        let reader = bam::Reader::from_path(first)
-            .with_context(|| format!("opening {}", first.display()))?;
-        bam::Header::from_template(reader.header())
-    };
+///
+/// `shard_paths` holds `shards * shard_split` physical writer paths, laid
+/// out shard-major (shard 0's `shard_split` sub-files, then shard 1's, ...)
+/// -- callers build this with `shard_paths.len() / shard_split` logical
+/// shards. Which *shard* a record goes to is still decided purely by
+/// `shard_hash(cb, pb) % shards` (the correctness-critical `(cell, sample)`
+/// partition -- unchanged from before `shard_split` existed). Which
+/// sub-file *within* that shard it lands in is a separate, per-shard
+/// round-robin counter, not a hash -- this guarantees each shard's own
+/// sub-files come out exactly evenly balanced by construction, not just
+/// statistically likely, the same round-robin-not-thread-affinity fix
+/// already applied to `extract`'s `--split`. At `shard_split == 1` the
+/// round-robin counter is always 0, so the physical index always equals the
+/// shard index -- this reduces to exactly the pre-`shard_split` layout by
+/// construction, not a special case.
+///
+/// `collate_workers` controls whether `inputs` are drained sequentially
+/// (default 1, today's exact original behavior -- this branch is untouched
+/// code, not a generalized path that merely happens to reduce to the old
+/// one, so it is byte-identical by construction, not by luck) or
+/// concurrently (`> 1`). Concurrent draining is what makes it safe to point
+/// `inputs` at N live FIFOs fed by N still-running `probeset-align`/
+/// `guides` processes (see `sbxpress pipeline`'s align->molecules streaming)
+/// instead of N already-complete files: with sequential draining, N-1 of
+/// those processes would fill their kernel pipe buffer and block forever
+/// waiting for a reader that never arrives until collate() works its way to
+/// them, serializing what should be concurrent. Under concurrency, the
+/// per-shard round-robin counters become atomic (`AtomicU64`) and each
+/// shard's writer is behind a `Mutex` (same "many producer threads append
+/// into one target" pattern `io.rs`'s `ShardWriter` already uses) -- lock
+/// scope is just the `.write(&record)` call, so contention is brief. Record
+/// *order* within a shard's physical sub-files becomes run-to-run
+/// non-deterministic under concurrency (which input's records interleave
+/// with which), but this was already true across `shard_split`'s sub-files
+/// even at `collate_workers == 1` and evidence collection was already
+/// designed to be order-independent (`record_identity()`-based tie-breaks,
+/// not positional ones) -- see `collect_file`'s doc comment.
+fn collate(
+    inputs: &[PathBuf],
+    threads: usize,
+    shard_paths: &[PathBuf],
+    shard_split: usize,
+    collate_workers: usize,
+) -> Result<bam::Header> {
+    let shard_split = shard_split.max(1);
+    let collate_workers = collate_workers.max(1);
+    debug_assert_eq!(
+        shard_paths.len() % shard_split,
+        0,
+        "shard_paths.len() must be an exact multiple of shard_split"
+    );
+    if inputs.is_empty() {
+        bail!("collate() requires at least one input BAM");
+    }
+    let shards = shard_paths.len() / shard_split;
+
+    // `inputs[0]` is opened exactly once, here, and that same `bam::Reader`
+    // is later reused to scan its own records too -- never reopened. This
+    // is load-bearing, not tidiness: a naive "peek the header from a
+    // throwaway reader, then open every input (including the first) again
+    // in the main loop" would open `inputs[0]`'s path twice. For a real
+    // file that's harmless (just reads from the start again); for a FIFO
+    // (see `--collate-workers`'s doc comment -- this is what makes
+    // align->molecules streaming possible) it hangs forever, because a
+    // pipe's sole writer already closed after being drained once, and
+    // opening a FIFO for read blocks until a writer is attached, which will
+    // never happen again. Confirmed by a real repro this session: `collate()`
+    // hung exactly here before this fix, even though the same data read via
+    // `samtools view` on the identical FIFO worked fine -- not an htslib/
+    // BGZF-over-pipe limitation, a genuine double-open bug.
+    let mut first_reader = bam::Reader::from_path(&inputs[0])
+        .with_context(|| format!("opening {}", inputs[0].display()))?;
+    let header = bam::Header::from_template(first_reader.header());
+    first_reader.set_threads(threads)?;
+
     // Uncompressed: shard files are pure ephemeral intermediates, deleted
     // right after quant reads each one exactly once -- same lesson as
     // extract's --no-gzip finding (PROFILING.md: 53.9% of extract's CPU was
@@ -540,41 +648,136 @@ fn collate(inputs: &[PathBuf], threads: usize, shard_paths: &[PathBuf]) -> Resul
     // cost of the whole --shards run for exactly this reason: 8 writers all
     // doing default-level BGZF compression, serialized onto the single
     // collate loop thread.
-    let mut writers: Vec<bam::Writer> = shard_paths
+    if collate_workers <= 1 {
+        // Original sequential path, otherwise unmodified: today's exact
+        // behavior, minus the double-open of inputs[0] described above.
+        let mut writers: Vec<bam::Writer> = shard_paths
+            .iter()
+            .map(|path| {
+                let mut writer = bam::Writer::from_path(path, &header, bam::Format::Bam)
+                    .with_context(|| format!("creating shard {}", path.display()))?;
+                writer.set_compression_level(bam::CompressionLevel::Uncompressed)?;
+                Ok(writer)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut sub_counters = vec![0_u64; shards];
+        let mut routed = 0_u64;
+        let mut scan = |input_display: &std::path::Display, reader: &mut bam::Reader| -> Result<()> {
+            for result in reader.records() {
+                let record = result
+                    .with_context(|| format!("reading BAM in collate pass ({input_display})"))?;
+                let cb = aux_string(&record, b"CB");
+                let pb = aux_string(&record, b"PB");
+                let shard_idx = match &cb {
+                    Some(cb) => {
+                        shard_hash(cb.as_bytes(), pb.as_deref().map(str::as_bytes)) as usize
+                            % shards
+                    }
+                    None => 0,
+                };
+                let sub_idx = (sub_counters[shard_idx] % shard_split as u64) as usize;
+                sub_counters[shard_idx] += 1;
+                let physical_idx = shard_idx * shard_split + sub_idx;
+                writers[physical_idx].write(&record)?;
+                routed += 1;
+                if routed % 25_000_000 == 0 {
+                    eprintln!("[sbxpress molecules] phase=collate records={routed}");
+                }
+            }
+            Ok(())
+        };
+        scan(&inputs[0].display(), &mut first_reader)?;
+        for input in &inputs[1..] {
+            let mut reader = bam::Reader::from_path(input)
+                .with_context(|| format!("opening {}", input.display()))?;
+            reader.set_threads(threads)?;
+            scan(&input.display(), &mut reader)?;
+        }
+        eprintln!(
+            "[sbxpress molecules] phase=collate complete records={routed} inputs={}",
+            inputs.len()
+        );
+        return Ok(header);
+    }
+
+    // Concurrent path: `collate_workers` input readers running at once,
+    // each locking only the one shard-writer it needs per record.
+    // `inputs[0]`'s already-opened `first_reader` is handed to whichever
+    // parallel task processes index 0, instead of that task opening its own
+    // (which would be the same double-open hazard described above).
+    let writers: Vec<Mutex<bam::Writer>> = shard_paths
         .iter()
         .map(|path| {
             let mut writer = bam::Writer::from_path(path, &header, bam::Format::Bam)
                 .with_context(|| format!("creating shard {}", path.display()))?;
             writer.set_compression_level(bam::CompressionLevel::Uncompressed)?;
-            Ok(writer)
+            Ok(Mutex::new(writer))
         })
         .collect::<Result<Vec<_>>>()?;
-    let shards = writers.len();
-    let mut routed = 0_u64;
-    for input in inputs {
-        let mut reader = bam::Reader::from_path(input)
-            .with_context(|| format!("opening {}", input.display()))?;
-        reader.set_threads(threads)?;
-        for result in reader.records() {
-            let record = result
-                .with_context(|| format!("reading BAM in collate pass ({})", input.display()))?;
-            let cb = aux_string(&record, b"CB");
-            let pb = aux_string(&record, b"PB");
-            let idx = match &cb {
-                Some(cb) => {
-                    shard_hash(cb.as_bytes(), pb.as_deref().map(str::as_bytes)) as usize % shards
-                }
-                None => 0,
+    let sub_counters: Vec<AtomicU64> = (0..shards).map(|_| AtomicU64::new(0)).collect();
+    let routed = AtomicU64::new(0);
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(collate_workers.min(inputs.len()))
+        .build()
+        .context("creating collate-workers pool")?;
+    eprintln!(
+        "[sbxpress molecules] phase=collate mode=concurrent start workers={} inputs={}",
+        collate_workers,
+        inputs.len()
+    );
+    let first_reader = Mutex::new(Some(first_reader));
+    pool.install(|| {
+        inputs.par_iter().enumerate().try_for_each(|(idx, input)| -> Result<()> {
+            let mut owned_reader;
+            let reader: &mut bam::Reader = if idx == 0 {
+                owned_reader = first_reader
+                    .lock()
+                    .expect("first-reader mutex poisoned")
+                    .take()
+                    .expect("inputs[0]'s reader consumed exactly once");
+                &mut owned_reader
+            } else {
+                owned_reader = bam::Reader::from_path(input)
+                    .with_context(|| format!("opening {}", input.display()))?;
+                owned_reader.set_threads(threads)?;
+                &mut owned_reader
             };
-            writers[idx].write(&record)?;
-            routed += 1;
-            if routed % 25_000_000 == 0 {
-                eprintln!("[sbxpress molecules] phase=collate records={routed}");
+            for result in reader.records() {
+                let record = result.with_context(|| {
+                    format!("reading BAM in collate pass ({})", input.display())
+                })?;
+                let cb = aux_string(&record, b"CB");
+                let pb = aux_string(&record, b"PB");
+                let shard_idx = match &cb {
+                    Some(cb) => {
+                        shard_hash(cb.as_bytes(), pb.as_deref().map(str::as_bytes)) as usize
+                            % shards
+                    }
+                    None => 0,
+                };
+                let sub_idx = (sub_counters[shard_idx].fetch_add(1, Ordering::Relaxed)
+                    % shard_split as u64) as usize;
+                let physical_idx = shard_idx * shard_split + sub_idx;
+                {
+                    let mut w = writers[physical_idx]
+                        .lock()
+                        .expect("shard writer mutex poisoned");
+                    w.write(&record)?;
+                }
+                let done = routed.fetch_add(1, Ordering::Relaxed) + 1;
+                if done % 25_000_000 == 0 {
+                    eprintln!("[sbxpress molecules] phase=collate records={done}");
+                }
             }
-        }
-    }
-    eprintln!("[sbxpress molecules] phase=collate complete records={routed} inputs={}", inputs.len());
-    Ok(())
+            Ok(())
+        })
+    })?;
+    eprintln!(
+        "[sbxpress molecules] phase=collate complete records={} inputs={}",
+        routed.load(Ordering::Relaxed),
+        inputs.len()
+    );
+    Ok(header)
 }
 
 #[allow(clippy::type_complexity)]
@@ -598,7 +801,7 @@ fn collect_evidence(
     let mut samples = Vec::<String>::new();
     let mut sample_ids = HashMap::<String, u32>::new();
     eprintln!("[sbxpress molecules] phase=evidence_collect mode=serial start");
-    for (ordinal, result) in reader.records().enumerate() {
+    for result in reader.records() {
         let record = result.context("reading BAM in evidence pass")?;
         metrics.records += 1;
         if metrics.records % 25_000_000 == 0 {
@@ -637,7 +840,14 @@ fn collect_evidence(
         let sample = intern_sample(&pb, &mut samples, &mut sample_ids);
         metrics.eligible_records += 1;
         let key = RawKey { cell, sample, gene, umi };
-        let ordinal = ordinal as u64;
+        // Always record_identity(), never a positional index -- this reader
+        // may be one of several concurrent collate()/molecules inputs (see
+        // `--collate-workers`), so a positional ordinal would not be
+        // globally meaningful even for this single file in isolation once
+        // its own producer (extract/align, or a streamed pipe) is itself
+        // concurrent. record_identity() is deterministic and comparable
+        // across any reader, unifying with collect_region()/collect_file().
+        let ordinal = record_identity(&record);
         evidence
             .entry(key)
             .and_modify(|item| {
@@ -800,6 +1010,84 @@ fn collect_region(path: &Path, tid: u32, start: u64, end: u64) -> Result<RegionE
     })
 }
 
+/// Whole-file sibling of `collect_region()`: same per-record parsing and
+/// eligibility gate, but a plain sequential scan of the whole file (no
+/// `IndexedReader`, no `tid`/`start`/`end` fetch) -- used by
+/// `collect_evidence_multi()` to scan a shard's `--shard-split` sub-chunks
+/// in parallel. Uses `record_identity(&record)` for `Evidence.best_ordinal`,
+/// not a positional index -- load-bearing, not a style choice: a positional
+/// ordinal is only meaningful within one single sequential read, and these
+/// sub-chunks are read concurrently by independent threads, exactly the
+/// scenario `collect_region`'s own doc comment on `record_identity`
+/// describes ("a deterministic representative tie-breaker for independently
+/// fetched regions").
+fn collect_file(path: &Path) -> Result<RegionEvidence> {
+    let mut reader = bam::Reader::from_path(path)
+        .with_context(|| format!("opening {}", path.display()))?;
+    let mut evidence = HashMap::<RawKey, Evidence>::new();
+    let mut genes = Vec::<String>::new();
+    let mut gene_ids = HashMap::<String, u32>::new();
+    let mut samples = Vec::<String>::new();
+    let mut sample_ids = HashMap::<String, u32>::new();
+    let mut records = 0_u64;
+    let mut eligible_records = 0_u64;
+    let mut no_sample_records = 0_u64;
+    for result in reader.records() {
+        let record = result
+            .with_context(|| format!("reading BAM in evidence pass ({})", path.display()))?;
+        records += 1;
+        if record.is_unmapped() || record.is_secondary() || record.is_supplementary() {
+            continue;
+        }
+        let Some(cell) = aux_string(&record, b"CB").and_then(|v| Dna::pack(&v)) else {
+            continue;
+        };
+        let Some(umi) = aux_string(&record, b"UR")
+            .or_else(|| aux_string(&record, b"UB"))
+            .and_then(|v| Dna::pack(&v))
+        else {
+            continue;
+        };
+        let Some((gene, _name)) = choose_gene(&record) else {
+            continue;
+        };
+        let Some(pb) = aux_string(&record, b"PB").filter(|v| !v.is_empty()) else {
+            no_sample_records += 1;
+            continue;
+        };
+        let gene = if let Some(&id) = gene_ids.get(&gene) {
+            id
+        } else {
+            let id = genes.len() as u32;
+            genes.push(gene.clone());
+            gene_ids.insert(gene, id);
+            id
+        };
+        let sample = intern_sample(&pb, &mut samples, &mut sample_ids);
+        eligible_records += 1;
+        let key = RawKey { cell, sample, gene, umi };
+        let candidate = Evidence {
+            reads: 1,
+            best_ordinal: record_identity(&record),
+            best_mapq: record.mapq(),
+            best_aligned: aligned_bases(&record),
+            min_read_hash: read_hash(record.qname()),
+        };
+        evidence
+            .entry(key)
+            .and_modify(|item| merge_item(item, candidate))
+            .or_insert(candidate);
+    }
+    Ok(RegionEvidence {
+        evidence,
+        genes,
+        samples,
+        records,
+        eligible_records,
+        no_sample_records,
+    })
+}
+
 fn indexed_regions(path: &Path, chunk_bases: u64) -> Result<Vec<(u32, u64, u64)>> {
     let reader = bam::IndexedReader::from_path(path)
         .with_context(|| format!("opening indexed {}", path.display()))?;
@@ -865,6 +1153,32 @@ fn collect_evidence_indexed(
             .collect::<Result<Vec<_>>>()
     })?;
     eprintln!("[sbxpress molecules] phase=evidence_collect mode=indexed complete");
+    Ok(merge_region_evidence(parts, &pool, metrics))
+}
+
+/// Shared remap+merge tail for both `collect_evidence_indexed()` (indexed
+/// genomic regions) and `collect_evidence_multi()` (`--shard-split`
+/// sub-chunks): each independently-scanned `part` built its own local
+/// gene/sample interning tables, so a part's `RawKey.gene`/`.sample` values
+/// are only meaningful within that part until remapped onto one shared
+/// global table here. `NO_SAMPLE` is never remapped -- it is the "no PB tag
+/// at all" sentinel, not a real interned id (see `RawKey::sample`'s doc
+/// comment). Real, stated memory cost: each part's original evidence map
+/// and its freshly-remapped copy are briefly both alive during the
+/// `into_par_iter()` remap pass, roughly doubling this step's peak memory
+/// versus the final merged size, before the tree-reduce below frees the
+/// originals.
+fn merge_region_evidence(
+    parts: Vec<RegionEvidence>,
+    pool: &rayon::ThreadPool,
+    metrics: &mut Metrics,
+) -> (
+    HashMap<RawKey, Evidence>,
+    Vec<String>,
+    HashMap<String, u32>,
+    Vec<String>,
+    HashMap<String, u32>,
+) {
     let mut genes = Vec::<String>::new();
     let mut gene_ids = HashMap::<String, u32>::new();
     let mut samples = Vec::<String>::new();
@@ -907,7 +1221,7 @@ fn collect_evidence_indexed(
         sample_remaps.push(sample_remap);
     }
     eprintln!(
-        "[sbxpress molecules] phase=evidence_remap start regions={} records={} eligible={}",
+        "[sbxpress molecules] phase=evidence_remap start parts={} records={} eligible={}",
         parts.len(),
         metrics.records,
         metrics.eligible_records
@@ -942,7 +1256,45 @@ fn collect_evidence_indexed(
         "[sbxpress molecules] phase=evidence_merge complete raw_nodes={}",
         evidence.len()
     );
-    Ok((evidence, genes, gene_ids, samples, sample_ids))
+    (evidence, genes, gene_ids, samples, sample_ids)
+}
+
+/// Parallel sibling of `collect_evidence()` for a shard's `--shard-split`
+/// sub-chunks: scans each `paths` entry concurrently via `collect_file()`
+/// (plain sequential per-file scan, no index needed -- these sub-files are
+/// pure ephemeral `collate()` output, never indexed), then remaps/merges
+/// through the same `merge_region_evidence()` tail `collect_evidence_indexed`
+/// uses. `workers` is typically `--shard-split`'s value; harmless to pass
+/// more workers than `paths.len()`, capped here.
+#[allow(clippy::type_complexity)]
+fn collect_evidence_multi(
+    paths: &[PathBuf],
+    workers: usize,
+    metrics: &mut Metrics,
+) -> Result<(
+    HashMap<RawKey, Evidence>,
+    Vec<String>,
+    HashMap<String, u32>,
+    Vec<String>,
+    HashMap<String, u32>,
+)> {
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(workers.min(paths.len()).max(1))
+        .build()
+        .context("creating shard-split worker pool")?;
+    eprintln!(
+        "[sbxpress molecules] phase=evidence_collect mode=multi start workers={} parts={}",
+        workers,
+        paths.len()
+    );
+    let parts: Vec<RegionEvidence> = pool.install(|| {
+        paths
+            .par_iter()
+            .map(|p| collect_file(p))
+            .collect::<Result<Vec<_>>>()
+    })?;
+    eprintln!("[sbxpress molecules] phase=evidence_collect mode=multi complete");
+    Ok(merge_region_evidence(parts, &pool, metrics))
 }
 
 fn correct_group(
@@ -1127,10 +1479,10 @@ fn build_decisions(
                 // aligned_bases at the same locus), fall back to
                 // `best_ordinal` as an explicit, deterministic tiebreak
                 // instead of leaving the winner to HashMap iteration order.
-                // `best_ordinal` is a positional ordinal in serial mode and
-                // a content-based `record_identity()` hash in indexed mode
-                // (see `collect_region`) -- either way it's a fixed
-                // per-read value, so "smaller wins" gives the same answer
+                // `best_ordinal` is always a content-based
+                // `record_identity()` hash (see `collect_region`) -- a
+                // fixed per-read value, so "smaller wins" gives the same
+                // answer
                 // regardless of which order this loop visits entries in,
                 // which HashMap iteration order does not otherwise
                 // guarantee (confirmed by a real cross-run diff: identical
@@ -1282,7 +1634,7 @@ fn write_output(
     let mut writer = bam::Writer::from_path(&cli.output, &header, bam::Format::Bam)?;
     writer.set_threads(cli.threads)?;
     let mut written_records = 0_u64;
-    for (ordinal, result) in reader.records().enumerate() {
+    for result in reader.records() {
         let mut record = result?;
         let key = if !record.is_unmapped() && !record.is_secondary() && !record.is_supplementary() {
             let cell = aux_string(&record, b"CB").and_then(|v| Dna::pack(&v));
@@ -1327,14 +1679,14 @@ fn write_output(
                 replace_string(&mut record, b"GX", selected)?;
                 replace_string(&mut record, b"GN", &selected_name)?;
             }
-            let representative = (if cli.evidence_workers > 1 {
-                decision.representative == record_identity(&record)
-            } else {
-                decision.representative == ordinal as u64
-            }) && matches!(
-                decision.outcome,
-                Outcome::Unique | Outcome::Won | Outcome::Shared
-            );
+            // Always record_identity(): collect_evidence() (the only
+            // producer of decisions this function ever reads back against)
+            // no longer emits positional ordinals -- see its doc comment.
+            let representative = (decision.representative == record_identity(&record))
+                && matches!(
+                    decision.outcome,
+                    Outcome::Unique | Outcome::Won | Outcome::Shared
+                );
             record.push_aux(b"xf", Aux::I32(if representative { 25 } else { 17 }))?;
             record.push_aux(b"XV", Aux::U32(decision.collision_degree))?;
             record.push_aux(
@@ -1368,18 +1720,24 @@ fn write_output(
 }
 
 /// Quant stage's write step for the sharded path: identical logic to
-/// `write_output`, except it reads one shard's own temporary BAM (not
+/// `write_output`, except it reads a shard's own temporary BAM(s) (not
 /// `cli.bam`) and appends into a shared `writer` opened once for the whole
-/// run, rather than creating its own. Always uses ordinal-based
-/// representative comparison (never `record_identity`): a shard is always
-/// built via the plain serial `collect_evidence()`, so ordinals are stable
-/// within this single sequential read of the shard file, matching the
-/// ordinals `collect_evidence` assigned when building `decisions` for this
-/// same shard.
+/// run, rather than creating its own.
+///
+/// `shard_paths` holds one path per `--shard-split` sub-chunk for this
+/// logical shard (exactly one path when `--shard-split` is at its default
+/// of 1). Always matches on `record_identity()`: every producer of
+/// `decisions` (`collect_evidence()`, `collect_file()`/
+/// `collect_evidence_multi()`, `collect_region()`) now emits
+/// `record_identity`-based ordinals unconditionally -- positional ordinals
+/// were retired entirely once `collate()` gained concurrent-reader support
+/// (`--collate-workers`), since a positional index is only meaningful for a
+/// single strictly-sequential producer and shard sub-files are no longer
+/// guaranteed to have been written by one.
 #[allow(clippy::too_many_arguments)]
 fn write_shard_output(
     cli: &Cli,
-    shard_path: &Path,
+    shard_paths: &[PathBuf],
     decisions: &HashMap<RawKey, Decision>,
     genes: &[String],
     gene_ids: &HashMap<String, u32>,
@@ -1387,68 +1745,71 @@ fn write_shard_output(
     writer: &mut bam::Writer,
     metrics: &mut Metrics,
 ) -> Result<()> {
-    let mut reader = bam::Reader::from_path(shard_path)?;
-    reader.set_threads(cli.threads)?;
-    for (ordinal, result) in reader.records().enumerate() {
-        let mut record = result?;
-        let key = if !record.is_unmapped() && !record.is_secondary() && !record.is_supplementary() {
-            let cell = aux_string(&record, b"CB").and_then(|v| Dna::pack(&v));
-            let umi = aux_string(&record, b"UR")
-                .or_else(|| aux_string(&record, b"UB"))
-                .and_then(|v| Dna::pack(&v));
-            let gene = choose_gene(&record).and_then(|(g, _)| gene_ids.get(&g).copied());
-            // Mirror the eligibility gate exactly -- see write_output()'s
-            // matching comment.
-            let sample = aux_string(&record, b"PB")
-                .filter(|v| !v.is_empty())
-                .and_then(|pb| sample_ids.get(&pb).copied());
-            match (cell, sample, gene, umi) {
-                (Some(cell), Some(sample), Some(gene), Some(umi)) => {
-                    Some(RawKey { cell, sample, gene, umi })
+    for shard_path in shard_paths {
+        let mut reader = bam::Reader::from_path(shard_path)?;
+        reader.set_threads(cli.threads)?;
+        for result in reader.records() {
+            let mut record = result?;
+            let key =
+                if !record.is_unmapped() && !record.is_secondary() && !record.is_supplementary() {
+                    let cell = aux_string(&record, b"CB").and_then(|v| Dna::pack(&v));
+                    let umi = aux_string(&record, b"UR")
+                        .or_else(|| aux_string(&record, b"UB"))
+                        .and_then(|v| Dna::pack(&v));
+                    let gene = choose_gene(&record).and_then(|(g, _)| gene_ids.get(&g).copied());
+                    // Mirror the eligibility gate exactly -- see write_output()'s
+                    // matching comment.
+                    let sample = aux_string(&record, b"PB")
+                        .filter(|v| !v.is_empty())
+                        .and_then(|pb| sample_ids.get(&pb).copied());
+                    match (cell, sample, gene, umi) {
+                        (Some(cell), Some(sample), Some(gene), Some(umi)) => {
+                            Some(RawKey { cell, sample, gene, umi })
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+            let _ = record.remove_aux(b"xf");
+            for tag in [b"XV", b"XW"] {
+                let _ = record.remove_aux(tag);
+            }
+            if let Some((key, decision)) =
+                key.and_then(|key| decisions.get(&key).map(|decision| (key, decision)))
+            {
+                replace_string(&mut record, b"UB", &decision.corrected.unpack())?;
+                if aux_string(&record, b"GX").is_some_and(|gx| gx.contains(';')) {
+                    let selected = &genes[key.gene as usize];
+                    let selected_name = choose_gene(&record)
+                        .map(|(_, name)| name)
+                        .unwrap_or_else(|| selected.clone());
+                    replace_string(&mut record, b"GX", selected)?;
+                    replace_string(&mut record, b"GN", &selected_name)?;
                 }
-                _ => None,
+                let representative = (decision.representative == record_identity(&record))
+                    && matches!(
+                        decision.outcome,
+                        Outcome::Unique | Outcome::Won | Outcome::Shared
+                    );
+                record.push_aux(b"xf", Aux::I32(if representative { 25 } else { 17 }))?;
+                record.push_aux(b"XV", Aux::U32(decision.collision_degree))?;
+                record.push_aux(
+                    b"XW",
+                    Aux::Char(match decision.outcome {
+                        Outcome::Unique => b'U',
+                        Outcome::Won => b'W',
+                        Outcome::Lost => b'L',
+                        Outcome::Tie => b'T',
+                        Outcome::Shared => b'S',
+                    }),
+                )?;
+                if representative {
+                    metrics.representatives_tagged += 1;
+                }
             }
-        } else {
-            None
-        };
-        let _ = record.remove_aux(b"xf");
-        for tag in [b"XV", b"XW"] {
-            let _ = record.remove_aux(tag);
+            writer.write(&record)?;
         }
-        if let Some((key, decision)) =
-            key.and_then(|key| decisions.get(&key).map(|decision| (key, decision)))
-        {
-            replace_string(&mut record, b"UB", &decision.corrected.unpack())?;
-            if aux_string(&record, b"GX").is_some_and(|gx| gx.contains(';')) {
-                let selected = &genes[key.gene as usize];
-                let selected_name = choose_gene(&record)
-                    .map(|(_, name)| name)
-                    .unwrap_or_else(|| selected.clone());
-                replace_string(&mut record, b"GX", selected)?;
-                replace_string(&mut record, b"GN", &selected_name)?;
-            }
-            let representative = decision.representative == ordinal as u64
-                && matches!(
-                    decision.outcome,
-                    Outcome::Unique | Outcome::Won | Outcome::Shared
-                );
-            record.push_aux(b"xf", Aux::I32(if representative { 25 } else { 17 }))?;
-            record.push_aux(b"XV", Aux::U32(decision.collision_degree))?;
-            record.push_aux(
-                b"XW",
-                Aux::Char(match decision.outcome {
-                    Outcome::Unique => b'U',
-                    Outcome::Won => b'W',
-                    Outcome::Lost => b'L',
-                    Outcome::Tie => b'T',
-                    Outcome::Shared => b'S',
-                }),
-            )?;
-            if representative {
-                metrics.representatives_tagged += 1;
-            }
-        }
-        writer.write(&record)?;
     }
     Ok(())
 }
@@ -1463,20 +1824,40 @@ fn run_sharded(cli: &Cli, metrics: &mut Metrics) -> Result<()> {
     let shard_dir = PathBuf::from(format!("{}.shards", cli.output.display()));
     fs::create_dir_all(&shard_dir)
         .with_context(|| format!("creating shard directory {}", shard_dir.display()))?;
-    let shard_paths: Vec<PathBuf> = (0..cli.shards)
-        .map(|i| shard_dir.join(format!("shard_{i:04}.bam")))
+    let shard_split = cli.shard_split.max(1);
+    // One group of `shard_split` physical paths per logical shard --
+    // `collate()` writes into all of them; everything downstream treats a
+    // group as "this shard's data", not any single path in it. At
+    // shard_split=1 each group has exactly one path, identical to the
+    // pre-`shard_split` layout.
+    let shard_groups: Vec<Vec<PathBuf>> = (0..cli.shards)
+        .map(|i| {
+            (0..shard_split)
+                .map(|j| shard_dir.join(format!("shard_{i:04}_{j:02}.bam")))
+                .collect()
+        })
         .collect();
+    let physical_paths: Vec<PathBuf> = shard_groups.iter().flatten().cloned().collect();
 
     eprintln!(
-        "[sbxpress molecules] phase=collate start shards={}",
-        cli.shards
+        "[sbxpress molecules] phase=collate start shards={} shard_split={}",
+        cli.shards, shard_split
     );
-    collate(&cli.bam, cli.threads, &shard_paths)?;
+    // `collate()` returns the header it already parsed from `cli.bam[0]`
+    // rather than this function re-opening that same path for it -- for a
+    // real file that would be harmless, but `cli.bam[0]` can be a live FIFO
+    // (see `sbxpress pipeline`'s align->molecules streaming, and
+    // `collate()`'s own doc comment on why it never reopens its own first
+    // input either), and its sole writer has already closed by the time
+    // collate() returns, so a second open() here would block forever.
+    let header = collate(
+        &cli.bam,
+        cli.threads,
+        &physical_paths,
+        shard_split,
+        cli.collate_workers,
+    )?;
 
-    let header = {
-        let reader = bam::Reader::from_path(&cli.bam[0])?;
-        bam::Header::from_template(reader.header())
-    };
     let mut writer = bam::Writer::from_path(&cli.output, &header, bam::Format::Bam)?;
     writer.set_threads(cli.threads)?;
     let writer = Mutex::new(writer);
@@ -1488,19 +1869,22 @@ fn run_sharded(cli: &Cli, metrics: &mut Metrics) -> Result<()> {
     // Only that write is serialized (one shard holds the output-file lock
     // at a time) -- everything before it runs lock-free.
     let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(cli.shard_concurrency.min(shard_paths.len()))
+        .num_threads(cli.shard_concurrency.min(shard_groups.len()))
         .build()
         .context("creating shard-concurrency worker pool")?;
-    let total_shards = shard_paths.len();
+    let total_shards = shard_groups.len();
     let completed = Arc::new(AtomicUsize::new(0));
 
     let shard_metrics: Vec<Metrics> = pool.install(|| {
-        shard_paths
+        shard_groups
             .par_iter()
-            .map(|shard_path| -> Result<Metrics> {
+            .map(|group| -> Result<Metrics> {
                 let mut local_metrics = Metrics::default();
-                let (evidence, genes, gene_ids, _samples, sample_ids) =
-                    collect_evidence(shard_path, cli.threads, &mut local_metrics)?;
+                let (evidence, genes, gene_ids, _samples, sample_ids) = if shard_split <= 1 {
+                    collect_evidence(&group[0], cli.threads, &mut local_metrics)?
+                } else {
+                    collect_evidence_multi(group, shard_split, &mut local_metrics)?
+                };
                 let (decisions, _saturation) = build_decisions(
                     &evidence,
                     &mut local_metrics,
@@ -1512,7 +1896,7 @@ fn run_sharded(cli: &Cli, metrics: &mut Metrics) -> Result<()> {
                     let mut writer_guard = writer.lock().expect("output writer mutex poisoned");
                     write_shard_output(
                         cli,
-                        shard_path,
+                        group,
                         &decisions,
                         &genes,
                         &gene_ids,
@@ -1544,6 +1928,42 @@ fn run_sharded(cli: &Cli, metrics: &mut Metrics) -> Result<()> {
     Ok(())
 }
 
+/// All zero-must-be-positive and shard-flag-combination checks, extracted
+/// out of `main()` so they're directly unit-testable (`main()` itself calls
+/// `Cli::parse()`/reads the real environment, not practical to unit test).
+fn validate_cli(cli: &Cli) -> Result<()> {
+    if cli.saturation_interval == 0 {
+        bail!("--saturation-interval must be greater than zero");
+    }
+    if cli.evidence_workers == 0 {
+        bail!("--evidence-workers must be greater than zero");
+    }
+    if cli.shards == 0 {
+        bail!("--shards must be greater than zero");
+    }
+    if cli.shard_concurrency == 0 {
+        bail!("--shard-concurrency must be greater than zero");
+    }
+    if cli.shard_split == 0 {
+        bail!("--shard-split must be greater than zero");
+    }
+    if cli.collate_workers == 0 {
+        bail!("--collate-workers must be greater than zero");
+    }
+    if cli.shards <= 1 && cli.bam.len() != 1 {
+        bail!(
+            "multiple input BAMs are only supported with --shards > 1 (got {} inputs, --shards {}); \
+             the non-sharded path needs a single indexed/re-scannable file",
+            cli.bam.len(),
+            cli.shards
+        );
+    }
+    if cli.shards > 1 && cli.saturation.is_some() {
+        bail!("--saturation is not yet supported together with --shards > 1");
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -1568,30 +1988,8 @@ fn main() -> Result<()> {
         tagseq: cli.tagseq,
         ..Default::default()
     };
-    if cli.saturation_interval == 0 {
-        bail!("--saturation-interval must be greater than zero");
-    }
-    if cli.evidence_workers == 0 {
-        bail!("--evidence-workers must be greater than zero");
-    }
-    if cli.shards == 0 {
-        bail!("--shards must be greater than zero");
-    }
-    if cli.shard_concurrency == 0 {
-        bail!("--shard-concurrency must be greater than zero");
-    }
-    if cli.shards <= 1 && cli.bam.len() != 1 {
-        bail!(
-            "multiple input BAMs are only supported with --shards > 1 (got {} inputs, --shards {}); \
-             the non-sharded path needs a single indexed/re-scannable file",
-            cli.bam.len(),
-            cli.shards
-        );
-    }
+    validate_cli(&cli)?;
     if cli.shards > 1 {
-        if cli.saturation.is_some() {
-            bail!("--saturation is not yet supported together with --shards > 1");
-        }
         info!(shards = cli.shards, "running sharded (collate + quant)");
         run_sharded(&cli, &mut metrics)?;
         metrics.elapsed_secs = started.elapsed().as_secs_f64();
@@ -2259,7 +2657,7 @@ mod tests {
         let merged_shards: Vec<PathBuf> = (0..3)
             .map(|i| dir.path().join(format!("merged_shard_{i}.bam")))
             .collect();
-        collate(&[merged_path], 1, &merged_shards).unwrap();
+        collate(&[merged_path], 1, &merged_shards, 1, 1).unwrap();
 
         // The same records, split across three un-merged "chunk" files
         // (simulating raw per-chunk probeset-align output, no cat/sort/index).
@@ -2272,7 +2670,7 @@ mod tests {
         let split_shards: Vec<PathBuf> = (0..3)
             .map(|i| dir.path().join(format!("split_shard_{i}.bam")))
             .collect();
-        collate(&chunk_paths, 1, &split_shards).unwrap();
+        collate(&chunk_paths, 1, &split_shards, 1, 1).unwrap();
 
         for i in 0..3 {
             assert_eq!(
@@ -2281,5 +2679,344 @@ mod tests {
                 "shard {i} differs between single-file and multi-file collate"
             );
         }
+    }
+
+    #[test]
+    fn shard_split_zero_is_rejected() {
+        let cli = Cli::try_parse_from([
+            "sbx10x-molecules",
+            "in.bam",
+            "-o",
+            "out.bam",
+            "--shard-split",
+            "0",
+        ])
+        .unwrap();
+        let err = validate_cli(&cli).unwrap_err();
+        assert!(err.to_string().contains("--shard-split"));
+    }
+
+    /// Same balance/no-regression guarantee `collate()`'s doc comment
+    /// claims: at `shard_split == 1` every record's physical index equals
+    /// its shard index (already proven for real by
+    /// `collate_from_multiple_inputs_matches_collate_from_one` continuing to
+    /// pass with the new signature). This test covers the `shard_split > 1`
+    /// case: within one shard, records must round-robin evenly and
+    /// deterministically across its sub-files, not just statistically.
+    #[test]
+    fn collate_shard_split_routes_one_shards_records_evenly_round_robin() {
+        let dir = tempfile::tempdir().unwrap();
+        // All eight records share a CB/PB pair, so with `shards == 1` every
+        // one of them hashes to the same (only) shard -- isolates the
+        // sub-file round-robin from shard assignment entirely.
+        let all_records: Vec<(&str, i64, &str, &str, &str)> = (0..8)
+            .map(|i| {
+                (
+                    Box::leak(format!("r{i}").into_boxed_str()) as &str,
+                    i as i64,
+                    "AAAACCCCGGGGTTTTAAAA",
+                    "AAAAAAAAAAAA",
+                    "ENSG1",
+                )
+            })
+            .collect();
+        let input_path = dir.path().join("input.bam");
+        write_test_bam(&input_path, &all_records);
+
+        let shard_split = 4;
+        let sub_paths: Vec<PathBuf> = (0..shard_split)
+            .map(|j| dir.path().join(format!("shard_0000_{j:02}.bam")))
+            .collect();
+        collate(&[input_path], 1, &sub_paths, shard_split, 1).unwrap();
+
+        for (j, path) in sub_paths.iter().enumerate() {
+            let names: Vec<String> = read_tag_set(path)
+                .into_iter()
+                .map(|(name, _, _)| name)
+                .collect();
+            assert_eq!(
+                names.len(),
+                2,
+                "sub-file {j} should hold exactly 2 of the 8 round-robined records"
+            );
+        }
+        // Round-robin, not just even counts: sub-file j gets records
+        // j, j+shard_split, j+2*shard_split, ...
+        for j in 0..shard_split {
+            let expected: std::collections::BTreeSet<String> =
+                [format!("r{j}"), format!("r{}", j + shard_split)]
+                    .into_iter()
+                    .collect();
+            let actual: std::collections::BTreeSet<String> = read_tag_set(&sub_paths[j])
+                .into_iter()
+                .map(|(name, _, _)| name)
+                .collect();
+            assert_eq!(actual, expected, "sub-file {j} got the wrong round-robin slice");
+        }
+    }
+
+    fn write_test_bam_with_pb(
+        path: &Path,
+        records: &[(&str, i64, &str, &str, &str, &str)],
+    ) {
+        use rust_htslib::bam::{header::HeaderRecord, record::Cigar, record::CigarString};
+        let mut header = bam::Header::new();
+        header.push_record(
+            HeaderRecord::new(b"SQ")
+                .push_tag(b"SN", "ENSG1")
+                .push_tag(b"LN", 1_000_000),
+        );
+        let mut writer = bam::Writer::from_path(path, &header, bam::Format::Bam).unwrap();
+        let cigar = CigarString(vec![Cigar::Match(20)]);
+        for (name, pos, cb, umi, gene, pb) in records {
+            let mut record = bam::Record::new();
+            record.set(
+                name.as_bytes(),
+                Some(&cigar),
+                b"ACGTACGTACGTACGTACGT",
+                &[30; 20],
+            );
+            record.set_tid(0);
+            record.set_pos(*pos);
+            record.set_flags(0);
+            record.push_aux(b"CB", Aux::String(cb)).unwrap();
+            record.push_aux(b"UR", Aux::String(umi)).unwrap();
+            record.push_aux(b"GX", Aux::String(gene)).unwrap();
+            record.push_aux(b"PB", Aux::String(pb)).unwrap();
+            writer.write(&record).unwrap();
+        }
+    }
+
+    /// Core correctness guarantee behind `--shard-split`: scanning a shard's
+    /// input as N parallel sub-chunks (`collect_evidence_multi`) must
+    /// produce the same invariant results as the plain single-threaded scan
+    /// (`collect_evidence`) of the same records in one file -- same
+    /// per-(cell,gene,sample,umi) read counts, same `build_decisions()`
+    /// outcomes/collision resolution. Both paths use `record_identity()` for
+    /// `Evidence.best_ordinal` now (positional ordinals were retired
+    /// entirely once `collate()` gained concurrent-reader support), but
+    /// this still compares invariant fields rather than literal
+    /// `Evidence`/`Decision` equality, since which specific record a tie
+    /// resolves to can depend on read order even with a deterministic
+    /// tie-break rule. Includes an
+    /// exact-rank tie: r1/r2 share one RawKey (so, from `write_test_bam_with_pb`'s
+    /// fixed cigar, identical mapq/aligned_bases too) and are deliberately
+    /// split across two different sub-chunks, proving the merge stays
+    /// deterministic regardless of which sub-chunk a thread happens to
+    /// finish first.
+    #[test]
+    fn shard_split_matches_unsplit_evidence_and_decisions() {
+        let dir = tempfile::tempdir().unwrap();
+        let records = [
+            ("r1", 1, "AAAACCCCGGGGTTTTAAAA", "AAAAAAAAAAAA", "ENSG1", "D-A01"),
+            ("r2", 2, "AAAACCCCGGGGTTTTAAAA", "AAAAAAAAAAAA", "ENSG1", "D-A01"),
+            // 1-mismatch neighbor of the major UMI above, low count -- real
+            // UMI-correction case.
+            ("r3", 3, "AAAACCCCGGGGTTTTAAAA", "AAAAAAAAAAAC", "ENSG1", "D-A01"),
+            // Same cell+umi, different gene -- real cross-gene collision case.
+            ("r4", 4, "AAAACCCCGGGGTTTTAAAA", "AAAAAAAAAAAA", "ENSG2", "D-A01"),
+            // Different sample sharing the same cell+umi -- must never merge
+            // with the records above (RawKey::sample's whole reason to exist).
+            ("r5", 5, "AAAACCCCGGGGTTTTAAAA", "AAAAAAAAAAAA", "ENSG1", "D-B01"),
+        ];
+
+        let merged_path = dir.path().join("merged.bam");
+        write_test_bam_with_pb(&merged_path, &records);
+        let mut plain_metrics = Metrics::default();
+        let (plain_evidence, plain_genes, _, plain_samples, _) =
+            collect_evidence(&merged_path, 1, &mut plain_metrics).unwrap();
+
+        let chunk_a = dir.path().join("chunk_a.bam");
+        let chunk_b = dir.path().join("chunk_b.bam");
+        // r1/r2 (the tied pair) deliberately land in different chunks.
+        write_test_bam_with_pb(&chunk_a, &[records[0], records[2], records[4]]);
+        write_test_bam_with_pb(&chunk_b, &[records[1], records[3]]);
+        let mut multi_metrics = Metrics::default();
+        let (multi_evidence, multi_genes, _, multi_samples, _) =
+            collect_evidence_multi(&[chunk_a, chunk_b], 2, &mut multi_metrics).unwrap();
+
+        assert_eq!(plain_metrics.records, multi_metrics.records);
+        assert_eq!(plain_metrics.eligible_records, multi_metrics.eligible_records);
+        assert_eq!(plain_evidence.len(), multi_evidence.len());
+
+        let content = |evidence: &HashMap<RawKey, Evidence>, genes: &[String], samples: &[String]| {
+            let mut out: Vec<(Dna, String, String, Dna, u32)> = evidence
+                .iter()
+                .map(|(key, item)| {
+                    (
+                        key.cell,
+                        genes[key.gene as usize].clone(),
+                        samples[key.sample as usize].clone(),
+                        key.umi,
+                        item.reads,
+                    )
+                })
+                .collect();
+            out.sort();
+            out
+        };
+        assert_eq!(
+            content(&plain_evidence, &plain_genes, &plain_samples),
+            content(&multi_evidence, &multi_genes, &multi_samples),
+            "per-(cell,gene,sample,umi) read counts must match regardless of split"
+        );
+
+        let mut plain_decision_metrics = Metrics::default();
+        let (plain_decisions, _) =
+            build_decisions(&plain_evidence, &mut plain_decision_metrics, None, 1, false);
+        let mut multi_decision_metrics = Metrics::default();
+        let (multi_decisions, _) =
+            build_decisions(&multi_evidence, &mut multi_decision_metrics, None, 1, false);
+
+        assert_eq!(
+            plain_decision_metrics.molecules_counted,
+            multi_decision_metrics.molecules_counted
+        );
+        assert_eq!(
+            plain_decision_metrics.collision_groups,
+            multi_decision_metrics.collision_groups
+        );
+        assert_eq!(
+            plain_decision_metrics.umi_nodes_collapsed,
+            multi_decision_metrics.umi_nodes_collapsed
+        );
+        assert_eq!(plain_decisions.len(), multi_decisions.len());
+
+        let decision_content = |decisions: &HashMap<RawKey, Decision>, genes: &[String], samples: &[String]| {
+            let mut out: Vec<(Dna, String, String, Dna, Dna, u32, Outcome)> = decisions
+                .iter()
+                .map(|(key, d)| {
+                    (
+                        key.cell,
+                        genes[key.gene as usize].clone(),
+                        samples[key.sample as usize].clone(),
+                        key.umi,
+                        d.corrected,
+                        d.collision_degree,
+                        d.outcome,
+                    )
+                })
+                .collect();
+            out.sort_by_key(|t| (t.0, t.1.clone(), t.2.clone(), t.3, t.4, t.5));
+            out
+        };
+        assert_eq!(
+            decision_content(&plain_decisions, &plain_genes, &plain_samples),
+            decision_content(&multi_decisions, &multi_genes, &multi_samples),
+            "decisions (corrected UMI / outcome / collision degree) must match regardless of split"
+        );
+    }
+
+    #[test]
+    fn collate_workers_zero_is_rejected() {
+        let cli = Cli::try_parse_from([
+            "sbx10x-molecules",
+            "in.bam",
+            "-o",
+            "out.bam",
+            "--collate-workers",
+            "0",
+        ])
+        .unwrap();
+        let err = validate_cli(&cli).unwrap_err();
+        assert!(err.to_string().contains("--collate-workers"));
+    }
+
+    /// Core correctness guarantee behind `--collate-workers > 1` (what makes
+    /// it safe to point `collate()` at live FIFOs fed by still-running align
+    /// processes instead of finished files -- see the CLI doc comment):
+    /// reading N inputs concurrently must route every record to the same
+    /// *shard* as reading them sequentially. Shard assignment depends only
+    /// on a record's CB+PB content, never on which thread read it or in
+    /// what order.
+    #[test]
+    fn collate_concurrent_matches_sequential_shard_assignment() {
+        let dir = tempfile::tempdir().unwrap();
+        let chunk_records: Vec<Vec<(&str, i64, &str, &str, &str)>> = vec![
+            vec![
+                ("r0", 0, "AAAACCCCGGGGTTTTAAAA", "AAAAAAAAAAAA", "ENSG1"),
+                ("r1", 1, "CCCCGGGGTTTTAAAACCCC", "CCCCCCCCCCCC", "ENSG1"),
+            ],
+            vec![
+                ("r2", 2, "AAAACCCCGGGGTTTTAAAA", "GGGGGGGGGGGG", "ENSG1"),
+                ("r3", 3, "CCCCGGGGTTTTAAAACCCC", "TTTTTTTTTTTT", "ENSG1"),
+            ],
+            vec![("r4", 4, "AAAACCCCGGGGTTTTAAAA", "AAAACCCCGGGG", "ENSG1")],
+            vec![("r5", 5, "CCCCGGGGTTTTAAAACCCC", "GGGGTTTTAAAA", "ENSG1")],
+        ];
+        let chunk_paths: Vec<PathBuf> = (0..chunk_records.len())
+            .map(|i| dir.path().join(format!("chunk_{i}.bam")))
+            .collect();
+        for (path, records) in chunk_paths.iter().zip(&chunk_records) {
+            write_test_bam(path, records);
+        }
+
+        let shards = 4;
+        let seq_shards: Vec<PathBuf> = (0..shards)
+            .map(|i| dir.path().join(format!("seq_shard_{i}.bam")))
+            .collect();
+        collate(&chunk_paths, 1, &seq_shards, 1, 1).unwrap();
+
+        let conc_shards: Vec<PathBuf> = (0..shards)
+            .map(|i| dir.path().join(format!("conc_shard_{i}.bam")))
+            .collect();
+        collate(&chunk_paths, 1, &conc_shards, 1, 4).unwrap();
+
+        for i in 0..shards {
+            assert_eq!(
+                read_tag_set(&seq_shards[i]),
+                read_tag_set(&conc_shards[i]),
+                "shard {i} differs between sequential and concurrent collate"
+            );
+        }
+    }
+
+    /// Same exact-balance guarantee
+    /// `collate_shard_split_routes_one_shards_records_evenly_round_robin`
+    /// proves for the single-threaded case, now under real concurrent
+    /// readers: the per-shard round-robin counter is atomic specifically so
+    /// this holds even when several input readers hit the same shard's
+    /// sub-files at once, not just when one thread visits them in order.
+    #[test]
+    fn collate_shard_split_round_robin_stays_balanced_under_concurrency() {
+        let dir = tempfile::tempdir().unwrap();
+        // Four input files, all records sharing one CB/PB so every record
+        // hashes to the same (only) shard -- isolates round-robin balance
+        // from shard assignment, same technique the single-threaded version
+        // of this test uses.
+        let chunk_paths: Vec<PathBuf> = (0..4)
+            .map(|i| dir.path().join(format!("chunk_{i}.bam")))
+            .collect();
+        for (i, path) in chunk_paths.iter().enumerate() {
+            let records: Vec<(&str, i64, &str, &str, &str)> = (0..4)
+                .map(|j| {
+                    (
+                        Box::leak(format!("r{i}_{j}").into_boxed_str()) as &str,
+                        (i * 4 + j) as i64,
+                        "AAAACCCCGGGGTTTTAAAA",
+                        "AAAAAAAAAAAA",
+                        "ENSG1",
+                    )
+                })
+                .collect();
+            write_test_bam(path, &records);
+        }
+        // 16 total records into one shard, split 4 ways -> exactly 4 each.
+        let shard_split = 4;
+        let sub_paths: Vec<PathBuf> = (0..shard_split)
+            .map(|j| dir.path().join(format!("shard_0000_{j:02}.bam")))
+            .collect();
+        collate(&chunk_paths, 1, &sub_paths, shard_split, 4).unwrap();
+
+        let mut total = 0;
+        for (j, path) in sub_paths.iter().enumerate() {
+            let count = read_tag_set(path).len();
+            assert_eq!(
+                count, 4,
+                "sub-file {j} should hold exactly 4 of the 16 records"
+            );
+            total += count;
+        }
+        assert_eq!(total, 16);
     }
 }

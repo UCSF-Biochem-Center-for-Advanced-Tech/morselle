@@ -48,7 +48,12 @@ path = "src/bin/sbxpress-protospacer-call.rs"
 name = "sbxpress-probeset-align"
 path = "src/bin/sbxpress-probeset-align.rs"
 
+[[bin]]
+name = "sbxpress-pipeline"
+path = "src/bin/sbxpress-pipeline.rs"
+
 [dependencies]
+libc = "0.2"
 needletail = "0.5"
 flate2 = { version = "1.0", features = ["zlib"] }
 rapidgzip-core = "0.3"

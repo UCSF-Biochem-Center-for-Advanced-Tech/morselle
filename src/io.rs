@@ -234,6 +234,24 @@ struct Pair {
     r2: ShardSink,
 }
 
+/// The R1/R2 file paths `PairShardWriter::create` will open for one target
+/// (sample × chunk), without opening or creating anything. Single source of
+/// truth for the naming convention (`{prefix}_S{s_num}_L001_R{read}_{chunk:03}.{ext}`)
+/// so a dry-run path (e.g. `sbx10x extract --print-manifest`) can predict the
+/// same filenames a real run would produce instead of re-deriving them.
+pub fn pair_shard_paths(
+    dir: &Path,
+    prefix: &str,
+    s_num: usize,
+    chunk: usize,
+    level: Option<u32>,
+    emit_r1: bool,
+) -> (Option<PathBuf>, PathBuf) {
+    let ext = fastq_ext(level);
+    let name = |read: u8| dir.join(format!("{prefix}_S{s_num}_L001_R{read}_{chunk:03}.{ext}"));
+    (emit_r1.then(|| name(1)), name(2))
+}
+
 impl PairShardWriter {
     /// `chunk` is the 1-based file-set number in the 10x reference name (`_001`…).
     /// `level: None` writes plain, uncompressed `.fastq` (see [`ShardSink`]).
@@ -246,15 +264,11 @@ impl PairShardWriter {
         emit_r1: bool,
     ) -> Result<Self> {
         fs::create_dir_all(dir).with_context(|| format!("cannot create dir {}", dir.display()))?;
-        let ext = fastq_ext(level);
-        let enc = |read: u8| -> Result<ShardSink> {
-            let path = dir.join(format!("{prefix}_S{s_num}_L001_R{read}_{chunk:03}.{ext}"));
-            ShardSink::create(&path, level)
-        };
+        let (r1_path, r2_path) = pair_shard_paths(dir, prefix, s_num, chunk, level, emit_r1);
         Ok(PairShardWriter {
             inner: Mutex::new(Pair {
-                r1: emit_r1.then(|| enc(1)).transpose()?,
-                r2: enc(2)?,
+                r1: r1_path.map(|p| ShardSink::create(&p, level)).transpose()?,
+                r2: ShardSink::create(&r2_path, level)?,
             }),
         })
     }
