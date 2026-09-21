@@ -731,8 +731,11 @@ fn run(cli: Cli) -> Result<()> {
         trim_tso: cli.trim_tso,
         max_r2_len: 0,
         // No Flex support in this binary (already-demultiplexed Illumina
-        // R1/R2 input, no probe-barcode concept here).
+        // R1/R2 input, no probe-barcode concept here). flex_r2_boundary is
+        // false, so this floor is never consulted; 65 just matches Flex's
+        // own default for consistency.
         flex_r2_boundary: false,
+        flex_min_cdna_len_no_anchor: 65,
     };
     let emit_yc = !cli.no_emit_yc;
     let cli_trim_tso = cli.trim_tso;
