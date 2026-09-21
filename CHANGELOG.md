@@ -6,6 +6,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-09-21
+
+### Added
+- `sbxpress molecules --flex` explicitly enables Flex pooled-sample handling
+  and requires a non-empty `PB` probe/sample barcode on counted records.
+
+### Changed
+- `sbxpress molecules --tagseq` no longer requires `PB`. Pooled tag-seq
+  chemistry does not produce Flex probe-barcode tags, so tag-seq molecule
+  counting now uses the cell barcode without imposing a Flex-only gate.
+- `--flex` and `--tagseq` are mutually exclusive to make the molecule
+  identity policy explicit.
+
 ## [0.4.0] — 2026-09-18
 
 ### Added
