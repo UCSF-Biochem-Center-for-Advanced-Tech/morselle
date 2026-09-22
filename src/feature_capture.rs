@@ -145,6 +145,18 @@ struct PatternGroup {
     capture_index: HammingIndex<usize>,
 }
 
+/// One anchor length's three lookup indexes: exact-length
+/// substitution-tolerant, plus single-deletion- and single-insertion-shifted
+/// (zero extra mismatch tolerance, mirroring `probe_set::ProbeMatcher` --
+/// see its doc comment for why: real SBX errors are indel-dominated, not
+/// substitutions, and a fixed-length Hamming index can't recover those on
+/// its own no matter how large `anchor_max_mm` is set).
+struct AnchorIndexSet {
+    exact: HammingIndex<usize>,
+    del: HammingIndex<usize>,
+    ins: HammingIndex<usize>,
+}
+
 /// Matches a read against a [`FeatureReference`]: locate the anchor (a
 /// windowed, Hamming-tolerant forward scan from the read start, mirroring
 /// `demux::assign_windowed`/`probe_barcode::locate`), then the following
@@ -155,7 +167,7 @@ struct PatternGroup {
 /// CRISPR Guide Capture + Antibody Capture in one experiment) by grouping
 /// features into anchor-length buckets, each with its own windowed search.
 pub struct FeatureMatcher {
-    anchor_by_len: Vec<(usize, HammingIndex<usize>)>,
+    anchor_by_len: Vec<(usize, AnchorIndexSet)>,
     groups: Vec<PatternGroup>,
     anchor_window: usize,
 }
@@ -169,7 +181,7 @@ impl FeatureMatcher {
     ) -> Self {
         let mut group_of: HashMap<(&[u8], usize), usize> = HashMap::new();
         let mut groups: Vec<PatternGroup> = Vec::new();
-        let mut anchor_by_len: HashMap<usize, HammingIndex<usize>> = HashMap::new();
+        let mut anchor_by_len: HashMap<usize, AnchorIndexSet> = HashMap::new();
 
         for (fi, f) in features.iter().enumerate() {
             let key = (f.anchor.as_slice(), f.barcode.len());
@@ -179,11 +191,18 @@ impl FeatureMatcher {
                     capture_index: HammingIndex::new(),
                 });
                 let id = groups.len() - 1;
-                anchor_by_len.entry(f.anchor.len()).or_default().insert(
-                    &f.anchor,
-                    id,
-                    anchor_max_mm,
-                );
+                let entry = anchor_by_len.entry(f.anchor.len()).or_insert_with(|| AnchorIndexSet {
+                    exact: HammingIndex::new(),
+                    del: HammingIndex::new(),
+                    ins: HammingIndex::new(),
+                });
+                entry.exact.insert(&f.anchor, id, anchor_max_mm);
+                for v in crate::probe_set::single_deletion_variants(&f.anchor) {
+                    entry.del.insert(&v, id, 0);
+                }
+                for v in crate::probe_set::single_insertion_variants(&f.anchor) {
+                    entry.ins.insert(&v, id, 0);
+                }
                 id
             });
             groups[group_id]
@@ -198,30 +217,64 @@ impl FeatureMatcher {
         }
     }
 
+    fn match_capture(&self, group_id: usize, read: &[u8], bc_start: usize) -> Option<usize> {
+        let group = &self.groups[group_id];
+        let bc_end = bc_start.checked_add(group.capture_len)?;
+        if bc_end > read.len() {
+            return None;
+        }
+        group.capture_index.get(&read[bc_start..bc_end])
+    }
+
     /// Locate the anchor within the first `anchor_window` bp of `read`
     /// (leftmost, smallest anchor length first when several are tried at
     /// the same position — real references have one anchor length in
     /// practice, so this rarely matters), then match the following capture
     /// barcode. Returns the matched feature's index into the original
     /// `features` slice.
+    ///
+    /// At each offset, tries the exact-length anchor window first, then the
+    /// single-deletion- and single-insertion-shifted windows -- real SBX
+    /// errors inside the anchor span itself are indel-dominated, the same
+    /// finding `probe_set::ProbeMatcher::locate` already acts on for GEX
+    /// probe matching.
     pub fn locate(&self, read: &[u8]) -> Option<usize> {
-        for (anchor_len, index) in &self.anchor_by_len {
+        for (anchor_len, idx_set) in &self.anchor_by_len {
+            let anchor_len = *anchor_len;
             let hay_end = read.len().min(self.anchor_window + anchor_len);
-            if hay_end < *anchor_len {
+            if hay_end < anchor_len {
                 continue;
             }
             for offset in 0..=(hay_end - anchor_len) {
-                let Some(group_id) = index.get(&read[offset..offset + anchor_len]) else {
-                    continue;
-                };
-                let group = &self.groups[group_id];
-                let bc_start = offset + anchor_len;
-                let bc_end = bc_start + group.capture_len;
-                if bc_end > read.len() {
-                    continue;
+                if let Some(group_id) = idx_set.exact.get(&read[offset..offset + anchor_len]) {
+                    if let Some(feature_idx) = self.match_capture(group_id, read, offset + anchor_len) {
+                        return Some(feature_idx);
+                    }
                 }
-                if let Some(feature_idx) = group.capture_index.get(&read[bc_start..bc_end]) {
-                    return Some(feature_idx);
+                // Deletion-shaped: the read is missing a base the anchor
+                // has, so the real anchor span here is one bp SHORTER, and
+                // the capture barcode starts one bp earlier than the exact
+                // case would suggest.
+                if anchor_len >= 1 {
+                    let del_end = offset + anchor_len - 1;
+                    if del_end <= read.len() {
+                        if let Some(group_id) = idx_set.del.get(&read[offset..del_end]) {
+                            if let Some(feature_idx) = self.match_capture(group_id, read, del_end) {
+                                return Some(feature_idx);
+                            }
+                        }
+                    }
+                }
+                // Insertion-shaped: the read carries an extra base the
+                // anchor doesn't, so the real anchor span here is one bp
+                // LONGER, and the capture barcode starts one bp later.
+                let ins_end = offset + anchor_len + 1;
+                if ins_end <= read.len() {
+                    if let Some(group_id) = idx_set.ins.get(&read[offset..ins_end]) {
+                        if let Some(feature_idx) = self.match_capture(group_id, read, ins_end) {
+                            return Some(feature_idx);
+                        }
+                    }
                 }
             }
         }
@@ -535,6 +588,52 @@ inactive,inactive,R2,TTTCTGGACTTCAGTGGACG(BC),GGTGCACTCTGGAGAAGTCC,CRISPR Guide 
         let matcher = FeatureMatcher::build(&r.features, 2, 1, 30);
         let read = read_with_anchor_capture(10, b"TTTCTGGACTTCAGTGGACG", b"GGTGCACTCTGGAGAAGTCC");
         assert_eq!(matcher.locate(&read), Some(1)); // "inactive"
+    }
+
+    #[test]
+    fn recovers_a_single_deletion_in_the_anchor_span() {
+        // Mirrors probe_set::tests::recovers_a_single_deletion_in_the_probe_span:
+        // the read is missing a base the anchor has -- del index should still
+        // resolve it, at the *shorter* (anchor_len - 1) window, and the
+        // capture barcode should still be found starting right after it.
+        let f = write_csv(REAL_SHAPE);
+        let r = FeatureReference::load(f.path()).unwrap();
+        let matcher = FeatureMatcher::build(&r.features, 2, 1, 30);
+        let anchor = b"TTCCAGCTTAGCTCTTAAAC";
+        let mut deleted = anchor[..10].to_vec();
+        deleted.extend_from_slice(&anchor[11..]); // drop the base at position 10
+        assert_eq!(deleted.len(), anchor.len() - 1);
+        let read = read_with_anchor_capture(10, &deleted, b"CTGTTACCCTAAGAACAAAC");
+        assert_eq!(matcher.locate(&read), Some(0));
+    }
+
+    #[test]
+    fn recovers_a_single_insertion_in_the_anchor_span() {
+        // Mirrors probe_set::tests::recovers_a_single_insertion_in_the_probe_span.
+        let f = write_csv(REAL_SHAPE);
+        let r = FeatureReference::load(f.path()).unwrap();
+        let matcher = FeatureMatcher::build(&r.features, 2, 1, 30);
+        let anchor = b"TTCCAGCTTAGCTCTTAAAC";
+        let mut inserted = anchor[..10].to_vec();
+        inserted.push(b'T'); // extra base not present in the real anchor
+        inserted.extend_from_slice(&anchor[10..]);
+        assert_eq!(inserted.len(), anchor.len() + 1);
+        let read = read_with_anchor_capture(10, &inserted, b"CTGTTACCCTAAGAACAAAC");
+        assert_eq!(matcher.locate(&read), Some(0));
+    }
+
+    #[test]
+    fn indel_recovery_still_distinguishes_two_guides() {
+        // A deletion in one guide's anchor shouldn't cause it to be confused
+        // with the other guide sharing the same anchor sequence.
+        let f = write_csv(REAL_SHAPE);
+        let r = FeatureReference::load(f.path()).unwrap();
+        let matcher = FeatureMatcher::build(&r.features, 2, 1, 30);
+        let anchor = b"TTTCTGGACTTCAGTGGACG";
+        let mut deleted = anchor[..8].to_vec();
+        deleted.extend_from_slice(&anchor[9..]);
+        let read = read_with_anchor_capture(10, &deleted, b"GGTGCACTCTGGAGAAGTCC");
+        assert_eq!(matcher.locate(&read), Some(1)); // "inactive", not "CD45"
     }
 
     /// Proves the generalization: a mixed panel (a CRISPR-flavored feature
