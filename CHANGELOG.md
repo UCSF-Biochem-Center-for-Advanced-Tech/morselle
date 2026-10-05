@@ -59,6 +59,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   real read count — crashed the whole stage with "Failed to read the first
   two bytes. Is the file empty?".
 
+## [0.5.1] — 2026-10-05
+
+### Fixed
+- `cargo bench` (`benches/pipeline_hot_paths.rs`) failed to compile:
+  `ExtractCfg::flex_min_cdna_len_no_anchor` was added in `e36ee39`; 0.5.0's
+  fix covered all 16 affected `examples/*.rs` but missed this bench file,
+  since `cargo test` doesn't build benches by default and the gap went
+  unnoticed. Now set to `65`, matching every other fixed call site.
+
 ## [0.5.0] — 2026-10-05
 
 ### Added
