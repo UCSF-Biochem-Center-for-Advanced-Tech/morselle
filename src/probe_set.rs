@@ -159,7 +159,7 @@ impl ProbeSetReference {
 /// recoverable within edit distance <=2, deletions dominate 85.2% vs 9.2%
 /// insertion-only -- a real base the read is missing relative to the probe,
 /// not a substitution a mismatch budget could ever cover.
-fn single_deletion_variants(seq: &[u8]) -> impl Iterator<Item = Vec<u8>> + '_ {
+pub(crate) fn single_deletion_variants(seq: &[u8]) -> impl Iterator<Item = Vec<u8>> + '_ {
     (0..seq.len()).map(move |i| {
         let mut v = Vec::with_capacity(seq.len() - 1);
         v.extend_from_slice(&seq[..i]);
@@ -172,7 +172,7 @@ fn single_deletion_variants(seq: &[u8]) -> impl Iterator<Item = Vec<u8>> + '_ {
 /// variants: every position, every non-redundant base). The rarer indel
 /// shape in real data (9.2% of recoverable indel-shaped misses vs 85.2%
 /// deletion) but real, and cheap enough to cover alongside deletion.
-fn single_insertion_variants(seq: &[u8]) -> impl Iterator<Item = Vec<u8>> + '_ {
+pub(crate) fn single_insertion_variants(seq: &[u8]) -> impl Iterator<Item = Vec<u8>> + '_ {
     (0..=seq.len()).flat_map(move |i| {
         let existing = if i < seq.len() { seq[i] } else { b'\0' };
         b"ACGT"
