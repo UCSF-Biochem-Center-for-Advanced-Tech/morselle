@@ -142,10 +142,7 @@ fn resolve_tagseq_barcodes(path: &Path, barcodes: &[String]) -> Result<Vec<usize
         indices.push(index);
     }
     if indices.is_empty() {
-        bail!(
-            "--tagseq-barcodes {} contained no barcodes",
-            path.display()
-        );
+        bail!("--tagseq-barcodes {} contained no barcodes", path.display());
     }
     indices.sort_unstable();
     indices.dedup();
@@ -793,8 +790,7 @@ mod tests {
         );
         let calls = fs::read_to_string(output.join("cell_calls.csv")).unwrap();
         assert!(calls.contains("bc2-1,2,tagseq"));
-        let metrics_json =
-            fs::read_to_string(output.join("cell_calling_metrics.json")).unwrap();
+        let metrics_json = fs::read_to_string(output.join("cell_calling_metrics.json")).unwrap();
         assert!(metrics_json.contains("explicit tag-seq sample list"));
     }
 

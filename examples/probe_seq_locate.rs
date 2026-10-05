@@ -34,7 +34,10 @@ fn main() -> anyhow::Result<()> {
         }
     }
     let probe_set_path = probe_set_path.expect("--probe-set <CSV> required");
-    anyhow::ensure!(!fastqs.is_empty(), "usage: probe_seq_locate --probe-set <CSV> [--max-per-file N] <fastq> [...]");
+    anyhow::ensure!(
+        !fastqs.is_empty(),
+        "usage: probe_seq_locate --probe-set <CSV> [--max-per-file N] <fastq> [...]"
+    );
 
     let text = fs::read_to_string(&probe_set_path)?;
     let mut lines = text.lines().filter(|l| !l.starts_with('#'));
@@ -98,7 +101,10 @@ fn main() -> anyhow::Result<()> {
     rows.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
     println!("\n--- exact probe_seq hits by (offset, revcomp) ---");
     for ((offset, rc), count) in rows.iter().take(15) {
-        println!("  offset={offset:>3} revcomp={rc:<5} hits={count:>8} ({:.3}% of reads)", 100.0 * *count as f64 / n_reads.max(1) as f64);
+        println!(
+            "  offset={offset:>3} revcomp={rc:<5} hits={count:>8} ({:.3}% of reads)",
+            100.0 * *count as f64 / n_reads.max(1) as f64
+        );
     }
     println!("\n--- distinct genes hit: {} ---", gene_hits.len());
     let mut gene_rows: Vec<_> = gene_hits.into_iter().collect();

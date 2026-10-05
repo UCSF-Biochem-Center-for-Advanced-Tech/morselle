@@ -141,7 +141,12 @@ fn main() -> anyhow::Result<()> {
         features.len(),
         features
             .iter()
-            .map(|f| format!("{}(anchor={}bp,bc={}bp)", f.id, f.anchor.len(), f.barcode.len()))
+            .map(|f| format!(
+                "{}(anchor={}bp,bc={}bp)",
+                f.id,
+                f.anchor.len(),
+                f.barcode.len()
+            ))
             .collect::<Vec<_>>()
             .join(", ")
     );
@@ -161,6 +166,7 @@ fn main() -> anyhow::Result<()> {
         trim_tso: false,
         max_r2_len: 0,
         flex_r2_boundary: false,
+        flex_min_cdna_len_no_anchor: 65,
     };
 
     const PB_LEN: usize = 10;

@@ -59,6 +59,7 @@ fn main() -> anyhow::Result<()> {
         trim_tso: false,
         max_r2_len: 0,
         flex_r2_boundary: false,
+        flex_min_cdna_len_no_anchor: 65,
     };
 
     // whitelist base composition per position

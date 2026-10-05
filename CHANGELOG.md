@@ -6,6 +6,37 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-10-05
+
+### Added
+- Indel-tolerant anchor matching for CRISPR/Feature Barcoding guide capture
+  (`feature_capture.rs`), mirroring the single-deletion/single-insertion
+  recovery already used by GEX probe matching (`probe_set.rs`): at each read
+  offset, try the exact-length anchor window, then a (len-1)-shifted window
+  against a zero-tolerance deletion-variant index, then a (len+1)-shifted
+  window against a zero-tolerance insertion-variant index. Real validation
+  on a CAT06 L1_CRI fastq chunk: 73.4% → 81.3% hit rate.
+- Windowed, indel-tolerant i5/i7 index matching in `demux.rs` (`find_windowed`),
+  replacing fixed-position-only index lookup.
+- GMM/EM-based 2-component protospacer UMI-count threshold fitting
+  (`protospacer_calling.rs`): fits a 2-component 1D Gaussian mixture (several
+  k-means/percentile initializations, keeping the best by log-likelihood)
+  over log1p(UMI count) and picks the log-likelihood-ratio decision boundary
+  between components, replacing a simpler fixed/heuristic threshold.
+
+### Changed
+- `probe-demux` composite-barcode handling refined (`probe_demux.rs`):
+  real high-occupancy-GEM filtering and tightened `(GEM, ProbeBarcode)`
+  assignment logic.
+
+### Fixed
+- 16 example binaries (`examples/*.rs`) failed to compile:
+  `ExtractCfg::flex_min_cdna_len_no_anchor` was added in `e36ee39` but only
+  `sbxpress-illumina.rs` was updated for it at the time (`4a7d760`). All
+  affected examples now set it to `65` (matching Flex's own default;
+  `flex_r2_boundary` is `false` in every one of these examples, so the value
+  is never consulted).
+
 ## [0.4.1] — 2026-09-21
 
 ### Added

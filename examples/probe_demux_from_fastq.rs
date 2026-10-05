@@ -33,11 +33,16 @@ fn main() -> anyhow::Result<()> {
             other => fastq = Some(PathBuf::from(other)),
         }
     }
-    let fastq = fastq.expect("usage: probe_demux_from_fastq <R2.fastq.gz> --probe-sample-sheet <CSV>");
+    let fastq =
+        fastq.expect("usage: probe_demux_from_fastq <R2.fastq.gz> --probe-sample-sheet <CSV>");
     let sheet_path = sheet_path.expect("--probe-sample-sheet <CSV> required");
 
     let sheet = ProbeSampleSheet::load(&sheet_path)?;
-    println!("loaded {} samples from {}", sheet.samples.len(), sheet_path.display());
+    println!(
+        "loaded {} samples from {}",
+        sheet.samples.len(),
+        sheet_path.display()
+    );
 
     let mut seen: HashSet<(String, String, String)> = HashSet::new(); // (CB, UB, PB) dedup
     let mut tally: BTreeMap<(String, String), u64> = BTreeMap::new();
@@ -52,7 +57,9 @@ fn main() -> anyhow::Result<()> {
         let cb = extract_tag(&id, "CB:Z:");
         let ub = extract_tag(&id, "UB:Z:");
         let pb = extract_tag(&id, "PB:Z:");
-        let (Some(cb), Some(ub), Some(pb)) = (cb, ub, pb) else { continue };
+        let (Some(cb), Some(ub), Some(pb)) = (cb, ub, pb) else {
+            continue;
+        };
         if pb.is_empty() {
             continue;
         }
@@ -64,7 +71,10 @@ fn main() -> anyhow::Result<()> {
             eprintln!("...{n} reads scanned");
         }
     }
-    println!("reads: {n}, with confident PB: {with_pb}, distinct (CB,UMI,PB) molecules: {}", seen.len());
+    println!(
+        "reads: {n}, with confident PB: {with_pb}, distinct (CB,UMI,PB) molecules: {}",
+        seen.len()
+    );
 
     let cfg = DemuxCfg { min_molecules };
     let assignments = assign(&sheet, &tally, &cfg);
@@ -84,7 +94,9 @@ fn main() -> anyhow::Result<()> {
         match a.status {
             Assigned => {
                 assigned += 1;
-                *per_sample.entry(a.sample_id.as_deref().unwrap()).or_insert(0) += 1;
+                *per_sample
+                    .entry(a.sample_id.as_deref().unwrap())
+                    .or_insert(0) += 1;
             }
             Unassigned => unassigned += 1,
             HighOccupancyGem => high_occ += 1,
@@ -92,8 +104,19 @@ fn main() -> anyhow::Result<()> {
     }
     println!("\ncell barcodes total: {}", assignments.len());
     println!("Assigned: {assigned}  Unassigned: {unassigned}  HighOccupancyGem: {high_occ}");
-    println!("\nper-sample raw Assigned CB counts (pre-cell-calling, --min-molecules={min_molecules}):");
-    let mut rows: Vec<_> = sheet.samples.iter().map(|s| (s.id.as_str(), per_sample.get(s.id.as_str()).copied().unwrap_or(0))).collect();
+    println!(
+        "\nper-sample raw Assigned CB counts (pre-cell-calling, --min-molecules={min_molecules}):"
+    );
+    let mut rows: Vec<_> = sheet
+        .samples
+        .iter()
+        .map(|s| {
+            (
+                s.id.as_str(),
+                per_sample.get(s.id.as_str()).copied().unwrap_or(0),
+            )
+        })
+        .collect();
     for (id, count) in &rows {
         println!("  {id:<10} {count}");
     }

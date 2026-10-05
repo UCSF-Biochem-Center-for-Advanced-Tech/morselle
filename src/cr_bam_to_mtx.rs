@@ -133,7 +133,11 @@ pub fn run(cli: &Cli) -> Result<()> {
     if cli.gem_group == 0 {
         bail!("--gem-group must be greater than zero");
     }
-    let probe_barcode_allowlist = cli.probe_barcodes.as_deref().map(read_probe_barcodes).transpose()?;
+    let probe_barcode_allowlist = cli
+        .probe_barcodes
+        .as_deref()
+        .map(read_probe_barcodes)
+        .transpose()?;
     let matrix = read_matrix(
         &cli.bam,
         cli.features.as_deref(),
@@ -703,7 +707,10 @@ mod tests {
         );
         let mut writer = bam::Writer::from_path(&path, &header, bam::Format::Bam).unwrap();
         let cigar = bam::record::CigarString(vec![bam::record::Cigar::Match(10)]);
-        for (i, cb) in ["AAAAAAAAAAAAAAAA-1", "CCCCCCCCCCCCCCCC-1"].into_iter().enumerate() {
+        for (i, cb) in ["AAAAAAAAAAAAAAAA-1", "CCCCCCCCCCCCCCCC-1"]
+            .into_iter()
+            .enumerate()
+        {
             let mut r = bam::Record::new();
             r.set(b"read", Some(&cigar), b"ACGTACGTAC", &[30; 10]);
             r.set_tid(0);
@@ -756,12 +763,16 @@ mod tests {
         );
         let mut writer = bam::Writer::from_path(&path, &header, bam::Format::Bam).unwrap();
         let cigar = bam::record::CigarString(vec![bam::record::Cigar::Match(10)]);
-        for (i, (pb, gene)) in [("D-A01", "GENE1"), ("D-A02", "GENE2")].into_iter().enumerate() {
+        for (i, (pb, gene)) in [("D-A01", "GENE1"), ("D-A02", "GENE2")]
+            .into_iter()
+            .enumerate()
+        {
             let mut r = bam::Record::new();
             r.set(b"read", Some(&cigar), b"ACGTACGTAC", &[30; 10]);
             r.set_tid(0);
             r.set_pos(i as i64);
-            r.push_aux(b"CB", Aux::String("AAAAAAAAAAAAAAAA-1")).unwrap();
+            r.push_aux(b"CB", Aux::String("AAAAAAAAAAAAAAAA-1"))
+                .unwrap();
             r.push_aux(b"UB", Aux::String("UMI0000AAAA")).unwrap();
             r.push_aux(b"GX", Aux::String(gene)).unwrap();
             r.push_aux(b"PB", Aux::String(pb)).unwrap();

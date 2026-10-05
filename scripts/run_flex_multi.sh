@@ -132,7 +132,19 @@ mkdir -p "$out_dir"
 crispr_molecules="$out_dir/crispr_molecules.bam"
 if [ -n "$crispr_bam" ] && [ ! -f "$crispr_molecules" ]; then
   echo "-- molecules (CRISPR, whole pooled guide BAM, once) --"
-  sbxpress molecules "$crispr_bam" -o "$crispr_molecules"
+  # --flex: real production bug found 2026-09-21 on CAT06 CP1 -- every
+  # sample's real per-sample CRISPR molecule count came back exactly 0
+  # despite real, substantial signal existing in the pooled library. Root
+  # cause: without --flex, sbx10x-molecules groups UMI evidence by cell
+  # barcode alone -- the exact cross-sample contamination bug already found
+  # and fixed for the GEX side (RawKey now includes PB) never got applied
+  # here, since this script's CRISPR molecules call was never updated to
+  # pass the flag. 99.8% of real CBs are shared across pooled Flex samples,
+  # so winner-take-all collision resolution without --flex silently hands
+  # each shared CB+UMI's "representative" read to an arbitrary sample,
+  # collapsing real per-sample signal to zero even though the raw reads and
+  # their PB tags are correct.
+  sbxpress molecules "$crispr_bam" -o "$crispr_molecules" --flex
 fi
 
 [ -n "$jobs" ] || jobs=${#barcode_files[@]}
