@@ -167,6 +167,11 @@ struct Cli {
     /// default) unchanged.
     #[arg(long)]
     tagseq: bool,
+    /// 10x Flex mode. Require a non-empty probe/sample barcode (`PB`) on
+    /// every counted molecule so identical GEM barcodes from distinct Flex
+    /// samples cannot be merged.
+    #[arg(long, conflicts_with = "tagseq")]
+    flex: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Ord, PartialOrd)]
@@ -541,7 +546,11 @@ fn better(record: &bam::Record, ordinal: u64, evidence: &Evidence) -> bool {
 /// rejected records with a missing/empty `PB` -- see `RawKey::sample`'s doc
 /// comment: a record with no confident sample-barcode call must not be
 /// evidence-eligible at all, not merged into a shared placeholder bucket.
-fn intern_sample(pb: &str, samples: &mut Vec<String>, sample_ids: &mut HashMap<String, u32>) -> u32 {
+fn intern_sample(
+    pb: &str,
+    samples: &mut Vec<String>,
+    sample_ids: &mut HashMap<String, u32>,
+) -> u32 {
     if let Some(&id) = sample_ids.get(pb) {
         id
     } else {
@@ -812,6 +821,7 @@ fn collate(
 fn collect_evidence(
     path: &Path,
     threads: usize,
+    require_pb: bool,
     metrics: &mut Metrics,
 ) -> Result<(
     HashMap<RawKey, Evidence>,
@@ -853,7 +863,14 @@ fn collect_evidence(
         let Some((gene, _name)) = choose_gene(&record) else {
             continue;
         };
-        let Some(pb) = aux_string(&record, b"PB").filter(|v| !v.is_empty()) else {
+        // PB is a Flex-only identity component. Tag-seq (and ordinary
+        // non-Flex assays) deliberately use CB alone and must not be gated on
+        // a PB tag that their chemistry never produces.
+        let sample = if let Some(pb) = aux_string(&record, b"PB").filter(|v| !v.is_empty()) {
+            intern_sample(&pb, &mut samples, &mut sample_ids)
+        } else if !require_pb {
+            NO_SAMPLE
+        } else {
             metrics.no_sample_records += 1;
             continue;
         };
@@ -865,7 +882,6 @@ fn collect_evidence(
             gene_ids.insert(gene, id);
             id
         };
-        let sample = intern_sample(&pb, &mut samples, &mut sample_ids);
         metrics.eligible_records += 1;
         let key = RawKey { cell, sample, gene, umi };
         // Always record_identity(), never a positional index -- this reader
@@ -964,7 +980,13 @@ fn record_identity(record: &bam::Record) -> u64 {
     value
 }
 
-fn collect_region(path: &Path, tid: u32, start: u64, end: u64) -> Result<RegionEvidence> {
+fn collect_region(
+    path: &Path,
+    tid: u32,
+    start: u64,
+    end: u64,
+    require_pb: bool,
+) -> Result<RegionEvidence> {
     let mut reader = bam::IndexedReader::from_path(path)
         .with_context(|| format!("opening indexed {}", path.display()))?;
     reader
@@ -1001,7 +1023,11 @@ fn collect_region(path: &Path, tid: u32, start: u64, end: u64) -> Result<RegionE
         let Some((gene, _name)) = choose_gene(&record) else {
             continue;
         };
-        let Some(pb) = aux_string(&record, b"PB").filter(|v| !v.is_empty()) else {
+        let sample = if let Some(pb) = aux_string(&record, b"PB").filter(|v| !v.is_empty()) {
+            intern_sample(&pb, &mut samples, &mut sample_ids)
+        } else if !require_pb {
+            NO_SAMPLE
+        } else {
             no_sample_records += 1;
             continue;
         };
@@ -1013,9 +1039,13 @@ fn collect_region(path: &Path, tid: u32, start: u64, end: u64) -> Result<RegionE
             gene_ids.insert(gene, id);
             id
         };
-        let sample = intern_sample(&pb, &mut samples, &mut sample_ids);
         eligible_records += 1;
-        let key = RawKey { cell, sample, gene, umi };
+        let key = RawKey {
+            cell,
+            sample,
+            gene,
+            umi,
+        };
         let candidate = Evidence {
             reads: 1,
             best_ordinal: record_identity(&record),
@@ -1049,7 +1079,7 @@ fn collect_region(path: &Path, tid: u32, start: u64, end: u64) -> Result<RegionE
 /// scenario `collect_region`'s own doc comment on `record_identity`
 /// describes ("a deterministic representative tie-breaker for independently
 /// fetched regions").
-fn collect_file(path: &Path) -> Result<RegionEvidence> {
+fn collect_file(path: &Path, require_pb: bool) -> Result<RegionEvidence> {
     let mut reader = bam::Reader::from_path(path)
         .with_context(|| format!("opening {}", path.display()))?;
     let mut evidence = HashMap::<RawKey, Evidence>::new();
@@ -1079,7 +1109,12 @@ fn collect_file(path: &Path) -> Result<RegionEvidence> {
         let Some((gene, _name)) = choose_gene(&record) else {
             continue;
         };
-        let Some(pb) = aux_string(&record, b"PB").filter(|v| !v.is_empty()) else {
+        // Mirror collect_region()'s/collect_evidence()'s identical gate.
+        let sample = if let Some(pb) = aux_string(&record, b"PB").filter(|v| !v.is_empty()) {
+            intern_sample(&pb, &mut samples, &mut sample_ids)
+        } else if !require_pb {
+            NO_SAMPLE
+        } else {
             no_sample_records += 1;
             continue;
         };
@@ -1091,7 +1126,6 @@ fn collect_file(path: &Path) -> Result<RegionEvidence> {
             gene_ids.insert(gene, id);
             id
         };
-        let sample = intern_sample(&pb, &mut samples, &mut sample_ids);
         eligible_records += 1;
         let key = RawKey { cell, sample, gene, umi };
         let candidate = Evidence {
@@ -1135,6 +1169,7 @@ fn collect_evidence_indexed(
     path: &Path,
     workers: usize,
     chunk_bases: u64,
+    require_pb: bool,
     metrics: &mut Metrics,
 ) -> Result<(
     HashMap<RawKey, Evidence>,
@@ -1169,7 +1204,7 @@ fn collect_evidence_indexed(
         regions
             .par_iter()
             .map(|&(tid, start, end)| {
-                let result = collect_region(path, tid, start, end);
+                let result = collect_region(path, tid, start, end, require_pb);
                 let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
                 if done % checkpoint == 0 || done == total_regions {
                     eprintln!(
@@ -1298,6 +1333,7 @@ fn merge_region_evidence(
 fn collect_evidence_multi(
     paths: &[PathBuf],
     workers: usize,
+    require_pb: bool,
     metrics: &mut Metrics,
 ) -> Result<(
     HashMap<RawKey, Evidence>,
@@ -1318,7 +1354,7 @@ fn collect_evidence_multi(
     let parts: Vec<RegionEvidence> = pool.install(|| {
         paths
             .par_iter()
-            .map(|p| collect_file(p))
+            .map(|p| collect_file(p, require_pb))
             .collect::<Result<Vec<_>>>()
     })?;
     eprintln!("[sbxpress molecules] phase=evidence_collect mode=multi complete");
@@ -1670,19 +1706,20 @@ fn write_output(
                 .or_else(|| aux_string(&record, b"UB"))
                 .and_then(|v| Dna::pack(&v));
             let gene = choose_gene(&record).and_then(|(g, _)| gene_ids.get(&g).copied());
-            // Mirror the eligibility gate in collect_evidence()/collect_region()
-            // exactly: missing/empty PB is never eligible (see RawKey::sample's
-            // doc comment) -- same safe fall-through to None as an unknown gene,
-            // not a NO_SAMPLE placeholder. A PB present but somehow not in
-            // sample_ids (shouldn't happen, same BAM the ids were built from)
-            // also falls through to None.
-            let sample = aux_string(&record, b"PB")
-                .filter(|v| !v.is_empty())
-                .and_then(|pb| sample_ids.get(&pb).copied());
+            let sample = if cli.flex {
+                aux_string(&record, b"PB")
+                    .filter(|v| !v.is_empty())
+                    .and_then(|pb| sample_ids.get(&pb).copied())
+            } else {
+                Some(NO_SAMPLE)
+            };
             match (cell, sample, gene, umi) {
-                (Some(cell), Some(sample), Some(gene), Some(umi)) => {
-                    Some(RawKey { cell, sample, gene, umi })
-                }
+                (Some(cell), Some(sample), Some(gene), Some(umi)) => Some(RawKey {
+                    cell,
+                    sample,
+                    gene,
+                    umi,
+                }),
                 _ => None,
             }
         } else {
@@ -1787,9 +1824,13 @@ fn write_shard_output(
                     let gene = choose_gene(&record).and_then(|(g, _)| gene_ids.get(&g).copied());
                     // Mirror the eligibility gate exactly -- see write_output()'s
                     // matching comment.
-                    let sample = aux_string(&record, b"PB")
-                        .filter(|v| !v.is_empty())
-                        .and_then(|pb| sample_ids.get(&pb).copied());
+                    let sample = if cli.flex {
+                        aux_string(&record, b"PB")
+                            .filter(|v| !v.is_empty())
+                            .and_then(|pb| sample_ids.get(&pb).copied())
+                    } else {
+                        Some(NO_SAMPLE)
+                    };
                     match (cell, sample, gene, umi) {
                         (Some(cell), Some(sample), Some(gene), Some(umi)) => {
                             Some(RawKey { cell, sample, gene, umi })
@@ -1815,6 +1856,10 @@ fn write_shard_output(
                     replace_string(&mut record, b"GX", selected)?;
                     replace_string(&mut record, b"GN", &selected_name)?;
                 }
+                // Always record_identity(): every producer of `decisions`
+                // (collect_evidence()/collect_file()/collect_evidence_multi())
+                // no longer emits positional ordinals -- see this function's
+                // doc comment.
                 let representative = (decision.representative == record_identity(&record))
                     && matches!(
                         decision.outcome,
@@ -1909,9 +1954,9 @@ fn run_sharded(cli: &Cli, metrics: &mut Metrics) -> Result<()> {
             .map(|group| -> Result<Metrics> {
                 let mut local_metrics = Metrics::default();
                 let (evidence, genes, gene_ids, _samples, sample_ids) = if shard_split <= 1 {
-                    collect_evidence(&group[0], cli.threads, &mut local_metrics)?
+                    collect_evidence(&group[0], cli.threads, cli.flex, &mut local_metrics)?
                 } else {
-                    collect_evidence_multi(group, shard_split, &mut local_metrics)?
+                    collect_evidence_multi(group, shard_split, cli.flex, &mut local_metrics)?
                 };
                 let (decisions, _saturation) = build_decisions(
                     &evidence,
@@ -2052,10 +2097,11 @@ fn main() -> Result<()> {
             single_bam,
             cli.evidence_workers,
             cli.evidence_chunk_bases,
+            cli.flex,
             &mut metrics,
         )?
     } else {
-        collect_evidence(single_bam, cli.threads, &mut metrics)?
+        collect_evidence(single_bam, cli.threads, cli.flex, &mut metrics)?
     };
     eprintln!(
         "[sbxpress molecules] phase=evidence_ready raw_nodes={} eligible={}",
@@ -2077,7 +2123,14 @@ fn main() -> Result<()> {
         metrics.saturation = Some(curve.write(path)?);
         eprintln!("[sbxpress molecules] phase=saturation_write complete");
     }
-    write_output(&cli, &decisions, &genes, &gene_ids, &sample_ids, &mut metrics)?;
+    write_output(
+        &cli,
+        &decisions,
+        &genes,
+        &gene_ids,
+        &sample_ids,
+        &mut metrics,
+    )?;
     metrics.elapsed_secs = started.elapsed().as_secs_f64();
     let metrics_path = cli
         .metrics
@@ -2273,7 +2326,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("input.bam");
         let mut header = bam::Header::new();
-        header.push_record(HeaderRecord::new(b"SQ").push_tag(b"SN", "ENSG1").push_tag(b"LN", 1_000_000));
+        header.push_record(
+            HeaderRecord::new(b"SQ")
+                .push_tag(b"SN", "ENSG1")
+                .push_tag(b"LN", 1_000_000),
+        );
         let mut writer = bam::Writer::from_path(&path, &header, bam::Format::Bam).unwrap();
         let cigar = CigarString(vec![Cigar::Match(20)]);
         // (name, cb, umi, pb) -- pb: None = no tag at all, Some("") = tag
@@ -2284,7 +2341,12 @@ mod tests {
             ("real_pb", "AAAACCCCGGGGTTTT", "GGGGGGGGGGGG", Some("D-A01")),
         ] {
             let mut record = bam::Record::new();
-            record.set(name.as_bytes(), Some(&cigar), b"ACGTACGTACGTACGTACGT", &[30; 20]);
+            record.set(
+                name.as_bytes(),
+                Some(&cigar),
+                b"ACGTACGTACGTACGTACGT",
+                &[30; 20],
+            );
             record.set_tid(0);
             record.set_pos(1);
             record.set_flags(0);
@@ -2299,10 +2361,25 @@ mod tests {
         drop(writer);
 
         let mut metrics = Metrics::default();
-        let (evidence, ..) = collect_evidence(&path, 1, &mut metrics).unwrap();
-        assert_eq!(metrics.eligible_records, 1, "only the real-PB record is eligible");
-        assert_eq!(metrics.no_sample_records, 2, "both no-PB and empty-PB records are counted as dropped");
+        let (evidence, ..) = collect_evidence(&path, 1, true, &mut metrics).unwrap();
+        assert_eq!(
+            metrics.eligible_records, 1,
+            "only the real-PB record is eligible"
+        );
+        assert_eq!(
+            metrics.no_sample_records, 2,
+            "both no-PB and empty-PB records are counted as dropped"
+        );
         assert_eq!(evidence.len(), 1);
+
+        let mut tagseq_metrics = Metrics::default();
+        let (tagseq_evidence, ..) = collect_evidence(&path, 1, false, &mut tagseq_metrics).unwrap();
+        assert_eq!(
+            tagseq_metrics.eligible_records, 3,
+            "tag-seq must not require PB"
+        );
+        assert_eq!(tagseq_metrics.no_sample_records, 0);
+        assert_eq!(tagseq_evidence.len(), 3);
     }
 
     #[test]
@@ -2376,8 +2453,18 @@ mod tests {
     fn equal_cross_gene_support_is_not_counted() {
         let cell = Dna::pack("AACCGGTTAACCGGTT").unwrap();
         let umi = Dna::pack("ACGTACGTACGT").unwrap();
-        let a = RawKey { cell, sample: NO_SAMPLE, gene: 0, umi };
-        let b = RawKey { cell, sample: NO_SAMPLE, gene: 1, umi };
+        let a = RawKey {
+            cell,
+            sample: NO_SAMPLE,
+            gene: 0,
+            umi,
+        };
+        let b = RawKey {
+            cell,
+            sample: NO_SAMPLE,
+            gene: 1,
+            umi,
+        };
         let input = HashMap::from([(a, evidence(2, 0)), (b, evidence(2, 1))]);
         let mut metrics = Metrics::default();
         let (decisions, _) = build_decisions(&input, &mut metrics, None, 1, false);
@@ -2453,13 +2540,18 @@ mod tests {
         drop(writer);
         bam::index::build(&path, None, bam::index::Type::Bai, 1).unwrap();
         assert_eq!(indexed_regions(&path, 10).unwrap().len(), 10);
-        assert_eq!(collect_region(&path, 0, 0, 10).unwrap().eligible_records, 2);
+        assert_eq!(
+            collect_region(&path, 0, 0, 10, false)
+                .unwrap()
+                .eligible_records,
+            2
+        );
 
         let mut serial_metrics = Metrics::default();
-        let (serial, _, _, _, _) = collect_evidence(&path, 1, &mut serial_metrics).unwrap();
+        let (serial, _, _, _, _) = collect_evidence(&path, 1, false, &mut serial_metrics).unwrap();
         let mut parallel_metrics = Metrics::default();
         let (parallel, _, _, _, _) =
-            collect_evidence_indexed(&path, 2, 10, &mut parallel_metrics).unwrap();
+            collect_evidence_indexed(&path, 2, 10, false, &mut parallel_metrics).unwrap();
         assert_eq!(serial_metrics.eligible_records, 3);
         assert_eq!(parallel_metrics.eligible_records, 3);
         assert_eq!(serial.len(), 2);
@@ -2505,10 +2597,15 @@ mod tests {
         .iter()
         .map(|s| Dna::pack(s).unwrap())
         .collect();
-        let umis: Vec<Dna> = ["AAAAAAAAAAAA", "AAAAAAAAAAAC", "GGGGGGGGGGGG", "TTTTTTTTTTTT"]
-            .iter()
-            .map(|s| Dna::pack(s).unwrap())
-            .collect();
+        let umis: Vec<Dna> = [
+            "AAAAAAAAAAAA",
+            "AAAAAAAAAAAC",
+            "GGGGGGGGGGGG",
+            "TTTTTTTTTTTT",
+        ]
+        .iter()
+        .map(|s| Dna::pack(s).unwrap())
+        .collect();
 
         // A synthetic but real-shaped evidence set: several cells, some with
         // more than one sample (matching the pooled-Flex architecture this
@@ -2518,15 +2615,20 @@ mod tests {
         let mut evidence = HashMap::new();
         let mut next_ordinal = 0_u64;
         let mut push = |evidence: &mut HashMap<RawKey, Evidence>,
-                         cell: Dna,
-                         sample: u32,
-                         gene: u32,
-                         umi: Dna,
-                         reads: u32| {
+                        cell: Dna,
+                        sample: u32,
+                        gene: u32,
+                        umi: Dna,
+                        reads: u32| {
             let ordinal = next_ordinal;
             next_ordinal += 1;
             evidence.insert(
-                RawKey { cell, sample, gene, umi },
+                RawKey {
+                    cell,
+                    sample,
+                    gene,
+                    umi,
+                },
                 Evidence {
                     reads,
                     best_ordinal: ordinal,
@@ -2549,8 +2651,8 @@ mod tests {
             push(&mut evidence, cell, sample, 0, umis[1], 2); // 1bp error of major -> corrects into it
             push(&mut evidence, cell, sample, 1, umis[2], 4); // gene 1, umi X
             push(&mut evidence, cell, sample, 2, umis[2], 3); // gene 2, same umi X, same (cell,sample) -> real cross-gene collision
-            // Same cell, a DIFFERENT sample, reusing the same UMI+a new gene:
-            // must NOT be pulled into the collision group above.
+                                                              // Same cell, a DIFFERENT sample, reusing the same UMI+a new gene:
+                                                              // must NOT be pulled into the collision group above.
             push(&mut evidence, cell, (sample + 1) % 3, 3, umis[2], 5);
             push(&mut evidence, cell, sample, 4, umis[3], 1); // plain unique molecule
         }
@@ -2565,8 +2667,7 @@ mod tests {
             // Mirrors shard_hash's real invariant (route by (cell, sample)
             // alone) without needing raw bytes -- any valid partition
             // function proves the same property.
-            let idx = (key.cell.0 ^ (key.sample as u64).wrapping_mul(0x9E3779B97F4A7C15))
-                % SHARDS;
+            let idx = (key.cell.0 ^ (key.sample as u64).wrapping_mul(0x9E3779B97F4A7C15)) % SHARDS;
             shard_maps[idx as usize].insert(key, item);
         }
 
@@ -2614,8 +2715,15 @@ mod tests {
     fn shard_hash_is_stable_and_distinguishes_cb_pb_boundary() {
         let a = shard_hash(b"AB", Some(b"C"));
         let b = shard_hash(b"A", Some(b"BC"));
-        assert_ne!(a, b, "CB/PB boundary must affect the hash, not just concatenation");
-        assert_eq!(a, shard_hash(b"AB", Some(b"C")), "hash must be deterministic");
+        assert_ne!(
+            a, b,
+            "CB/PB boundary must affect the hash, not just concatenation"
+        );
+        assert_eq!(
+            a,
+            shard_hash(b"AB", Some(b"C")),
+            "hash must be deterministic"
+        );
         assert_eq!(
             shard_hash(b"AB", None),
             shard_hash(b"AB", Some(b"")),
@@ -2858,7 +2966,7 @@ mod tests {
         write_test_bam_with_pb(&merged_path, &records);
         let mut plain_metrics = Metrics::default();
         let (plain_evidence, plain_genes, _, plain_samples, _) =
-            collect_evidence(&merged_path, 1, &mut plain_metrics).unwrap();
+            collect_evidence(&merged_path, 1, true, &mut plain_metrics).unwrap();
 
         let chunk_a = dir.path().join("chunk_a.bam");
         let chunk_b = dir.path().join("chunk_b.bam");
@@ -2867,7 +2975,7 @@ mod tests {
         write_test_bam_with_pb(&chunk_b, &[records[1], records[3]]);
         let mut multi_metrics = Metrics::default();
         let (multi_evidence, multi_genes, _, multi_samples, _) =
-            collect_evidence_multi(&[chunk_a, chunk_b], 2, &mut multi_metrics).unwrap();
+            collect_evidence_multi(&[chunk_a, chunk_b], 2, true, &mut multi_metrics).unwrap();
 
         assert_eq!(plain_metrics.records, multi_metrics.records);
         assert_eq!(plain_metrics.eligible_records, multi_metrics.eligible_records);

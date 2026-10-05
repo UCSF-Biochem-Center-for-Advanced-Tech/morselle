@@ -312,13 +312,16 @@ fn single_deletion_variants(seq: &[u8]) -> impl Iterator<Item = Vec<u8>> + '_ {
 fn single_insertion_variants(seq: &[u8]) -> impl Iterator<Item = Vec<u8>> + '_ {
     (0..=seq.len()).flat_map(move |i| {
         let existing = if i < seq.len() { seq[i] } else { b'\0' };
-        b"ACGT".iter().filter(move |&&b| b != existing).map(move |&b| {
-            let mut v = Vec::with_capacity(seq.len() + 1);
-            v.extend_from_slice(&seq[..i]);
-            v.push(b);
-            v.extend_from_slice(&seq[i..]);
-            v
-        })
+        b"ACGT"
+            .iter()
+            .filter(move |&&b| b != existing)
+            .map(move |&b| {
+                let mut v = Vec::with_capacity(seq.len() + 1);
+                v.extend_from_slice(&seq[..i]);
+                v.push(b);
+                v.extend_from_slice(&seq[i..]);
+                v
+            })
     })
 }
 
@@ -356,13 +359,17 @@ fn find_flex_r2_end(seq: &[u8], from: usize) -> Option<usize> {
     if end < from + m {
         return None;
     }
-    if let Some(i) = (from..=end - m).find(|&i| hamming_leq(&seq[i..i + m], a, FLEX_R2_END_ANCHOR_MAX_MM)) {
+    if let Some(i) =
+        (from..=end - m).find(|&i| hamming_leq(&seq[i..i + m], a, FLEX_R2_END_ANCHOR_MAX_MM))
+    {
         return Some(i);
     }
     if end >= from + (m - 1) {
         for variant in single_deletion_variants(a) {
             let w = variant.len();
-            if let Some(i) = (from..=end - w).find(|&i| hamming_leq(&seq[i..i + w], &variant, FLEX_R2_END_ANCHOR_MAX_MM)) {
+            if let Some(i) = (from..=end - w)
+                .find(|&i| hamming_leq(&seq[i..i + w], &variant, FLEX_R2_END_ANCHOR_MAX_MM))
+            {
                 return Some(i);
             }
         }
@@ -370,7 +377,9 @@ fn find_flex_r2_end(seq: &[u8], from: usize) -> Option<usize> {
     if end >= from + (m + 1) {
         for variant in single_insertion_variants(a) {
             let w = variant.len();
-            if let Some(i) = (from..=end - w).find(|&i| hamming_leq(&seq[i..i + w], &variant, FLEX_R2_END_ANCHOR_MAX_MM)) {
+            if let Some(i) = (from..=end - w)
+                .find(|&i| hamming_leq(&seq[i..i + w], &variant, FLEX_R2_END_ANCHOR_MAX_MM))
+            {
                 return Some(i);
             }
         }
@@ -812,7 +821,8 @@ mod tests {
 
         let o = orient(&seq, &qual, &ocfg());
         let e = extract(&o.seq, o.cb_umi, o.polyt_start, &flex_ecfg(), false);
-        let (r2s, r2e) = e.r2.expect("anchor within mismatch budget should still be found");
+        let (r2s, r2e) =
+            e.r2.expect("anchor within mismatch budget should still be found");
         assert_eq!(&o.seq[r2s..r2e], pre_anchor.as_slice());
     }
 
@@ -841,7 +851,8 @@ mod tests {
 
         let o = orient(&seq, &qual, &ocfg());
         let e = extract(&o.seq, o.cb_umi, o.polyt_start, &flex_ecfg(), false);
-        let (r2s, _r2e) = e.r2.expect("single-deletion-shifted anchor should still be found");
+        let (r2s, _r2e) =
+            e.r2.expect("single-deletion-shifted anchor should still be found");
         assert_eq!(&o.seq[r2s..r2s + pre_anchor.len()], pre_anchor.as_slice());
     }
 
@@ -868,7 +879,8 @@ mod tests {
 
         let o = orient(&seq, &qual, &ocfg());
         let e = extract(&o.seq, o.cb_umi, o.polyt_start, &flex_ecfg(), false);
-        let (r2s, _r2e) = e.r2.expect("single-insertion-shifted anchor should still be found");
+        let (r2s, _r2e) =
+            e.r2.expect("single-insertion-shifted anchor should still be found");
         assert_eq!(&o.seq[r2s..r2s + pre_anchor.len()], pre_anchor.as_slice());
     }
 
@@ -926,7 +938,8 @@ mod tests {
 
         let o = orient(&seq, &qual, &ocfg());
         let e = extract(&o.seq, o.cb_umi, o.polyt_start, &flex_ecfg(), false);
-        let (r2s, r2e) = e.r2.expect("long-enough payload should fall back to a length floor");
+        let (r2s, r2e) =
+            e.r2.expect("long-enough payload should fall back to a length floor");
         assert_eq!(&o.seq[r2s..r2e], payload.as_slice());
         // Not a verified landmark -- honest accounting, unlike the real
         // anchor-found path.
@@ -955,7 +968,10 @@ mod tests {
         assert!(e.r2.is_none());
 
         // Lowering the floor to <= payload.len() accepts it.
-        let lenient = ExtractCfg { flex_min_cdna_len_no_anchor: payload.len(), ..flex_ecfg() };
+        let lenient = ExtractCfg {
+            flex_min_cdna_len_no_anchor: payload.len(),
+            ..flex_ecfg()
+        };
         let e = extract(&o.seq, o.cb_umi, o.polyt_start, &lenient, false);
         assert!(e.r2.is_some());
     }
@@ -1020,8 +1036,13 @@ mod tests {
 
         let o = orient(&seq, &qual, &ocfg());
         let e = extract(&o.seq, o.cb_umi, o.polyt_start, &flex_ecfg(), false);
-        let (r2s, r2e) = e.r2.expect("length floor should still fire past the search bound");
-        assert_eq!(r2e - r2s, FLEX_R2_END_ANCHOR_MAX_SEARCH, "bounded at the search limit, not the real anchor");
+        let (r2s, r2e) =
+            e.r2.expect("length floor should still fire past the search bound");
+        assert_eq!(
+            r2e - r2s,
+            FLEX_R2_END_ANCHOR_MAX_SEARCH,
+            "bounded at the search limit, not the real anchor"
+        );
         assert!(!e.adapter_trimmed, "not a verified landmark match");
     }
 
@@ -1040,7 +1061,8 @@ mod tests {
 
         let o = orient(&seq, &qual, &ocfg());
         let e = extract(&o.seq, o.cb_umi, o.polyt_start, &ecfg(), false);
-        let (r2s, r2e) = e.r2.expect("non-flex path should still emit R2 (long enough)");
+        let (r2s, r2e) =
+            e.r2.expect("non-flex path should still emit R2 (long enough)");
         assert_eq!(r2e, o.seq.len());
         assert!(&o.seq[r2s..r2e] != pre_anchor.as_slice());
     }

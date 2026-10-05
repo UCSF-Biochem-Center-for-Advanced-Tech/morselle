@@ -27,7 +27,9 @@ pub struct HammingIndex<T> {
 
 impl<T: Copy + Eq> Default for HammingIndex<T> {
     fn default() -> Self {
-        Self { map: HashMap::new() }
+        Self {
+            map: HashMap::new(),
+        }
     }
 }
 

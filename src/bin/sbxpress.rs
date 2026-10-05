@@ -115,7 +115,10 @@ mod tests {
         assert_eq!(engine("cells"), Some("sbxpress-cells"));
         assert_eq!(engine("probe-demux"), Some("sbxpress-probe-demux"));
         assert_eq!(engine("guides"), Some("sbxpress-guides"));
-        assert_eq!(engine("protospacer-call"), Some("sbxpress-protospacer-call"));
+        assert_eq!(
+            engine("protospacer-call"),
+            Some("sbxpress-protospacer-call")
+        );
         assert_eq!(engine("probeset-align"), Some("sbxpress-probeset-align"));
         assert_eq!(engine("pipeline"), Some("sbxpress-pipeline"));
         assert_eq!(engine("minimap"), None);

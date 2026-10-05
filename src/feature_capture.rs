@@ -21,7 +21,9 @@ use std::time::Instant;
 use anyhow::{ensure, Context, Result};
 use clap::Parser;
 use needletail::parse_fastx_file;
-use rust_htslib::bam::{self, header::HeaderRecord, record::Aux, record::Cigar, record::CigarString};
+use rust_htslib::bam::{
+    self, header::HeaderRecord, record::Aux, record::Cigar, record::CigarString,
+};
 use serde::Serialize;
 use tracing::info;
 
@@ -126,7 +128,11 @@ impl FeatureReference {
                 barcode: f[seq_i].trim().as_bytes().to_vec(),
             });
         }
-        ensure!(!features.is_empty(), "feature reference {} has no rows", path.display());
+        ensure!(
+            !features.is_empty(),
+            "feature reference {} has no rows",
+            path.display()
+        );
         Ok(Self { features })
     }
 }
@@ -155,7 +161,12 @@ pub struct FeatureMatcher {
 }
 
 impl FeatureMatcher {
-    pub fn build(features: &[Feature], anchor_max_mm: u32, capture_max_mm: u32, anchor_window: usize) -> Self {
+    pub fn build(
+        features: &[Feature],
+        anchor_max_mm: u32,
+        capture_max_mm: u32,
+        anchor_window: usize,
+    ) -> Self {
         let mut group_of: HashMap<(&[u8], usize), usize> = HashMap::new();
         let mut groups: Vec<PatternGroup> = Vec::new();
         let mut anchor_by_len: HashMap<usize, HammingIndex<usize>> = HashMap::new();
@@ -168,13 +179,16 @@ impl FeatureMatcher {
                     capture_index: HammingIndex::new(),
                 });
                 let id = groups.len() - 1;
-                anchor_by_len
-                    .entry(f.anchor.len())
-                    .or_default()
-                    .insert(&f.anchor, id, anchor_max_mm);
+                anchor_by_len.entry(f.anchor.len()).or_default().insert(
+                    &f.anchor,
+                    id,
+                    anchor_max_mm,
+                );
                 id
             });
-            groups[group_id].capture_index.insert(&f.barcode, fi, capture_max_mm);
+            groups[group_id]
+                .capture_index
+                .insert(&f.barcode, fi, capture_max_mm);
         }
 
         Self {
@@ -409,12 +423,19 @@ pub fn run(cli: &Cli) -> Result<()> {
     let metrics = Metrics {
         reads,
         matched,
-        hit_rate_pct: if reads > 0 { 100.0 * matched as f64 / reads as f64 } else { 0.0 },
+        hit_rate_pct: if reads > 0 {
+            100.0 * matched as f64 / reads as f64
+        } else {
+            0.0
+        },
         per_feature: reference
             .features
             .iter()
             .zip(per_feature)
-            .map(|(f, calls)| FeatureCount { id: f.id.clone(), calls })
+            .map(|(f, calls)| FeatureCount {
+                id: f.id.clone(),
+                calls,
+            })
             .collect(),
     };
     if let Some(path) = &cli.metrics {
@@ -542,10 +563,12 @@ CD3,CD3-APC,R2,AAAAAAAAAAAAAAAAAAAA(BC),TCGATCGATCGATCGATCGA,Antibody Capture
         let r = FeatureReference::load(f.path()).unwrap();
         let matcher = FeatureMatcher::build(&r.features, 2, 1, 30);
 
-        let crispr_read = read_with_anchor_capture(10, b"TTCCAGCTTAGCTCTTAAAC", b"CTGTTACCCTAAGAACAAAC");
+        let crispr_read =
+            read_with_anchor_capture(10, b"TTCCAGCTTAGCTCTTAAAC", b"CTGTTACCCTAAGAACAAAC");
         assert_eq!(matcher.locate(&crispr_read), Some(0));
 
-        let ab_read = read_with_anchor_capture(10, b"AAAAAAAAAAAAAAAAAAAA", b"TCGATCGATCGATCGATCGA");
+        let ab_read =
+            read_with_anchor_capture(10, b"AAAAAAAAAAAAAAAAAAAA", b"TCGATCGATCGATCGATCGA");
         assert_eq!(matcher.locate(&ab_read), Some(1));
     }
 
@@ -557,7 +580,10 @@ CD3,CD3-APC,R2,AAAAAAAAAAAAAAAAAAAA(BC),TCGATCGATCGATCGATCGA,Antibody Capture
         let out = dir.path().join("features.tsv");
         establish_features_tsv(&out, &r.features).unwrap();
         let text = fs::read_to_string(&out).unwrap();
-        assert_eq!(text, "CD45\tCD45\tCRISPR Guide Capture\ninactive\tinactive\tCRISPR Guide Capture\n");
+        assert_eq!(
+            text,
+            "CD45\tCD45\tCRISPR Guide Capture\ninactive\tinactive\tCRISPR Guide Capture\n"
+        );
         // idempotent re-run against the same reference
         establish_features_tsv(&out, &r.features).unwrap();
     }
@@ -585,7 +611,8 @@ CD3,CD3-APC,R2,AAAAAAAAAAAAAAAAAAAA(BC),TCGATCGATCGATCGATCGA,Antibody Capture
         let feature_csv = write_csv(REAL_SHAPE);
         let dir = tempfile::tempdir().unwrap();
         let fastq_path = dir.path().join("r2.fastq");
-        let matched_seq = read_with_anchor_capture(10, b"TTCCAGCTTAGCTCTTAAAC", b"CTGTTACCCTAAGAACAAAC");
+        let matched_seq =
+            read_with_anchor_capture(10, b"TTCCAGCTTAGCTCTTAAAC", b"CTGTTACCCTAAGAACAAAC");
         let unmatched_seq = vec![b'A'; 60];
         let mut fastq = File::create(&fastq_path).unwrap();
         writeln!(
@@ -595,7 +622,11 @@ CD3,CD3-APC,R2,AAAAAAAAAAAAAAAAAAAA(BC),TCGATCGATCGATCGATCGA,Antibody Capture
         writeln!(fastq, "{}", String::from_utf8_lossy(&matched_seq)).unwrap();
         writeln!(fastq, "+").unwrap();
         writeln!(fastq, "{}", "I".repeat(matched_seq.len())).unwrap();
-        writeln!(fastq, "@read2\tCR:Z:TTTTGGGGCCCC\tCB:Z:TTTTGGGGCCCC-1\tUR:Z:GGGGAAAACCCC\tUB:Z:GGGGAAAACCCC").unwrap();
+        writeln!(
+            fastq,
+            "@read2\tCR:Z:TTTTGGGGCCCC\tCB:Z:TTTTGGGGCCCC-1\tUR:Z:GGGGAAAACCCC\tUB:Z:GGGGAAAACCCC"
+        )
+        .unwrap();
         writeln!(fastq, "{}", String::from_utf8_lossy(&unmatched_seq)).unwrap();
         writeln!(fastq, "+").unwrap();
         writeln!(fastq, "{}", "I".repeat(unmatched_seq.len())).unwrap();
@@ -617,7 +648,8 @@ CD3,CD3-APC,R2,AAAAAAAAAAAAAAAAAAAA(BC),TCGATCGATCGATCGATCGA,Antibody Capture
         run(&cli).unwrap();
 
         assert!(features_out.exists());
-        let metrics: serde_json::Value = serde_json::from_str(&fs::read_to_string(&metrics_path).unwrap()).unwrap();
+        let metrics: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&metrics_path).unwrap()).unwrap();
         assert_eq!(metrics["reads"], 2);
         assert_eq!(metrics["matched"], 1);
 
@@ -629,7 +661,10 @@ CD3,CD3-APC,R2,AAAAAAAAAAAAAAAAAAAA(BC),TCGATCGATCGATCGATCGA,Antibody Capture
         assert!(!mapped.is_unmapped());
         assert_eq!(mapped.qname(), b"read1");
         assert_eq!(mapped.aux(b"GX").unwrap(), Aux::String("CD45"));
-        assert_eq!(mapped.aux(b"CB").unwrap(), Aux::String("ACGTACGTACGTACGT-1"));
+        assert_eq!(
+            mapped.aux(b"CB").unwrap(),
+            Aux::String("ACGTACGTACGTACGT-1")
+        );
         assert_eq!(mapped.aux(b"PB").unwrap(), Aux::String("D-A01"));
 
         let unmapped = &records[1];

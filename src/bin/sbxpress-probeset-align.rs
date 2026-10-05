@@ -16,7 +16,11 @@ fn main() -> Result<()> {
         .with_target(false)
         .init();
     let cli = if std::env::var_os("SBXPRESS_DISPATCH").is_some() {
-        Cli::from_arg_matches(&Cli::command().bin_name("sbxpress probeset-align").get_matches())?
+        Cli::from_arg_matches(
+            &Cli::command()
+                .bin_name("sbxpress probeset-align")
+                .get_matches(),
+        )?
     } else {
         Cli::parse()
     };

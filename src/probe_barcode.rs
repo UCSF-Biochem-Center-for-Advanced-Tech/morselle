@@ -74,14 +74,20 @@ impl ProbeWhitelist {
                 lineno + 1,
                 seq.len()
             );
-            let idx: u16 = ids
-                .len()
-                .try_into()
-                .with_context(|| format!("probe-barcode whitelist {} has >65535 entries", path.display()))?;
+            let idx: u16 = ids.len().try_into().with_context(|| {
+                format!(
+                    "probe-barcode whitelist {} has >65535 entries",
+                    path.display()
+                )
+            })?;
             index.insert(&revcomp(seq.as_bytes()), idx, max_mm);
             ids.push(id.to_string());
         }
-        ensure!(!ids.is_empty(), "empty probe-barcode whitelist: {}", path.display());
+        ensure!(
+            !ids.is_empty(),
+            "empty probe-barcode whitelist: {}",
+            path.display()
+        );
         Ok(Self { index, ids, window })
     }
 

@@ -39,7 +39,9 @@ use crossbeam_channel::{bounded, Receiver, Sender};
 use rayon::prelude::*;
 use tracing::info;
 
-use crate::accounting::{pct, DemuxMetrics, Metrics, ProbeBarcodeMetrics, SampleCount, WhitelistMetrics};
+use crate::accounting::{
+    pct, DemuxMetrics, Metrics, ProbeBarcodeMetrics, SampleCount, WhitelistMetrics,
+};
 use crate::anchors::comp;
 use crate::barcode::Whitelist;
 use crate::config::Cli;
@@ -191,11 +193,16 @@ impl Stats {
         if self.per_sample_early.len() < o.per_sample_early.len() {
             self.per_sample_early.resize(o.per_sample_early.len(), 0);
         }
-        for (a, b) in self.per_sample_early.iter_mut().zip(o.per_sample_early.iter()) {
+        for (a, b) in self
+            .per_sample_early
+            .iter_mut()
+            .zip(o.per_sample_early.iter())
+        {
             *a += b;
         }
         if self.per_sample_early_boundary_found.len() < o.per_sample_early_boundary_found.len() {
-            self.per_sample_early_boundary_found.resize(o.per_sample_early_boundary_found.len(), 0);
+            self.per_sample_early_boundary_found
+                .resize(o.per_sample_early_boundary_found.len(), 0);
         }
         for (a, b) in self
             .per_sample_early_boundary_found
@@ -431,7 +438,12 @@ pub fn run(cli: &Cli) -> Result<()> {
     // correctness dependency, just an efficiency/precision routing hint.
     let gex_by_sample: Vec<bool> = demuxer
         .as_ref()
-        .map(|d| d.sample_ids().iter().map(|id| id.to_ascii_uppercase().contains("GEX")).collect())
+        .map(|d| {
+            d.sample_ids()
+                .iter()
+                .map(|id| id.to_ascii_uppercase().contains("GEX"))
+                .collect()
+        })
         .unwrap_or_default();
     let glevel = cli.params.output_gzip_level();
     let split = cli.params.split.max(1);
@@ -774,7 +786,13 @@ fn process_one(
             })
             .map(|idx| !sh.gex_by_sample[idx])
             .unwrap_or(false);
-        let e = extract(&o.seq, o.cb_umi, o.polyt_start, &sh.extract_cfg, likely_non_gex);
+        let e = extract(
+            &o.seq,
+            o.cb_umi,
+            o.polyt_start,
+            &sh.extract_cfg,
+            likely_non_gex,
+        );
 
         // Demux (early): i5/i7 assignment the moment R1 is located, before
         // any CB-specific work and independent of whether R2/cDNA is ever
@@ -805,7 +823,9 @@ fn process_one(
                         Some(i) => {
                             if i < stats.per_sample_early.len() {
                                 stats.per_sample_early[i] += 1;
-                                if e.adapter_trimmed && i < stats.per_sample_early_boundary_found.len() {
+                                if e.adapter_trimmed
+                                    && i < stats.per_sample_early_boundary_found.len()
+                                {
                                     stats.per_sample_early_boundary_found[i] += 1;
                                 }
                             }
@@ -990,7 +1010,8 @@ fn process_one(
         let mut index_route = 5; // XI=5: demultiplexing was not requested.
         let mut sample_assigned = false;
         let target_idx = if sh.demuxer.is_some() {
-            let outcome = early_outcome.expect("demuxer set and R1 located => early_outcome computed");
+            let outcome =
+                early_outcome.expect("demuxer set and R1 located => early_outcome computed");
             index_route = match outcome.via {
                 DemuxVia::Dual => 0,
                 DemuxVia::I5Only => 1,

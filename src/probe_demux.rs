@@ -167,10 +167,18 @@ fn negbinom_quantile(r: f64, p: f64, quantile: f64) -> u64 {
 ///    cutoff is `HighOccupancyGem` (one row, no sample, all molecules
 ///    excluded); otherwise emit one `Assigned` row *per* clearing sample,
 ///    each carrying that sample's own molecule sum and purity.
-pub fn assign(sheet: &ProbeSampleSheet, tally: &BTreeMap<(String, String), u64>, cfg: &DemuxCfg) -> Vec<Assignment> {
+pub fn assign(
+    sheet: &ProbeSampleSheet,
+    tally: &BTreeMap<(String, String), u64>,
+    cfg: &DemuxCfg,
+) -> Vec<Assignment> {
     let mut per_cb: BTreeMap<&str, BTreeMap<&str, u64>> = BTreeMap::new();
     for ((cb, pb), &n) in tally {
-        *per_cb.entry(cb.as_str()).or_default().entry(pb.as_str()).or_insert(0) += n;
+        *per_cb
+            .entry(cb.as_str())
+            .or_default()
+            .entry(pb.as_str())
+            .or_insert(0) += n;
     }
 
     struct CbInfo<'a> {
@@ -199,13 +207,24 @@ pub fn assign(sheet: &ProbeSampleSheet, tally: &BTreeMap<(String, String), u64>,
             })
             .collect();
         sample_sums.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
-        let occupants: Vec<(&str, u64)> =
-            sample_sums.into_iter().filter(|&(_, n)| n >= cfg.min_molecules).collect();
+        let occupants: Vec<(&str, u64)> = sample_sums
+            .into_iter()
+            .filter(|&(_, n)| n >= cfg.min_molecules)
+            .collect();
 
-        infos.push(CbInfo { cb, total, probe_barcodes, occupants });
+        infos.push(CbInfo {
+            cb,
+            total,
+            probe_barcodes,
+            occupants,
+        });
     }
 
-    let occupied: Vec<u64> = infos.iter().filter(|i| !i.occupants.is_empty()).map(|i| i.occupants.len() as u64).collect();
+    let occupied: Vec<u64> = infos
+        .iter()
+        .filter(|i| !i.occupants.is_empty())
+        .map(|i| i.occupants.len() as u64)
+        .collect();
     let r_hat = if occupied.is_empty() {
         0.0
     } else {
@@ -228,7 +247,11 @@ pub fn assign(sheet: &ProbeSampleSheet, tally: &BTreeMap<(String, String), u64>,
             });
         } else if occupancy as u64 > occupancy_cutoff {
             let best_sum = info.occupants[0].1;
-            let purity = if info.total > 0 { best_sum as f64 / info.total as f64 } else { 0.0 };
+            let purity = if info.total > 0 {
+                best_sum as f64 / info.total as f64
+            } else {
+                0.0
+            };
             out.push(Assignment {
                 cell_barcode: info.cb.to_string(),
                 sample_id: None,
@@ -245,7 +268,11 @@ pub fn assign(sheet: &ProbeSampleSheet, tally: &BTreeMap<(String, String), u64>,
                     sample_id: Some(sample_id.to_string()),
                     probe_barcodes: info.probe_barcodes.clone(),
                     molecules: *sum,
-                    purity: if info.total > 0 { *sum as f64 / info.total as f64 } else { 0.0 },
+                    purity: if info.total > 0 {
+                        *sum as f64 / info.total as f64
+                    } else {
+                        0.0
+                    },
                     occupancy,
                     status: Status::Assigned,
                 });
@@ -278,13 +305,19 @@ pub struct OverlapRow {
     pub overlap: f64,
 }
 
-pub fn gem_overlap(tally: &BTreeMap<(String, String), u64>, declared: &std::collections::HashSet<&str>) -> Vec<OverlapRow> {
+pub fn gem_overlap(
+    tally: &BTreeMap<(String, String), u64>,
+    declared: &std::collections::HashSet<&str>,
+) -> Vec<OverlapRow> {
     let mut pbs_per_cb: BTreeMap<&str, std::collections::BTreeSet<&str>> = BTreeMap::new();
     for (cb, pb) in tally.keys() {
         if !declared.contains(pb.as_str()) {
             continue;
         }
-        pbs_per_cb.entry(cb.as_str()).or_default().insert(pb.as_str());
+        pbs_per_cb
+            .entry(cb.as_str())
+            .or_default()
+            .insert(pb.as_str());
     }
     let mut gems_per_pb: HashMap<&str, u64> = HashMap::new();
     let mut common: HashMap<(&str, &str), u64> = HashMap::new();
@@ -295,7 +328,11 @@ pub fn gem_overlap(tally: &BTreeMap<(String, String), u64>, declared: &std::coll
         let list: Vec<&str> = pbs.iter().copied().collect();
         for i in 0..list.len() {
             for j in (i + 1)..list.len() {
-                let key = if list[i] < list[j] { (list[i], list[j]) } else { (list[j], list[i]) };
+                let key = if list[i] < list[j] {
+                    (list[i], list[j])
+                } else {
+                    (list[j], list[i])
+                };
                 *common.entry(key).or_insert(0) += 1;
             }
         }
@@ -355,8 +392,12 @@ pub fn read_bam_tally(path: &Path) -> Result<BTreeMap<(String, String), u64>> {
         if aux_i64(&record, b"xf")?.unwrap_or(0) & 8 == 0 {
             continue;
         }
-        let Some(cb) = aux_string(&record, b"CB")? else { continue };
-        let Some(pb) = aux_string(&record, b"PB")? else { continue };
+        let Some(cb) = aux_string(&record, b"CB")? else {
+            continue;
+        };
+        let Some(pb) = aux_string(&record, b"PB")? else {
+            continue;
+        };
         if pb.is_empty() {
             continue;
         }
@@ -396,7 +437,10 @@ pub struct SampleCount {
 
 fn write_sample_assignment(assignments: &[Assignment], path: &Path) -> Result<()> {
     let mut w = BufWriter::new(File::create(path)?);
-    writeln!(w, "cell_barcode,sample_id,probe_barcodes,molecules,purity,occupancy,status")?;
+    writeln!(
+        w,
+        "cell_barcode,sample_id,probe_barcodes,molecules,purity,occupancy,status"
+    )?;
     for a in assignments {
         writeln!(
             w,
@@ -431,11 +475,18 @@ fn strip_gem_suffix(cb: &str) -> &str {
     }
 }
 
-fn write_per_sample_barcodes(sheet: &ProbeSampleSheet, assignments: &[Assignment], out_dir: &Path) -> Result<()> {
+fn write_per_sample_barcodes(
+    sheet: &ProbeSampleSheet,
+    assignments: &[Assignment],
+    out_dir: &Path,
+) -> Result<()> {
     let mut by_sample: HashMap<&str, Vec<&str>> = HashMap::new();
     for a in assignments {
         if let (Status::Assigned, Some(sid)) = (a.status, a.sample_id.as_deref()) {
-            by_sample.entry(sid).or_default().push(a.cell_barcode.as_str());
+            by_sample
+                .entry(sid)
+                .or_default()
+                .push(a.cell_barcode.as_str());
         }
     }
     for s in &sheet.samples {
@@ -469,7 +520,10 @@ fn write_per_sample_probe_barcodes(sheet: &ProbeSampleSheet, out_dir: &Path) -> 
 
 fn write_gem_overlap(rows: &[OverlapRow], path: &Path) -> Result<()> {
     let mut w = BufWriter::new(File::create(path)?);
-    writeln!(w, "barcode1,barcode2,barcode1_gems,barcode2_gems,common_gems,overlap")?;
+    writeln!(
+        w,
+        "barcode1,barcode2,barcode1_gems,barcode2_gems,common_gems,overlap"
+    )?;
     for r in rows {
         writeln!(
             w,
@@ -480,7 +534,11 @@ fn write_gem_overlap(rows: &[OverlapRow], path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn build_metrics(sheet: &ProbeSampleSheet, assignments: &[Assignment], elapsed_secs: f64) -> Metrics {
+fn build_metrics(
+    sheet: &ProbeSampleSheet,
+    assignments: &[Assignment],
+    elapsed_secs: f64,
+) -> Metrics {
     let mut per_sample_counts: HashMap<&str, usize> = HashMap::new();
     let mut distinct_cbs: std::collections::HashSet<&str> = std::collections::HashSet::new();
     let mut occupancy_by_cb: HashMap<&str, usize> = HashMap::new();
@@ -540,7 +598,9 @@ pub fn run(cli: &Cli) -> Result<()> {
     info!(samples = sheet.samples.len(), path = %cli.probe_sample_sheet.display(), "loaded probe sample sheet");
 
     let tally = read_bam_tally(&cli.bam)?;
-    let cfg = DemuxCfg { min_molecules: cli.min_molecules };
+    let cfg = DemuxCfg {
+        min_molecules: cli.min_molecules,
+    };
     let assignments = assign(&sheet, &tally, &cfg);
     let declared: std::collections::HashSet<&str> = sheet
         .samples
@@ -583,9 +643,18 @@ mod tests {
     fn sheet() -> ProbeSampleSheet {
         ProbeSampleSheet {
             samples: vec![
-                ProbeSample { id: "Pos".into(), probe_barcode_ids: vec!["D-A01".into(), "D-A02".into()] },
-                ProbeSample { id: "RZ211".into(), probe_barcode_ids: vec!["D-A03".into(), "D-A04".into()] },
-                ProbeSample { id: "RZ213NR".into(), probe_barcode_ids: vec!["D-A07".into()] },
+                ProbeSample {
+                    id: "Pos".into(),
+                    probe_barcode_ids: vec!["D-A01".into(), "D-A02".into()],
+                },
+                ProbeSample {
+                    id: "RZ211".into(),
+                    probe_barcode_ids: vec!["D-A03".into(), "D-A04".into()],
+                },
+                ProbeSample {
+                    id: "RZ213NR".into(),
+                    probe_barcode_ids: vec!["D-A07".into()],
+                },
             ],
         }
     }
@@ -628,12 +697,18 @@ mod tests {
         let t = tally(&[("CB1", "D-A01", 50), ("CB1", "D-A03", 40)]);
         let out = assign(&sheet(), &t, &DemuxCfg { min_molecules: 10 });
         assert_eq!(out.len(), 2);
-        let pos = out.iter().find(|a| a.sample_id.as_deref() == Some("Pos")).unwrap();
+        let pos = out
+            .iter()
+            .find(|a| a.sample_id.as_deref() == Some("Pos"))
+            .unwrap();
         assert_eq!(pos.status, Status::Assigned);
         assert_eq!(pos.molecules, 50);
         assert_eq!(pos.occupancy, 2);
         assert!((pos.purity - 50.0 / 90.0).abs() < 1e-9);
-        let rz = out.iter().find(|a| a.sample_id.as_deref() == Some("RZ211")).unwrap();
+        let rz = out
+            .iter()
+            .find(|a| a.sample_id.as_deref() == Some("RZ211"))
+            .unwrap();
         assert_eq!(rz.status, Status::Assigned);
         assert_eq!(rz.molecules, 40);
         assert!((rz.purity - 40.0 / 90.0).abs() < 1e-9);
@@ -678,7 +753,10 @@ mod tests {
         // the kind of GEM 10x's real high-occupancy-GEM filter targets
         // (chip clog / wetting failure), not ordinary pooling.
         let samples: Vec<ProbeSample> = (1..=40)
-            .map(|i| ProbeSample { id: format!("S{i}"), probe_barcode_ids: vec![format!("P{i}")] })
+            .map(|i| ProbeSample {
+                id: format!("S{i}"),
+                probe_barcode_ids: vec![format!("P{i}")],
+            })
             .collect();
         let big_sheet = ProbeSampleSheet { samples };
 
@@ -689,17 +767,29 @@ mod tests {
         for i in 1..=40 {
             entries.push(("ARTIFACT".to_string(), format!("P{i}"), 20));
         }
-        let t: BTreeMap<(String, String), u64> =
-            entries.into_iter().map(|(cb, pb, n)| ((cb, pb), n)).collect();
+        let t: BTreeMap<(String, String), u64> = entries
+            .into_iter()
+            .map(|(cb, pb, n)| ((cb, pb), n))
+            .collect();
 
         let out = assign(&big_sheet, &t, &DemuxCfg { min_molecules: 10 });
 
-        let normal_rows: Vec<&Assignment> = out.iter().filter(|a| a.cell_barcode.starts_with("NORMAL")).collect();
+        let normal_rows: Vec<&Assignment> = out
+            .iter()
+            .filter(|a| a.cell_barcode.starts_with("NORMAL"))
+            .collect();
         assert_eq!(normal_rows.len(), 39);
         assert!(normal_rows.iter().all(|a| a.status == Status::Assigned));
 
-        let artifact_rows: Vec<&Assignment> = out.iter().filter(|a| a.cell_barcode == "ARTIFACT").collect();
-        assert_eq!(artifact_rows.len(), 1, "the artifact GEM must be filtered as one row, not 40 Assigned rows");
+        let artifact_rows: Vec<&Assignment> = out
+            .iter()
+            .filter(|a| a.cell_barcode == "ARTIFACT")
+            .collect();
+        assert_eq!(
+            artifact_rows.len(),
+            1,
+            "the artifact GEM must be filtered as one row, not 40 Assigned rows"
+        );
         assert_eq!(artifact_rows[0].status, Status::HighOccupancyGem);
         assert_eq!(artifact_rows[0].sample_id, None);
         assert_eq!(artifact_rows[0].occupancy, 40);
@@ -717,7 +807,10 @@ mod tests {
         let rows = gem_overlap(&t, &declared);
         assert_eq!(rows.len(), 1);
         let r = &rows[0];
-        assert_eq!((r.barcode1.as_str(), r.barcode2.as_str()), ("D-A01", "D-A02"));
+        assert_eq!(
+            (r.barcode1.as_str(), r.barcode2.as_str()),
+            ("D-A01", "D-A02")
+        );
         assert_eq!(r.barcode1_gems, 2);
         assert_eq!(r.barcode2_gems, 1);
         assert_eq!(r.common_gems, 1);

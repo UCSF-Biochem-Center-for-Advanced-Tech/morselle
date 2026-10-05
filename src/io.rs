@@ -29,7 +29,10 @@ impl ShardSink {
         let file = File::create(path)
             .with_context(|| format!("cannot create output {}", path.display()))?;
         Ok(match level {
-            Some(level) => ShardSink::Gz(GzEncoder::new(BufWriter::new(file), Compression::new(level))),
+            Some(level) => ShardSink::Gz(GzEncoder::new(
+                BufWriter::new(file),
+                Compression::new(level),
+            )),
             None => ShardSink::Plain(BufWriter::new(file)),
         })
     }
@@ -307,12 +310,16 @@ mod tests {
     fn no_gzip_writes_plain_readable_fastq_with_plain_extension() {
         let dir = tempfile::tempdir().unwrap();
         let w = PairShardWriter::create(dir.path(), "S", 1, 1, None, true).unwrap();
-        w.append(b"@r1\nACGT\n+\nIIII\n", b"@r2\nTTTT\n+\nIIII\n", 1).unwrap();
+        w.append(b"@r1\nACGT\n+\nIIII\n", b"@r2\nTTTT\n+\nIIII\n", 1)
+            .unwrap();
         w.finish().unwrap();
 
         let r1_path = dir.path().join("S_S1_L001_R1_001.fastq");
         let r2_path = dir.path().join("S_S1_L001_R2_001.fastq");
-        assert!(r1_path.exists(), "expected a plain .fastq file, not .fastq.gz");
+        assert!(
+            r1_path.exists(),
+            "expected a plain .fastq file, not .fastq.gz"
+        );
         assert_eq!(fs::read(&r1_path).unwrap(), b"@r1\nACGT\n+\nIIII\n");
         assert_eq!(fs::read(&r2_path).unwrap(), b"@r2\nTTTT\n+\nIIII\n");
     }
@@ -321,7 +328,8 @@ mod tests {
     fn gzip_level_writes_valid_gzip_with_gz_extension() {
         let dir = tempfile::tempdir().unwrap();
         let w = PairShardWriter::create(dir.path(), "S", 1, 1, Some(4), true).unwrap();
-        w.append(b"@r1\nACGT\n+\nIIII\n", b"@r2\nTTTT\n+\nIIII\n", 1).unwrap();
+        w.append(b"@r1\nACGT\n+\nIIII\n", b"@r2\nTTTT\n+\nIIII\n", 1)
+            .unwrap();
         w.finish().unwrap();
 
         let r2_path = dir.path().join("S_S1_L001_R2_001.fastq.gz");

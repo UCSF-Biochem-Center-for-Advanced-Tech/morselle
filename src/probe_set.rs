@@ -24,7 +24,9 @@ use std::time::Instant;
 use anyhow::{ensure, Context, Result};
 use clap::Parser;
 use needletail::parse_fastx_file;
-use rust_htslib::bam::{self, header::HeaderRecord, record::Aux, record::Cigar, record::CigarString};
+use rust_htslib::bam::{
+    self, header::HeaderRecord, record::Aux, record::Cigar, record::CigarString,
+};
 use serde::Serialize;
 use tracing::info;
 
@@ -87,8 +89,14 @@ impl ProbeSetReference {
                 .position(|c| *c == name)
                 .with_context(|| format!("probe set missing '{name}' column"))
         };
-        let (gene_id_i, seq_i, probe_id_i, included_i, region_i, gene_name_i) =
-            (col("gene_id")?, col("probe_seq")?, col("probe_id")?, col("included")?, col("region")?, col("gene_name")?);
+        let (gene_id_i, seq_i, probe_id_i, included_i, region_i, gene_name_i) = (
+            col("gene_id")?,
+            col("probe_seq")?,
+            col("probe_id")?,
+            col("included")?,
+            col("region")?,
+            col("gene_name")?,
+        );
 
         let mut probes = Vec::new();
         let mut seq_len = None;
@@ -97,8 +105,23 @@ impl ProbeSetReference {
                 continue;
             }
             let f: Vec<&str> = line.split(',').collect();
-            let max = [gene_id_i, seq_i, probe_id_i, included_i, region_i, gene_name_i].into_iter().max().unwrap();
-            ensure!(f.len() > max, "{}:{}: row has too few columns: '{line}'", path.display(), lineno + 2);
+            let max = [
+                gene_id_i,
+                seq_i,
+                probe_id_i,
+                included_i,
+                region_i,
+                gene_name_i,
+            ]
+            .into_iter()
+            .max()
+            .unwrap();
+            ensure!(
+                f.len() > max,
+                "{}:{}: row has too few columns: '{line}'",
+                path.display(),
+                lineno + 2
+            );
             if f[included_i] != "TRUE" {
                 continue;
             }
@@ -121,7 +144,11 @@ impl ProbeSetReference {
                 seq,
             });
         }
-        ensure!(!probes.is_empty(), "probe set {} has no included=TRUE rows", path.display());
+        ensure!(
+            !probes.is_empty(),
+            "probe set {} has no included=TRUE rows",
+            path.display()
+        );
         Ok(Self { probes })
     }
 }
@@ -148,13 +175,16 @@ fn single_deletion_variants(seq: &[u8]) -> impl Iterator<Item = Vec<u8>> + '_ {
 fn single_insertion_variants(seq: &[u8]) -> impl Iterator<Item = Vec<u8>> + '_ {
     (0..=seq.len()).flat_map(move |i| {
         let existing = if i < seq.len() { seq[i] } else { b'\0' };
-        b"ACGT".iter().filter(move |&&b| b != existing).map(move |&b| {
-            let mut v = Vec::with_capacity(seq.len() + 1);
-            v.extend_from_slice(&seq[..i]);
-            v.push(b);
-            v.extend_from_slice(&seq[i..]);
-            v
-        })
+        b"ACGT"
+            .iter()
+            .filter(move |&&b| b != existing)
+            .map(move |&b| {
+                let mut v = Vec::with_capacity(seq.len() + 1);
+                v.extend_from_slice(&seq[..i]);
+                v.push(b);
+                v.extend_from_slice(&seq[i..]);
+                v
+            })
     })
 }
 
@@ -198,7 +228,13 @@ impl ProbeMatcher {
                 ins_index.insert(&v, i, 0);
             }
         }
-        Self { index, del_index, ins_index, probe_len, window }
+        Self {
+            index,
+            del_index,
+            ins_index,
+            probe_len,
+            window,
+        }
     }
 
     /// Locate the probe sequence within a window centered on
@@ -431,7 +467,11 @@ pub fn run(cli: &Cli) -> Result<()> {
     let metrics = Metrics {
         reads,
         matched,
-        hit_rate_pct: if reads > 0 { 100.0 * matched as f64 / reads as f64 } else { 0.0 },
+        hit_rate_pct: if reads > 0 {
+            100.0 * matched as f64 / reads as f64
+        } else {
+            0.0
+        },
         distinct_genes_hit: genes_hit.len(),
     };
     if let Some(path) = &cli.metrics {
@@ -604,7 +644,10 @@ ENSG2,SHORT,p2,TRUE,spliced,GENE2
         let genes = vec![("ENSG1", "GENE1"), ("ENSG2", "GENE2")];
         establish_genes_manifest(&out, &genes).unwrap();
         let text = fs::read_to_string(&out).unwrap();
-        assert_eq!(text, "ENSG1\tGENE1\tGene Expression\nENSG2\tGENE2\tGene Expression\n");
+        assert_eq!(
+            text,
+            "ENSG1\tGENE1\tGene Expression\nENSG2\tGENE2\tGene Expression\n"
+        );
         establish_genes_manifest(&out, &genes).unwrap(); // idempotent
     }
 
@@ -621,7 +664,8 @@ ENSG2,SHORT,p2,TRUE,spliced,GENE2
         let probe_csv = write_csv(REAL_SHAPE);
         let dir = tempfile::tempdir().unwrap();
         let fastq_path = dir.path().join("r2.fastq");
-        let matched_seq = read_with_probe_at(DEFAULT_PROBE_SEQ_OFFSET, b"AAAACCCCGGGGTTTTACGTACGTA");
+        let matched_seq =
+            read_with_probe_at(DEFAULT_PROBE_SEQ_OFFSET, b"AAAACCCCGGGGTTTTACGTACGTA");
         let unmatched_seq = vec![b'A'; 120];
         let mut fastq = File::create(&fastq_path).unwrap();
         writeln!(
@@ -632,7 +676,11 @@ ENSG2,SHORT,p2,TRUE,spliced,GENE2
         writeln!(fastq, "{}", String::from_utf8_lossy(&matched_seq)).unwrap();
         writeln!(fastq, "+").unwrap();
         writeln!(fastq, "{}", "I".repeat(matched_seq.len())).unwrap();
-        writeln!(fastq, "@read2\tCR:Z:TTTTGGGGCCCC\tCB:Z:TTTTGGGGCCCC-1\tUR:Z:GGGGAAAACCCC\tUB:Z:GGGGAAAACCCC").unwrap();
+        writeln!(
+            fastq,
+            "@read2\tCR:Z:TTTTGGGGCCCC\tCB:Z:TTTTGGGGCCCC-1\tUR:Z:GGGGAAAACCCC\tUB:Z:GGGGAAAACCCC"
+        )
+        .unwrap();
         writeln!(fastq, "{}", String::from_utf8_lossy(&unmatched_seq)).unwrap();
         writeln!(fastq, "+").unwrap();
         writeln!(fastq, "{}", "I".repeat(unmatched_seq.len())).unwrap();
@@ -653,7 +701,8 @@ ENSG2,SHORT,p2,TRUE,spliced,GENE2
         run(&cli).unwrap();
 
         assert!(genes_out.exists());
-        let metrics: serde_json::Value = serde_json::from_str(&fs::read_to_string(&metrics_path).unwrap()).unwrap();
+        let metrics: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&metrics_path).unwrap()).unwrap();
         assert_eq!(metrics["reads"], 2);
         assert_eq!(metrics["matched"], 1);
 

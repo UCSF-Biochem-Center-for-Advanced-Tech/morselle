@@ -388,12 +388,21 @@ mod tests {
         // too, so an implicit trigger would silently mass-reject non-Flex
         // reads. --flex is the only thing that may turn this on.
         assert!(!parse(&[]).extract_cfg().flex_r2_boundary);
-        assert!(!parse(&["--minimap2", "--probe-barcode-whitelist", "wl.txt"])
-            .extract_cfg()
-            .flex_r2_boundary);
+        assert!(
+            !parse(&["--minimap2", "--probe-barcode-whitelist", "wl.txt"])
+                .extract_cfg()
+                .flex_r2_boundary
+        );
         assert!(parse(&["--flex"]).extract_cfg().flex_r2_boundary);
-        assert!(parse(&["--flex", "--minimap2", "--probe-barcode-whitelist", "wl.txt"])
+        assert!(
+            parse(&[
+                "--flex",
+                "--minimap2",
+                "--probe-barcode-whitelist",
+                "wl.txt"
+            ])
             .extract_cfg()
-            .flex_r2_boundary);
+            .flex_r2_boundary
+        );
     }
 }
