@@ -262,14 +262,12 @@ enough to quote on its own.
 
 - Where real wall-clock actually goes across `molecules`' own phases
   (`evidence` collection / `umi_correct` / `molecule_aggregate` / final BAM
-  write) — the binary's phase-boundary log lines (`[sbxpress molecules]
-  phase=...` in `cp1/logs/molecules_L{1,2}.log`) carry **no timestamps**,
-  only record/group counts, so phase *order* is confirmed but real
-  per-phase *duration* — and therefore a real I/O-vs-algorithm-time split —
-  is not yet extractable from existing logs. Needs the binary's `eprintln!`
-  phase lines instrumented with real elapsed-time-since-start before the
-  next run, then a fresh run (L2 is the cheap, known-good, real-concurrency
-  target) to capture it.
+  write) — **instrumented 2026-09-20.** Every molecule stderr phase/progress
+  line now keeps its existing fields and appends `elapsed_secs=<seconds>`
+  from one shared run-relative clock, including interleaved concurrent-shard
+  work. A fresh, uncontended L2 run is now needed to capture and compare
+  those phase durations; old CP1 logs remain order-only because they predate
+  this instrumentation.
 - Whether `--shards 8` is actually a good choice for wall-clock (it was
   chosen for a real memory constraint — see the OOM finding above — not
   profiled for speed); a real per-shard timing breakdown (once phase
@@ -282,20 +280,24 @@ enough to quote on its own.
   baseline's 10,178.0s, only ~7.3% faster (1.08x)**
   (`molecules/L2_gex_shardtest_s16c12.bam.metrics.json`), far short of what
   "8 of 512 cores busy" would predict if shard-concurrency alone were the
-  bottleneck. **This points at `collect_evidence`'s single-threaded-per-shard
-  hot loop (confirmed serial in the source, see the design-considerations
-  section above) as the real remaining constraint** — more/smaller
-  concurrent shards doesn't parallelize the work *inside* each shard's own
-  evidence-collection pass, so widening `--shards`/`--shard-concurrency`
-  further is likely to keep giving diminishing returns. Real next step:
-  parallelize `collect_evidence` itself (round-robin sub-split each shard's
-  input at `collate()` time, read the sub-chunks concurrently, merge with
-  the already-existing, already-tested `merge_evidence_maps`) rather than
-  continuing to tune shard/concurrency counts alone. Minor caveat on this
-  comparison: the test run's metrics show a `no_sample_records` counter the
-  original L2 run's metrics didn't have (codebase evolved between the two
-  runs, unrelated to this test) — accounts for the small
-  `eligible_records` difference between the two, not the timing gap.
+  bottleneck. This identified `collect_evidence`'s single-threaded-per-shard
+  hot loop as the real remaining constraint. **Implemented 2026-09-20:**
+  `sbx10x-molecules --shard-split N` now round-robins each logical shard's
+  collated records into N physical sub-chunks, scans those sub-chunks in
+  parallel, and uses the existing remap/merge path to produce the identical
+  logical evidence map. This is deliberately independent of
+  `--shards`/`--shard-concurrency`: the maximum evidence-scan width is their
+  product, so it must be sized against real CPU and memory headroom.
+  `shard_split=1` preserves the former one-file-per-shard layout exactly.
+  Unit coverage verifies both balanced routing (including concurrent
+  `collate` readers) and identical evidence/decisions for split versus
+  unsplit input. What remains is an uncontended production-scale timing run
+  to quantify the improvement; the one real-scale run so far was confounded
+  by an unrelated concurrent job on the shared NFS mount. Minor caveat on
+  the original shard-count comparison: the test run's metrics show a
+  `no_sample_records` counter the baseline did not (an unrelated codebase
+  evolution), accounting for its small `eligible_records` difference but
+  not the timing gap.
 - Why Cell Ranger's own L1 vs. L2 `ALIGN_AND_COUNT` times differ 12.2x for
   only 1.35x more input reads (caveat 2 above) — real prerequisite for
   trusting either Cell Ranger figure as a baseline; check `_perf`'s
@@ -308,3 +310,105 @@ enough to quote on its own.
   serialized phases, lock contention) — real `/usr/bin/time -v` or a
   sampling profiler (see `PROFILING.md`) on a `molecules` run would settle
   this rather than guessing from aggregate numbers alone.
+
+## `sbxpress pipeline` orchestrator: real 5-shard validation, 2026-09-20 — handoff, stopped mid-investigation
+
+Real end-of-session state, so a fresh session can pick this up cold. All
+work below sits **uncommitted on the `pipeline-orchestrator` branch**
+(on top of commit `6c4357f`) — do not assume it's saved anywhere else.
+
+**Goal**: validate `sbxpress pipeline` (built this session) against the
+existing shell-script pipeline shape, on 5 real raw FASTQ shards
+(`raw_fastqs/*-00000{1..5}.fastq.gz`), before trusting it for a real CP1-CP4
+rerun. Test harness and both paths' full output live at
+`/mnt/analysis/active_projects/roche_SBX_ABRF/CAT06/orchestrator_validation_5shard/`
+(`shell/` = shell-script-style path, `pipeline/` = orchestrator path;
+`compare.log`/`A_*.log`/`B_pipeline.log` have the real timestamped logs).
+
+**One real, systemic bug found and fixed this session (applied, tests
+pass, not committed)**: every binary in this tree except `sbx10x-annotate`
+let `tracing`'s log output default to **stdout** instead of stderr. This
+silently corrupted `sbx10x --print-manifest`'s JSON (a log line landed
+ahead of the JSON on the same stream), breaking the orchestrator's manifest
+fetch. Fixed in `src/main.rs` and `src/bin/{cr-bam-to-mtx,sbxpress-guides,
+sbxpress-probe-demux,sbxpress-probeset-align,sbxpress-protospacer-call,
+sbx10x-molecules}.rs` — all now route to stderr via `.with_writer(std::io::stderr)`,
+matching `sbx10x-annotate.rs`'s existing (correct) pattern. Also added the
+missing `--molecule-shard-split` CLI flag to the orchestrator (it predated
+`--shard-split`'s existence and was never wired up) — real, needed for the
+`--shard-split` win to actually apply when using `sbxpress pipeline`.
+
+**Path A (shell-script style) succeeded end to end**: extract 774.7s →
+align ~347s → molecules 964.1s = **2177s total**, real numbers, real output.
+This is the trustworthy baseline for the next attempt.
+
+**Path B (orchestrator), after the tracing fix, got further but surfaced
+two more real, unresolved problems — investigation stopped here, pick up
+fresh:**
+
+1. **CRISPR/feature molecules invocation crashes on real multi-chunk
+   input.** `src/orchestrator.rs`'s `other_bams`/"molecules (feature/CRISPR)"
+   block (the one building `args` for `sbx10x-molecules ... --tagseq`, no
+   `--shards`/`--shard-concurrency` passed at all — noted as a real gap
+   earlier this session but not fixed) defaults to `--shards 1`. That's fine
+   for a single CRI file but this run had **24** CRI-routed chunks, and
+   `sbx10x-molecules`'s non-sharded path only accepts one input — real
+   crash: `multiple input BAMs are only supported with --shards > 1 (got 24
+   inputs, --shards 1)`. **Fix is straightforward and already has a working
+   template two lines above it**: mirror the GEX block's `--shards`/
+   `--shard-concurrency`/`--shard-split` wiring (same `shards`/`concurrency`/
+   `cli.molecule_shard_split` variables already in scope). Not yet done.
+
+2. **Much bigger, unexplained, and the real priority for next session:**
+   GEX molecules' own metrics show a massive, unexplained gap between the
+   two paths for what should be equivalent input:
+   | | Path A (shell) | Path B (orchestrator) |
+   |---|---|---|
+   | records | 85,601,730 | 88,563,919 |
+   | eligible_records | **70,073,891 (82%)** | **2,481,511 (2.8%)** |
+   | molecules_counted | 69,660,540 | 2,472,428 |
+
+   Record counts are close (B has ~3M more, plausibly explained by B's
+   manifest routing "Undetermined" chunks to GEX by default — 12 extra
+   chunks A's script never fed to `probeset-align` at all, a real, separate,
+   smaller discrepancy worth resolving on its own). **But the eligible-rate
+   collapse from 82% to 2.8% is not explained by that** — Undetermined
+   reads being low-quality wouldn't drag the *entire* population down this
+   far given they're a minority of the input.
+   
+   One concrete, un-investigated clue at the point this session stopped:
+   the *same-named* aligned chunk file is a wildly different size between
+   the two paths —
+   `pipeline/aligned/TSeq100_L1_GEX_S1_L001_R2_001.bam` is **686MB**,
+   `shell/aligned/TSeq100_L1_GEX_S1_L001_R2_001.bam` is **225MB** — a ~3x
+   size difference for what should be the same chunk of the same raw input
+   run through the same `sbxpress-probeset-align` binary with the same
+   `--probe-set`. This was the very next thing to investigate (`samtools
+   view` both, compare read counts/CB/GX tag presence directly) when the
+   session was stopped — **do this first**. Real candidate causes to check,
+   none confirmed yet: (a) the orchestrator's align invocation passing
+   different/fewer/extra flags to `sbxpress-probeset-align`/`sbxpress-guides`
+   than the manual `xargs` loop in `compare.log`'s Path A used (compare
+   `run_extract_align_materialize`'s exact spawned args against
+   `A_align.log`'s), (b) the extra "Undetermined" chunks somehow being
+   miscounted into the wrong sample bucket, (c) something in the
+   `--no-gzip`/materialize path corrupting or duplicating records between
+   `extract` and `align` that a size difference this large would be
+   consistent with. **Not yet root-caused — do not trust `sbxpress
+   pipeline`'s molecule counts until this is understood and fixed.**
+
+**Real, trustworthy result from earlier today, unaffected by the above**:
+`--shard-split 8` on top of `--shards 16 --shard-concurrency 12`, run
+directly via `sbx10x-molecules` (not through the orchestrator), clean
+uncontended box: **9,430.0s → 8,340.5s, ~11.6% faster**, byte-identical
+aggregate metrics. This result stands regardless of the orchestrator issues
+above.
+
+**Next session should, in order**: (1) `samtools view` both
+`TSeq100_L1_GEX_S1_L001_R2_001.bam` copies and diff real read/tag content to
+root-cause the eligible-rate collapse — this blocks trusting any
+orchestrator-produced molecule counts; (2) fix the CRISPR/feature
+`--shards` wiring gap (small, mechanical, template already exists); (3) once
+both are fixed, rerun this same 5-shard comparison clean before considering
+a real CP1 run; (4) only then revisit the original ask (rerun CP1-CP4 with
+all changes).

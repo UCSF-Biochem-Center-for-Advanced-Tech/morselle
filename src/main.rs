@@ -14,8 +14,15 @@ fn main() -> Result<()> {
     };
     cli.params.apply_presets();
 
-    // Logging: respect RUST_LOG, default to info.
+    // Logging: respect RUST_LOG, default to info. Keep all human-readable
+    // logging on stderr -- `--print-manifest` writes machine-readable JSON
+    // to stdout, and any log line landing on the same stream silently
+    // corrupts it for a consumer expecting clean JSON (real bug found this
+    // session: `sbxpress pipeline`'s manifest fetch failed to parse because
+    // a `demux mode resolved` INFO line was mixed into stdout ahead of the
+    // JSON -- this file was the one binary in the tree missing this).
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )

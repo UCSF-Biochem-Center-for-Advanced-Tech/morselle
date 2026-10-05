@@ -77,6 +77,7 @@ fn base_cli(out_dir: &Path, probe_set: &Path) -> Cli {
         split: 1,
         molecule_shards: 0,
         molecule_shard_concurrency: 0,
+        molecule_shard_split: 1,
         materialize_extract: false,
         keep_intermediates: false,
         resumable: false,

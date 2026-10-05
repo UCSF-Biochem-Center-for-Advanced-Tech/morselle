@@ -4,7 +4,7 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicU64, AtomicUsize, Ordering},
-    Arc, Mutex,
+    Arc, Mutex, OnceLock,
 };
 use std::time::Instant;
 
@@ -15,6 +15,34 @@ use rayon::prelude::*;
 use rust_htslib::bam::{self, record::Aux, Read};
 use serde::Serialize;
 use tracing::info;
+
+/// Run-relative baseline shared by every phase log, including work running in
+/// shard and rayon worker threads. `main()` initializes it immediately after
+/// argument parsing; the lazy fallback keeps lower-level helpers usable in
+/// unit tests without a separate test-only setup path.
+static PHASE_STARTED: OnceLock<Instant> = OnceLock::new();
+
+fn start_phase_timing() {
+    let _ = PHASE_STARTED.set(Instant::now());
+}
+
+fn phase_elapsed_secs() -> f64 {
+    PHASE_STARTED.get_or_init(Instant::now).elapsed().as_secs_f64()
+}
+
+// Every stderr message in this binary is a phase/progress message. Keep the
+// existing stable prefix and fields intact for log parsers, then append a
+// shared elapsed clock that makes phase durations calculable from adjacent
+// lines, including interleaved concurrent-shard work.
+macro_rules! eprintln {
+    ($($arg:tt)*) => {{
+        ::std::eprintln!(
+            "{} elapsed_secs={:.3}",
+            format_args!($($arg)*),
+            phase_elapsed_secs(),
+        );
+    }};
+}
 
 #[derive(Debug, Parser)]
 #[command(
@@ -1965,7 +1993,12 @@ fn validate_cli(cli: &Cli) -> Result<()> {
 }
 
 fn main() -> Result<()> {
+    // Keep human-readable logging off stdout -- consistent with every other
+    // binary in this tree (see PIPELINE_NOTES.md/main.rs for the real bug
+    // this fixed: a log line landing on stdout silently corrupted a
+    // consumer expecting clean output on that stream).
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
     let cli = if std::env::var_os("SBXPRESS_DISPATCH").is_some() {
@@ -1977,6 +2010,7 @@ fn main() -> Result<()> {
         bail!("input and output BAM must differ");
     }
     let started = Instant::now();
+    start_phase_timing();
     let mut metrics = Metrics {
         input_bam: cli
             .bam

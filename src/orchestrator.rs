@@ -107,6 +107,17 @@ pub struct Cli {
     #[arg(long, default_value_t = 0)]
     pub molecule_shard_concurrency: usize,
 
+    /// `sbx10x-molecules --shard-split`: parallelizes evidence collection
+    /// within each shard instead of reading it on a single thread. 1 =
+    /// today's behavior, unchanged (matches `sbx10x-molecules`'s own
+    /// default). Real measured win on a production-scale run: ~12% faster
+    /// (`--shards 16 --shard-concurrency 12`: 9,430.0s -> 8,340.5s at
+    /// `--shard-split 8`, byte-identical output, see `PIPELINE_NOTES.md`) —
+    /// not auto-derived like `--molecule-shards` since it has only one real
+    /// data point so far; pass it explicitly.
+    #[arg(long, default_value_t = 1)]
+    pub molecule_shard_split: usize,
+
     /// Force real materialized (gzip or plain) intermediates for the
     /// extract->align hop instead of FIFO streaming, even when the resource
     /// budget would allow streaming. Debugging/inspection use case.
@@ -823,7 +834,9 @@ fn run_extract_align_molecules_stream(
                 .arg("--shard-concurrency")
                 .arg(concurrency.max(1).to_string())
                 .arg("--collate-workers")
-                .arg(fifos.len().max(1).to_string());
+                .arg(fifos.len().max(1).to_string())
+                .arg("--shard-split")
+                .arg(cli.molecule_shard_split.max(1).to_string());
             if tagseq {
                 cmd.arg("--tagseq");
             }
@@ -1187,6 +1200,8 @@ fn run_inner(
             args.push(shards.to_string());
             args.push("--shard-concurrency".into());
             args.push(concurrency.to_string());
+            args.push("--shard-split".into());
+            args.push(cli.molecule_shard_split.max(1).to_string());
             run_simple_stage(&sbx10x_molecules, &args, "molecules:gex", progress)?;
             gex_molecules = Some(out);
         }
