@@ -446,6 +446,27 @@ fn ascii(value: &str, field: &str) -> Result<VarLenAscii> {
         .with_context(|| format!("{field} contains a non-ASCII or NUL character: {value:?}"))
 }
 
+/// Writes a 1-D `u32` dataset with deflate compression, chunked to cover
+/// the whole array in one chunk -- except when `values` is empty, where
+/// chunking/compression are skipped entirely (HDF5 rejects any chunk shape
+/// exceeding the real data extent, and there's nothing to compress in an
+/// empty array anyway). See `write_h5`'s call sites for the real case this
+/// guards: a per-sample CRISPR matrix with no cells surviving cell-barcode
+/// filtering produces genuinely empty `data`/`indices`/`indptr` arrays.
+fn write_sparse_column(group: &hdf5::Group, values: &[u32], name: &str) -> Result<()> {
+    if values.is_empty() {
+        group.new_dataset_builder().with_data(values).create(name)?;
+    } else {
+        group
+            .new_dataset_builder()
+            .with_data(values)
+            .chunk(values.len())
+            .deflate(1)
+            .create(name)?;
+    }
+    Ok(())
+}
+
 /// Write the standard 10x CSC HDF5 feature-barcode matrix alongside the MEX
 /// directory. The barcode-major BTreeMap is already in CSC traversal order.
 pub(crate) fn write_h5(matrix: &Matrix, path: &Path, genome: &str) -> Result<()> {
@@ -501,21 +522,21 @@ pub(crate) fn write_h5(matrix: &Matrix, path: &Path, genome: &str) -> Result<()>
         .new_dataset_builder()
         .with_data(&barcodes)
         .create("barcodes")?;
-    group
-        .new_dataset_builder()
-        .with_data(&data)
-        .deflate(1)
-        .create("data")?;
-    group
-        .new_dataset_builder()
-        .with_data(&indices)
-        .deflate(1)
-        .create("indices")?;
-    group
-        .new_dataset_builder()
-        .with_data(&indptr)
-        .deflate(1)
-        .create("indptr")?;
+    // HDF5 requires an explicit chunk shape whenever a filter (deflate) is
+    // applied -- the crate's own auto-chunk inference can't cope with small
+    // arrays (real case: a per-sample CRISPR matrix with only 2 guide
+    // features produces a tiny sparse `data`/`indices`/`indptr`, which hit
+    // "Chunking required when filters are present" on every sample here
+    // even though real molecules existed upstream). One chunk covering the
+    // whole (small, per-sample) array is simple and safe -- but a chunk
+    // shape must never exceed the real data extent, so a genuinely-empty
+    // array (a real case too: a sample with zero real CRISPR signal after
+    // cell-barcode filtering) skips chunking/compression entirely instead
+    // of requesting a chunk of 1 against an extent of 0, which HDF5 also
+    // rejects ("Chunk dimensions ([1]) exceed data shape ((0,))").
+    write_sparse_column(&group, &data, "data")?;
+    write_sparse_column(&group, &indices, "indices")?;
+    write_sparse_column(&group, &indptr, "indptr")?;
     group
         .new_dataset_builder()
         .with_data(&shape)
