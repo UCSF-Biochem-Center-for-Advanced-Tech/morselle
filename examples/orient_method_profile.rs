@@ -11,7 +11,10 @@ use sbx10x::orient::{orient, FallbackMode, OrientCfg, OrientMethod};
 
 fn main() -> anyhow::Result<()> {
     let fastqs: Vec<String> = env::args().skip(1).collect();
-    anyhow::ensure!(!fastqs.is_empty(), "usage: orient_method_profile <fastq> [...]");
+    anyhow::ensure!(
+        !fastqs.is_empty(),
+        "usage: orient_method_profile <fastq> [...]"
+    );
 
     let ocfg = OrientCfg {
         cb_len: 16,
@@ -28,6 +31,7 @@ fn main() -> anyhow::Result<()> {
         trim_tso: false,
         max_r2_len: 0,
         flex_r2_boundary: false,
+        flex_min_cdna_len_no_anchor: 65,
     };
 
     let mut n = 0u64;
@@ -76,18 +80,36 @@ fn main() -> anyhow::Result<()> {
     println!("reads: {n}");
     let p = |x: u64| 100.0 * x as f64 / n.max(1) as f64;
     println!("\n--- orient() method ---");
-    println!("Homopolymer (real T/A run found): {homopolymer:>10} ({:.1}%)", p(homopolymer));
-    println!("TailFallback (no run; R1-tail scan instead): {tail_fallback:>10} ({:.1}%)", p(tail_fallback));
-    println!("LevenshteinFallback: {levenshtein:>10} ({:.1}%)", p(levenshtein));
+    println!(
+        "Homopolymer (real T/A run found): {homopolymer:>10} ({:.1}%)",
+        p(homopolymer)
+    );
+    println!(
+        "TailFallback (no run; R1-tail scan instead): {tail_fallback:>10} ({:.1}%)",
+        p(tail_fallback)
+    );
+    println!(
+        "LevenshteinFallback: {levenshtein:>10} ({:.1}%)",
+        p(levenshtein)
+    );
     println!("None (unoriented): {none:>10} ({:.1}%)", p(none));
 
     println!("\n--- extract()'s measured polyt_run_len, among oriented reads ---");
     println!("run_len == 0:   {run_len_0:>10} ({:.1}%)", p(run_len_0));
     println!("run_len 1-9:    {run_len_1_9:>10} ({:.1}%)", p(run_len_1_9));
-    println!("run_len 10-19:  {run_len_10_19:>10} ({:.1}%)", p(run_len_10_19));
-    println!("run_len 20+:    {run_len_20_plus:>10} ({:.1}%)", p(run_len_20_plus));
+    println!(
+        "run_len 10-19:  {run_len_10_19:>10} ({:.1}%)",
+        p(run_len_10_19)
+    );
+    println!(
+        "run_len 20+:    {run_len_20_plus:>10} ({:.1}%)",
+        p(run_len_20_plus)
+    );
     if run_len_n > 0 {
-        println!("mean run_len (oriented reads): {:.2}", run_len_sum as f64 / run_len_n as f64);
+        println!(
+            "mean run_len (oriented reads): {:.2}",
+            run_len_sum as f64 / run_len_n as f64
+        );
     }
 
     Ok(())

@@ -125,9 +125,10 @@ fn bench_hamming_index(c: &mut Criterion) {
     c.bench_function("hamming_index/exact_get_384_entries_mm1", |b| {
         b.iter(|| black_box(index.get(black_box(&query))))
     });
-    c.bench_function("hamming_index/find_windowed_384_entries_mm1_window10", |b| {
-        b.iter(|| black_box(index.find_windowed(black_box(&haystack), Some(17), 10, 10)))
-    });
+    c.bench_function(
+        "hamming_index/find_windowed_384_entries_mm1_window10",
+        |b| b.iter(|| black_box(index.find_windowed(black_box(&haystack), Some(17), 10, 10))),
+    );
 }
 
 fn bench_probe_barcode_locate(c: &mut Criterion) {

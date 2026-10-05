@@ -77,11 +77,7 @@ pub fn min_pairwise_hamming(sheet: &SampleSheet, source: IndexSource) -> u32 {
     let mut min_dist = u32::MAX;
     for i in 0..seqs.len() {
         for j in (i + 1)..seqs.len() {
-            let d = seqs[i]
-                .iter()
-                .zip(seqs[j])
-                .filter(|(a, b)| a != b)
-                .count() as u32;
+            let d = seqs[i].iter().zip(seqs[j]).filter(|(a, b)| a != b).count() as u32;
             min_dist = min_dist.min(d);
         }
     }
@@ -146,10 +142,16 @@ impl Demuxer {
 
         let resolved_mode = match cfg.mode {
             Some(DemuxMode::I5) if !i5_safe => bail!(unsafe_single_index_msg(
-                DemuxMode::I5, i5_dist, cfg.index_max_mm, required
+                DemuxMode::I5,
+                i5_dist,
+                cfg.index_max_mm,
+                required
             )),
             Some(DemuxMode::I7) if !i7_safe => bail!(unsafe_single_index_msg(
-                DemuxMode::I7, i7_dist, cfg.index_max_mm, required
+                DemuxMode::I7,
+                i7_dist,
+                cfg.index_max_mm,
+                required
             )),
             Some(explicit) => explicit,
             None if i5_safe && i7_safe => DemuxMode::Dual,
@@ -226,20 +228,28 @@ impl Demuxer {
     /// only one index was ever consulted.
     fn solo(sample: Option<usize>, via: DemuxVia) -> Outcome {
         match sample {
-            Some(x) => Outcome { sample: Some(x), via },
-            None => Outcome { sample: None, via: DemuxVia::None },
+            Some(x) => Outcome {
+                sample: Some(x),
+                via,
+            },
+            None => Outcome {
+                sample: None,
+                via: DemuxVia::None,
+            },
         }
     }
 
     /// Assign a read from its (optional) i5/i7 read-region slices (fixed frame).
     pub fn assign(&self, i5_region: Option<&[u8]>, i7_region: Option<&[u8]>) -> Outcome {
         match self.resolved_mode {
-            DemuxMode::I5 => {
-                Self::solo(i5_region.and_then(|r| self.i5_index.get(r)), DemuxVia::I5Only)
-            }
-            DemuxMode::I7 => {
-                Self::solo(i7_region.and_then(|r| self.i7_index.get(r)), DemuxVia::I7Only)
-            }
+            DemuxMode::I5 => Self::solo(
+                i5_region.and_then(|r| self.i5_index.get(r)),
+                DemuxVia::I5Only,
+            ),
+            DemuxMode::I7 => Self::solo(
+                i7_region.and_then(|r| self.i7_index.get(r)),
+                DemuxVia::I7Only,
+            ),
             DemuxMode::Dual | DemuxMode::Both => {
                 let a5 = i5_region.and_then(|r| self.i5_index.get(r));
                 let a7 = i7_region.and_then(|r| self.i7_index.get(r));
@@ -259,16 +269,22 @@ impl Demuxer {
     ) -> Outcome {
         match self.resolved_mode {
             DemuxMode::I5 => Self::solo(
-                self.i5_index.find_windowed(seq, i5_start, self.index_len, window),
+                self.i5_index
+                    .find_windowed(seq, i5_start, self.index_len, window),
                 DemuxVia::I5Only,
             ),
             DemuxMode::I7 => Self::solo(
-                self.i7_index.find_windowed(seq, i7_start, self.index_len, window),
+                self.i7_index
+                    .find_windowed(seq, i7_start, self.index_len, window),
                 DemuxVia::I7Only,
             ),
             DemuxMode::Dual | DemuxMode::Both => {
-                let a5 = self.i5_index.find_windowed(seq, i5_start, self.index_len, window);
-                let a7 = self.i7_index.find_windowed(seq, i7_start, self.index_len, window);
+                let a5 = self
+                    .i5_index
+                    .find_windowed(seq, i5_start, self.index_len, window);
+                let a7 = self
+                    .i7_index
+                    .find_windowed(seq, i7_start, self.index_len, window);
                 self.combine(a5, a7)
             }
         }
@@ -332,7 +348,10 @@ mod tests {
     /// Auto-resolves to `Dual` on the real fixture (both i5 and i7 are
     /// standalone-safe there -- see `real_fixture_min_pairwise_hamming_matches_doc_comment`).
     fn cfg() -> DemuxCfg {
-        DemuxCfg { index_max_mm: 1, mode: None }
+        DemuxCfg {
+            index_max_mm: 1,
+            mode: None,
+        }
     }
 
     #[test]
@@ -365,7 +384,10 @@ mod tests {
         let sh = sheet();
         let d = Demuxer::new(
             &sh,
-            DemuxCfg { index_max_mm: 1, mode: Some(DemuxMode::I5) },
+            DemuxCfg {
+                index_max_mm: 1,
+                mode: Some(DemuxMode::I5),
+            },
         )
         .unwrap();
         let m2 = sh.samples.iter().position(|s| s.id == "M2_GEX").unwrap();
@@ -385,7 +407,10 @@ mod tests {
         // must be refused, not silently allowed.
         let result = Demuxer::new(
             &sh,
-            DemuxCfg { index_max_mm: 2, mode: Some(DemuxMode::I5) },
+            DemuxCfg {
+                index_max_mm: 2,
+                mode: Some(DemuxMode::I5),
+            },
         );
         assert!(result.is_err());
     }
@@ -434,8 +459,14 @@ mod tests {
     #[test]
     fn both_mode_requires_agreement_rejects_lone_i5() {
         let sh = sheet();
-        let d = Demuxer::new(&sh, DemuxCfg { index_max_mm: 1, mode: Some(DemuxMode::Both) })
-            .unwrap();
+        let d = Demuxer::new(
+            &sh,
+            DemuxCfg {
+                index_max_mm: 1,
+                mode: Some(DemuxMode::Both),
+            },
+        )
+        .unwrap();
         let o = d.assign(Some(&revcomp(b"TACGATCAAG")), None);
         assert_eq!(o.sample, None);
     }
@@ -443,8 +474,14 @@ mod tests {
     #[test]
     fn both_mode_assigns_on_real_agreement() {
         let sh = sheet();
-        let d = Demuxer::new(&sh, DemuxCfg { index_max_mm: 1, mode: Some(DemuxMode::Both) })
-            .unwrap();
+        let d = Demuxer::new(
+            &sh,
+            DemuxCfg {
+                index_max_mm: 1,
+                mode: Some(DemuxMode::Both),
+            },
+        )
+        .unwrap();
         let m2 = sh.samples.iter().position(|s| s.id == "M2_GEX").unwrap();
         let o = d.assign(Some(&revcomp(b"TACGATCAAG")), Some(b"TGTAGTCATT"));
         assert_eq!(o.sample, Some(m2));
@@ -456,7 +493,14 @@ mod tests {
         // Real fixture: i5 min=4, i7 min=3. At index_max_mm=1 (required=3),
         // both are individually safe, so auto must pick Dual.
         let sh = sheet();
-        let d = Demuxer::new(&sh, DemuxCfg { index_max_mm: 1, mode: None }).unwrap();
+        let d = Demuxer::new(
+            &sh,
+            DemuxCfg {
+                index_max_mm: 1,
+                mode: None,
+            },
+        )
+        .unwrap();
         assert_eq!(d.resolved_mode(), DemuxMode::Dual);
     }
 
@@ -466,7 +510,14 @@ mod tests {
         // (4) nor i7 (3) clears that margin alone, so auto must fall back
         // to Both -- the only mode still safe by construction.
         let sh = sheet();
-        let d = Demuxer::new(&sh, DemuxCfg { index_max_mm: 2, mode: None }).unwrap();
+        let d = Demuxer::new(
+            &sh,
+            DemuxCfg {
+                index_max_mm: 2,
+                mode: None,
+            },
+        )
+        .unwrap();
         assert_eq!(d.resolved_mode(), DemuxMode::Both);
     }
 
