@@ -1,5 +1,8 @@
 # sbxpress presentation brief and planning guide
 
+> **Status**: 🟢 **Tracked in Priority 3 of [FUTURE_ROADMAP.md](FUTURE_ROADMAP.md)**. Core slide deck and presentation scripts (`scripts/build_presentation.py`, `scripts/bam_audit_report.py`) are present in the repository; automated reporting integration with `scripts/sbxpress-pipeline.sh` outputs is tracked in the master roadmap.
+
+
 ## Purpose
 
 Prepare a technical presentation describing **sbxpress**: a transparent,

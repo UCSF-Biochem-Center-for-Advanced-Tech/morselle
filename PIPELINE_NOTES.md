@@ -1,6 +1,6 @@
 # Pipeline resource & architecture notes
 
-> **Status**: 🟡 **`probeset-align` multi-threading completed in v0.5.3** and **`scripts/sbxpress-pipeline.sh` completed in v0.5.4**. `(cell, sample)` sharded RAM bounding for `sbx10x-molecules` is tracked in Priority 1 of [FUTURE_ROADMAP.md](FUTURE_ROADMAP.md).
+> **Status**: 🟡 **`probeset-align` multi-threading completed in v0.5.3**, **`scripts/sbxpress-pipeline.sh` completed in v0.5.4**, and **master roadmap consolidated in v0.5.6**. `(cell, sample)` sharded RAM bounding for `sbx10x-molecules` is tracked in Priority 1 of [FUTURE_ROADMAP.md](FUTURE_ROADMAP.md).
 
 Real, measured operational findings from running the full CAT06 pipeline
 (extract → probeset-align/guides → samtools cat → samtools sort/index →

@@ -1,6 +1,6 @@
 # Flex Probe-Barcode + CRISPR Guide Capture Support for `sbxpress`
 
-> **Status**: 🟢 **Completed in v0.5.0 – v0.5.5**. All phases (Probe Demux, Feature Capture, GMM Protospacer Calling, Probe-Set Alignment, Rayon Multi-Threading, Integration Tests, Unified Pipeline Script, Microbenchmarks) are delivered and verified. See [FUTURE_ROADMAP.md](FUTURE_ROADMAP.md) for master tracking.
+> **Status**: 🟢 **Completed in v0.5.0 – v0.5.6**. All phases (Probe Demux, Feature Capture, GMM Protospacer Calling, Probe-Set Alignment, Rayon Multi-Threading, Integration Tests, Unified Pipeline Script, Microbenchmarks, Master Roadmap Consolidation) are delivered and verified. See [FUTURE_ROADMAP.md](FUTURE_ROADMAP.md) for master tracking.
 
 ## Context
 
