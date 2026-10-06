@@ -17,6 +17,7 @@ use sbx10x::extract::{extract, ExtractCfg};
 use sbx10x::hamming_index::HammingIndex;
 use sbx10x::orient::{orient, FallbackMode, OrientCfg};
 use sbx10x::probe_barcode::ProbeWhitelist;
+use sbx10x::probe_set::{Probe, ProbeMatcher};
 
 fn orient_cfg() -> OrientCfg {
     OrientCfg {
@@ -188,11 +189,39 @@ fn bench_cb_whitelist_classify(c: &mut Criterion) {
     });
 }
 
+fn bench_probeset_align_matcher(c: &mut Criterion) {
+    let probes = vec![
+        Probe {
+            gene_id: "ENSG00000000001".into(),
+            gene_name: "GENE1".into(),
+            probe_id: "p1".into(),
+            region: "spliced".into(),
+            seq: b"AAAACCCCGGGGTTTTACGTACGTAAAACCCCGGGGTTTTACGTACGT01".to_vec(),
+        },
+        Probe {
+            gene_id: "ENSG00000000002".into(),
+            gene_name: "GENE2".into(),
+            probe_id: "p2".into(),
+            region: "spliced".into(),
+            seq: b"TTTTGGGGCCCCAAAATGCATGCATTTTTGGGGCCCCAAAATGCATGC02".to_vec(),
+        },
+    ];
+    let matcher = ProbeMatcher::build(&probes, 1, 15);
+    let mut read = vec![b'N'; 15];
+    read.extend_from_slice(b"AAAACCCCGGGGTTTTACGTACGTAAAACCCCGGGGTTTTACGTACGT01");
+    read.extend_from_slice(b"NNNNNNNNNN");
+
+    c.bench_function("probeset_align/probe_matcher_locate_exact", |b| {
+        b.iter(|| black_box(matcher.locate(black_box(&read))))
+    });
+}
+
 criterion_group!(
     benches,
     bench_orient_extract,
     bench_hamming_index,
     bench_probe_barcode_locate,
     bench_cb_whitelist_classify,
+    bench_probeset_align_matcher,
 );
 criterion_main!(benches);

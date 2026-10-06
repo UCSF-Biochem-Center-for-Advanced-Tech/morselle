@@ -68,7 +68,7 @@ pub struct Probe {
     pub gene_name: String,
     pub probe_id: String,
     pub region: String,
-    seq: Vec<u8>,
+    pub seq: Vec<u8>,
 }
 
 #[derive(Debug)]

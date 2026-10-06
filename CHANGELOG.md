@@ -6,6 +6,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.5] — 2026-10-06
+
+### Added
+- Expanded microbenchmark suite (`benches/pipeline_hot_paths.rs`) to cover `ProbeMatcher::locate` probe sequence alignment performance (740 ns/read throughput).
+
 ## [0.5.4] — 2026-10-06
 
 ### Added
