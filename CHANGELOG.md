@@ -6,6 +6,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.6] — 2026-10-06
+
+### Added
+- Consolidated master tracking roadmap `FUTURE_ROADMAP.md` organizing completed v0.3.3–v0.5.5 milestones and open future priorities (sharded RAM bounding for `molecules`, fractional UMI assignment, automated slide deck reporting).
+- Updated status headers across `FLEX_SUPPORT_PLAN.md`, `GENE_COLLISION_RESOLUTION_PLAN.md`, `OVERLAP_PLAN.md`, and `PIPELINE_NOTES.md` linking to `FUTURE_ROADMAP.md`.
+
 ## [0.5.5] — 2026-10-06
 
 ### Added

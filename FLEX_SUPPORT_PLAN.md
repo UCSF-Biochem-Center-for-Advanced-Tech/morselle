@@ -1,9 +1,6 @@
 # Flex Probe-Barcode + CRISPR Guide Capture Support for `sbxpress`
 
-> Handoff plan drafted 2026-09-14 in a `roche-SBX-ABRF-CAT06` planning session,
-> saved here (its intended implementation home) per the plan's own "Next step"
-> note. See the **Amendment** section at the end for review notes added the
-> same day before implementation started.
+> **Status**: 🟢 **Completed in v0.5.0 – v0.5.5**. All phases (Probe Demux, Feature Capture, GMM Protospacer Calling, Probe-Set Alignment, Rayon Multi-Threading, Integration Tests, Unified Pipeline Script, Microbenchmarks) are delivered and verified. See [FUTURE_ROADMAP.md](FUTURE_ROADMAP.md) for master tracking.
 
 ## Context
 

@@ -1,7 +1,6 @@
 # Illumina paired-end overlap + YC tag — implementation plan
 
-Branch: `feat/illumina-overlap` (off `main` @ `c906ca1`, independent of
-`feat/rapidgzip-parallel-input-decode`).
+> **Status**: 🟢 **Engine Completed in v0.3.7**. `sbxpress illumina --overlap` and `YC` duplex-consensus tagging are merged on `main`. Exporting insert-size distribution histograms is tracked in Priority 3 of [FUTURE_ROADMAP.md](FUTURE_ROADMAP.md).
 
 ## Purpose
 

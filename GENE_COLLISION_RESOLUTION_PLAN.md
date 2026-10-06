@@ -1,6 +1,6 @@
 # Gene-collision resolution for high-depth pooled samples — proposed statistical fix
 
-Status: **proposed, not implemented.** Pinned for later; no code changes made against this doc.
+> **Status**: 🟡 **Tracked in Priority 2 of [FUTURE_ROADMAP.md](FUTURE_ROADMAP.md)**. All-or-nothing bypass is implemented via `molecules --tagseq` (v0.3.8); statistical fractional resolution (`--fractional-collisions`) is tracked for future implementation.
 
 ## Background
 
