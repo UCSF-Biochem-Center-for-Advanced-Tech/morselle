@@ -1,16 +1,15 @@
 # sbxpress
 
-**Convert raw Roche SBX long reads into per-sample 10x R1/R2 FASTQs for 10x reference.**
+**Convert raw Roche SBX long reads and Illumina PE reads into per-sample 10x-style FASTQs and count matrices for 3′ GEX, 10x Flex, and CAT Tagseq.**
 
-For complete raw-SBX and Illumina-to-counts commands, including the shared
-minimap2/annotation/molecule/matrix/cell-calling path, see [MANUAL.md](MANUAL.md).
+For complete raw-SBX and Illumina-to-counts commands across 3′ GEX, 10x Flex, and CAT Tagseq workflows, see [MANUAL.md](MANUAL.md).
 
 Roche SBX sequences each library molecule end-to-end as one long read (P5→P7),
-so a 10x Single Cell Multiome **GEX** library comes off the instrument as full
+so single-cell **GEX**, **Flex**, or **Feature Barcoding** libraries come off the instrument as full
 molecules rather than the paired short reads 10x reference expects. `sbxpress` parses
-each molecule, recovers the cell barcode / UMI / cDNA, demultiplexes by sample
-index, and writes standard 10x-style **R1** (barcode+UMI) and **R2** (cDNA) FASTQ
-pairs that feed directly into the 10x reference count command.
+each molecule, recovers the cell barcode / UMI / cDNA / probe, demultiplexes by sample
+index, and writes standard 10x-style **R1** (barcode+UMI) and **R2** (cDNA/probe) FASTQ
+pairs or direct BAMs that feed downstream quantification pipelines.
 
 It is built for scale: a single multi-core node processes tens of billions of reads
 in well under two hours, and output is deterministic (identical inputs → byte-identical

@@ -189,3 +189,67 @@ sbxpress audit "$OUT/molecules/M2_GEX.molecules.coordinate.bam" \
 Use the same `--molecule-sample` value for every compared BAM. The JSON is an
 all-record summary; the TSV is a deterministic hash sample used for joinable
 cross-platform molecule comparisons.
+
+## 6. 10x Flex (Fixed RNA Profiling) pipeline
+
+10x Flex assays use fixed synthetic probe pairs rather than polyA-primed cDNA. Reads are assigned directly to probe sequences in the probe-set reference (`.csv`) rather than aligned to the genome.
+
+### Workflow overview
+
+1. **Probe Demultiplexing**: Assign cell barcodes to samples using `sbxpress probe-demux` with a probe barcode whitelist (e.g., `flex-v2-384.txt`) and sample configuration.
+2. **Probe-Set Alignment**: Align R2 reads against the probe-set reference using `sbxpress probeset-align` (which emits synthetic per-gene contig BAMs with `GX`/`GN` tags).
+3. **Molecules, Matrix & Cells**: Run standard downstream `sbxpress molecules`, `sbxpress matrix`, and `sbxpress cells`.
+
+### Example Command Sequence
+
+```bash
+# 1. Demultiplex probe barcodes across samples
+sbxpress probe-demux \
+  --r2-fastq "$OUT/extract/sample_R2.fastq.gz" \
+  --probe-barcode-wl "$REF/flex-v2-384.txt" \
+  --config "$REF/config.csv" \
+  --output "$OUT/demux"
+
+# 2. Align against probe-set reference (creates synthetic per-gene BAM)
+sbxpress probeset-align \
+  "$OUT/extract/sample_R2.fastq.gz" \
+  --probe-set "$REF/Chromium_Human_Transcriptome_Probe_Set_v2.0.0_GRCh38-2024-A.csv" \
+  --genes-out "$OUT/genes.mtx" \
+  --output "$OUT/annotation/sample.probeset.bam"
+
+# 3. Downstream molecules, matrix, and cell calling
+sbxpress molecules "$OUT/annotation/sample.probeset.bam" --output "$OUT/molecules/sample.molecules.bam"
+sbxpress matrix "$OUT/molecules/sample.molecules.bam" --features "$OUT/genes.mtx" --output "$OUT/outs"
+sbxpress cells "$OUT/outs/raw_feature_bc_matrix.h5" --output "$OUT/outs"
+```
+
+For automated multi-sample SBX Flex pipelines, refer to `scripts/run_flex_multi.sh` and `scripts/run_full_cat06.sh`.
+
+## 7. CAT Tagseq & Targeted Expression Mode
+
+Targeted assays, CRISPR guide capture, and CAT Tagseq datasets require custom molecule deduplication and cell-calling rules due to shared UMIs across distinct target genes and pre-determined cell lists.
+
+### Targeted UMI Deduplication (`sbxpress molecules --tagseq`)
+
+In standard GEX, a single UMI observed across multiple genes is adjudicated via winner-take-all collision resolution to eliminate PCR chimeras. In targeted/Tag-seq assays, distinct target genes independently sharing a UMI represent genuine distinct molecular captures.
+
+Pass `--tagseq` to `sbxpress molecules` to skip winner-take-all collision filtering and count each gene independently:
+
+```bash
+sbxpress molecules "$OUT/annotation/sample.annotated.bam" \
+  --tagseq \
+  --output "$OUT/molecules/sample.molecules.bam"
+```
+
+### Whitelist Cell Calling (`sbxpress cells --tagseq-barcodes`)
+
+When exact cell barcode identities are known beforehand (e.g. called by a coupled 3′ GEX run or specified via an experimental whitelist), statistical knee-point cell calling (OrdMag / EmptyDrops) can be bypassed.
+
+Pass `--tagseq-barcodes` to `sbxpress cells` to restrict matrix filtering strictly to the provided barcode file:
+
+```bash
+sbxpress cells "$OUT/outs/raw_feature_bc_matrix.h5" \
+  --tagseq-barcodes "$REF/known_gex_cells.txt" \
+  --output "$OUT/outs"
+```
+

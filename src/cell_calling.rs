@@ -117,7 +117,7 @@ struct Metrics {
 /// Resolve a --tagseq-barcodes file into raw-matrix column indices. The
 /// gem-group suffix ("-1") that the matrix carries but a plain whitelist
 /// file doesn't is ignored on both sides of the match.
-fn resolve_tagseq_barcodes(path: &Path, barcodes: &[String]) -> Result<Vec<usize>> {
+pub fn resolve_tagseq_barcodes(path: &Path, barcodes: &[String]) -> Result<Vec<usize>> {
     let by_prefix: HashMap<&str, usize> = barcodes
         .iter()
         .enumerate()

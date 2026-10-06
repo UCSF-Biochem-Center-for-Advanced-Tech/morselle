@@ -6,6 +6,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.2] — 2026-10-06
+
+### Added
+- Comprehensive integration test suite for Illumina + 10x Flex and Illumina + CAT Tagseq modes (`tests/illumina_modes_integration.rs`).
+- Detailed documentation for 10x Flex (`sbxpress probe-demux`, `sbxpress probeset-align`) and CAT Tagseq (`sbxpress molecules --tagseq`, `sbxpress cells --tagseq-barcodes`) in `MANUAL.md` and `README.md`.
+
+### Changed
+- Exported `resolve_tagseq_barcodes` as `pub fn` in `src/cell_calling.rs` for integration testing.
+
 ## [0.5.1] — 2026-10-05
 
 ### Fixed
