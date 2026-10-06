@@ -6,6 +6,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.3] — 2026-10-06
+
+### Added
+- Native multi-threading (`--threads N`) and chunk/batch processing via Rayon and crossbeam channels in `sbxpress probeset-align` (`src/probe_set.rs`), enabling multi-core scaling without requiring shell FASTQ splitting.
+
 ## [0.5.2] — 2026-10-06
 
 ### Added

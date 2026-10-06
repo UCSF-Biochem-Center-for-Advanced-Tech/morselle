@@ -28,6 +28,7 @@ use rust_htslib::bam::{
     self, header::HeaderRecord, record::Aux, record::Cigar, record::CigarString,
 };
 use serde::Serialize;
+use rayon::prelude::*;
 use tracing::info;
 
 use crate::hamming_index::HammingIndex;
@@ -323,6 +324,10 @@ pub struct Cli {
     /// `--probe-barcode-window`/`--anchor-window` elsewhere in this plan).
     #[arg(long, default_value_t = 15)]
     pub window: isize,
+
+    /// Worker threads for parallel probe matching and BAM record construction (0 = auto/num_cpus).
+    #[arg(short, long, default_value_t = 0)]
+    pub threads: usize,
 }
 
 fn parse_tag<'a>(comment: &'a str, tag: &str) -> Option<&'a str> {
@@ -406,46 +411,91 @@ pub fn run(cli: &Cli) -> Result<()> {
     let mut writer = bam::Writer::from_path(&cli.output, &header, bam::Format::Bam)
         .with_context(|| format!("creating {}", cli.output.display()))?;
 
+    let pool = if cli.threads > 0 {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(cli.threads)
+            .build()
+            .context("building thread pool")?
+    } else {
+        rayon::ThreadPoolBuilder::new()
+            .build()
+            .context("building thread pool")?
+    };
+
     let mut reads = 0u64;
     let mut matched = 0u64;
-    let mut genes_hit: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut genes_hit: std::collections::HashSet<usize> = std::collections::HashSet::new();
 
     let mut fastq = parse_fastx_file(&cli.r2_fastq)
         .with_context(|| format!("opening {}", cli.r2_fastq.display()))?;
-    while let Some(rec) = fastq.next() {
-        let rec = rec.context("reading R2 FASTQ record")?;
-        reads += 1;
-        let header_line = String::from_utf8_lossy(rec.id());
-        let (qname, comment) = header_line.split_once('\t').unwrap_or((&header_line, ""));
-        let seq = rec.seq();
-        let qual = rec.qual().unwrap_or(&[]);
 
-        let mut record = bam::Record::new();
-        if let Some(probe_idx) = matcher.locate(&seq) {
-            let probe = &reference.probes[probe_idx];
-            let gene_id = probe.gene_id.as_str();
-            matched += 1;
-            genes_hit.insert(gene_id);
-            let tid = gene_index[gene_id] as i32;
-            let cigar = CigarString(vec![Cigar::Match(seq.len() as u32)]);
-            record.set(qname.as_bytes(), Some(&cigar), &seq, qual);
-            record.set_tid(tid);
-            record.set_pos(0);
-            record.set_mapq(60);
-            record.unset_unmapped();
-            record.push_aux(b"GX", Aux::String(gene_id))?;
-            record.push_aux(b"GN", Aux::String(gene_name[gene_id]))?;
-        } else {
-            record.set(qname.as_bytes(), None, &seq, qual);
-        }
-        for tag in ["CR", "CB", "UR", "UB", "PR", "PB"] {
-            if let Some(value) = parse_tag(comment, &format!("{tag}:Z:")) {
-                if !value.is_empty() {
-                    record.push_aux(tag.as_bytes(), Aux::String(value))?;
-                }
+    const BATCH_SIZE: usize = 10_000;
+    let mut batch: Vec<(String, Vec<u8>, Vec<u8>)> = Vec::with_capacity(BATCH_SIZE);
+    let mut finished = false;
+
+    while !finished {
+        batch.clear();
+        while batch.len() < BATCH_SIZE {
+            if let Some(rec) = fastq.next() {
+                let rec = rec.context("reading R2 FASTQ record")?;
+                reads += 1;
+                let header_line = String::from_utf8_lossy(rec.id()).to_string();
+                let seq = rec.seq().to_vec();
+                let qual = rec.qual().unwrap_or(&[]).to_vec();
+                batch.push((header_line, seq, qual));
+            } else {
+                finished = true;
+                break;
             }
         }
-        writer.write(&record)?;
+
+        if batch.is_empty() {
+            break;
+        }
+
+        let (sender, receiver) = crossbeam_channel::unbounded();
+        pool.install(|| {
+            batch.par_iter().for_each_with(sender, |sender, (header_line, seq, qual)| {
+                let (qname, comment) = header_line.split_once('\t').unwrap_or((header_line.as_str(), ""));
+                let mut record = bam::Record::new();
+                let mut matched_gene_idx = None;
+
+                if let Some(probe_idx) = matcher.locate(seq) {
+                    let probe = &reference.probes[probe_idx];
+                    let gene_id = probe.gene_id.as_str();
+                    let g_idx = gene_index[gene_id];
+                    matched_gene_idx = Some(g_idx);
+                    let tid = g_idx as i32;
+                    let cigar = CigarString(vec![Cigar::Match(seq.len() as u32)]);
+                    let _ = record.set(qname.as_bytes(), Some(&cigar), seq, qual);
+                    record.set_tid(tid);
+                    record.set_pos(0);
+                    record.set_mapq(60);
+                    record.unset_unmapped();
+                    let _ = record.push_aux(b"GX", Aux::String(gene_id));
+                    let _ = record.push_aux(b"GN", Aux::String(gene_name[gene_id]));
+                } else {
+                    let _ = record.set(qname.as_bytes(), None, seq, qual);
+                }
+
+                for tag in ["CR", "CB", "UR", "UB", "PR", "PB"] {
+                    if let Some(value) = parse_tag(comment, &format!("{tag}:Z:")) {
+                        if !value.is_empty() {
+                            let _ = record.push_aux(tag.as_bytes(), Aux::String(value));
+                        }
+                    }
+                }
+                let _ = sender.send((record, matched_gene_idx));
+            });
+        });
+
+        for (record, matched_gene_idx) in receiver {
+            if let Some(g_idx) = matched_gene_idx {
+                matched += 1;
+                genes_hit.insert(g_idx);
+            }
+            writer.write(&record)?;
+        }
     }
     drop(writer);
 
@@ -682,6 +732,7 @@ ENSG2,SHORT,p2,TRUE,spliced,GENE2
             metrics: Some(metrics_path.clone()),
             max_mm: 1,
             window: 15,
+            threads: 1,
         };
         run(&cli).unwrap();
 

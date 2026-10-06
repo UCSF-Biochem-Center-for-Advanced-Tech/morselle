@@ -62,6 +62,7 @@ IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII
         metrics: Some(metrics_path.clone()),
         max_mm: 1,
         window: 15,
+        threads: 2,
     };
     probe_set::run(&cli).expect("probeset-align execution failed");
 
