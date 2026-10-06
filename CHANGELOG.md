@@ -6,6 +6,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.4] — 2026-10-06
+
+### Added
+- Unified multi-mode pipeline script `scripts/sbxpress-pipeline.sh` supporting all combinations of `--input-mode {sbx|illumina}` and `--analysis-mode {gex|flex|tagseq}` with stage restartability and thread management.
+
 ## [0.5.3] — 2026-10-06
 
 ### Added

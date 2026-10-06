@@ -41,17 +41,16 @@ the biological 3′ assay preference.
 
 ## 2. Raw SBX reads: complete, restartable pipeline
 
-Use the repository workflow for production SBX processing. It runs extraction,
-minimap2, annotation, one coordinate sort, molecules, raw matrix creation, and
-cell calling. It reuses a completed stage on rerun; delete that stage's output if
-you intentionally need to regenerate it.
+Use the repository workflow for production SBX processing. You can use the unified pipeline runner `scripts/sbxpress-pipeline.sh` which supports both `--input-mode {sbx|illumina}` and `--analysis-mode {gex|flex|tagseq}`:
 
 ```bash
 REPO=/path/to/sbxpress
 OUT=/analysis/run_sbx
 REF=/analysis/resources
 
-"$REPO/scripts/sbxpress-gex-pipeline.sh" \
+"$REPO/scripts/sbxpress-pipeline.sh" \
+  --input-mode sbx \
+  --analysis-mode gex \
   --fastqs /data/device_0/out /data/device_1/out /data/device_2/out /data/device_3/out \
   --bclconvert-samplesheet /data/samples.csv \
   --sample M2_GEX \

@@ -1,6 +1,6 @@
 [package]
 name = "sbxpress"
-version = "0.5.3"
+version = "0.5.4"
 edition = "2021"
 description = "Convert raw Roche SBX reads into per-sample 10x-style FASTQs and expression matrices"
 
