@@ -183,7 +183,8 @@ molecule-representative alignment lies outside the retained interval.
 
 ## 3. Getting the source onto the server
 
-There is **no public git remote** for this project, so use one of:
+Clone the release from the configured GitHub repository (authenticate if required),
+or transfer a checkout from your workstation:
 
 ```bash
 # A) rsync the working tree (recommended — includes the whitelist if you have it)
@@ -192,11 +193,13 @@ rsync -av --exclude target/ /path/to/sbxpress/ user@server:~/sbxpress/
 # B) tarball
 tar czf sbxpress.tgz --exclude=target sbxpress/ && scp sbxpress.tgz user@server:~/
 
-# C) if you push it to a git host first
-git clone <your-remote-url> sbxpress      # NOTE: clone does NOT include the whitelist
+# C) clone the v0.6.0 release
+git clone --branch v0.6.0 https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbxpress.git sbxpress
+# NOTE: clone does NOT include the whitelist
 ```
 
-`rsync`/`tar` bring the bundled whitelist along; `git clone` does **not** (§4).
+`rsync`/`tar` bring a locally staged whitelist along; `git clone` does **not** (§4).
+For release acceptance runs, follow [server testing](docs/SERVER_TESTING.md).
 
 ---
 

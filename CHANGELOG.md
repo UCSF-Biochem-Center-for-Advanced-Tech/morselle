@@ -6,6 +6,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-10-07
+
+Correctness review of the 0.5.6–0.5.9 refactoring and repairs, with
+regression coverage and a reproducible server validation procedure.
+Real-data validation on the server remains pending.
+
 ### Fixed
 - Molecule output now uses the same present `PB` identity as evidence collection
   in every assay; `--flex` still requires it. Indexed representatives use unique
@@ -41,6 +47,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is still accepted (no-op).
 
 ### Added
+- `docs/SERVER_TESTING.md`: release installation, fresh-output real-data runs,
+  indexed/sharded parity checks, tag-seq mode comparison, and acceptance criteria.
 - `sbxpress molecules --position-aware-umis`: molecules keyed on
   `(cell, gene, UMI, strand-aware unclipped 5′ start)`, so chance UMI
   matches stay separate across and within genes; UMI correction then runs
@@ -608,7 +616,8 @@ R1/R2 FASTQs for 10x reference ARC.
 - End-of-run RUN SUMMARY report: timing, throughput, and lost breakdown.
 - Ubuntu install script (`install.sh`) and installation manual (`INSTALL.md`).
 
-[Unreleased]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbxpress/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbxpress/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbxpress/compare/v0.5.9...v0.6.0
 [0.3.3]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbxpress/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbxpress/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbxpress/compare/v0.3.0...v0.3.1

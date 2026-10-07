@@ -10,7 +10,12 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
 
-const DOCS: &[&str] = &["README.md", "MANUAL.md", "INSTALL.md"];
+const DOCS: &[&str] = &[
+    "README.md",
+    "MANUAL.md",
+    "INSTALL.md",
+    "docs/SERVER_TESTING.md",
+];
 
 fn code_block_commands(text: &str) -> Vec<(usize, String)> {
     let mut out = Vec::new();
