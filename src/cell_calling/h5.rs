@@ -72,7 +72,7 @@ pub(crate) fn filtered_matrix(raw: &RawMatrix, selected: &[usize]) -> Matrix {
     for (new_bc, &old_bc) in ordered.iter().enumerate() {
         for pos in raw.indptr[old_bc] as usize..raw.indptr[old_bc + 1] as usize {
             let count = raw.data[pos] as u64;
-            counts.insert((new_bc, raw.indices[pos] as usize), count);
+            counts.insert((new_bc, raw.indices[pos] as usize), count as f64);
             molecules += count;
         }
     }

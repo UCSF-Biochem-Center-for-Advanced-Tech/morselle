@@ -11,7 +11,7 @@ use rust_htslib::bam::{self, Read};
 use tracing::info;
 
 use super::io_helpers::{
-    aux_i64, aux_string, read_barcodes, read_cell_barcodes, read_features, read_probe_barcodes,
+    aux_f64, aux_i64, aux_string, read_barcodes, read_cell_barcodes, read_features, read_probe_barcodes,
 };
 use super::types::{Cli, Feature, Matrix, Metrics};
 
@@ -37,7 +37,7 @@ pub(crate) fn read_matrix(
         .enumerate()
         .map(|(index, feature)| (feature.id.clone(), index))
         .collect();
-    let mut molecule_keys: Vec<(usize, String)> = Vec::new();
+    let mut molecule_keys: Vec<(usize, String, f64)> = Vec::new();
     let mut records = 0_u64;
     let mut probe_barcodes_skipped = 0_u64;
 
@@ -76,7 +76,8 @@ pub(crate) fn read_matrix(
             feature_order.push(Feature { id: gx, name: gn });
             index
         };
-        molecule_keys.push((feature_index, cb));
+        let weight = aux_f64(&record, b"ZW")?.unwrap_or(1.0);
+        molecule_keys.push((feature_index, cb, weight));
     }
 
     let barcodes = if let Some(path) = barcode_template {
@@ -84,7 +85,7 @@ pub(crate) fn read_matrix(
     } else if let Some(path) = cell_barcode_whitelist {
         read_cell_barcodes(path, gem_group)?
     } else {
-        let mut values: Vec<String> = molecule_keys.iter().map(|(_, cb)| cb.clone()).collect();
+        let mut values: Vec<String> = molecule_keys.iter().map(|(_, cb, _)| cb.clone()).collect();
         values.sort_unstable();
         values.dedup();
         values
@@ -96,7 +97,7 @@ pub(crate) fn read_matrix(
         .collect();
     let mut counts = BTreeMap::new();
     let mut barcodes_skipped = 0u64;
-    for (feature, barcode) in &molecule_keys {
+    for (feature, barcode, weight) in &molecule_keys {
         let Some(&barcode) = barcode_indexes.get(barcode.as_str()) else {
             if skip_unlisted_barcodes {
                 barcodes_skipped += 1;
@@ -104,7 +105,7 @@ pub(crate) fn read_matrix(
             }
             bail!("counted barcode {barcode} is absent from barcode template");
         };
-        *counts.entry((barcode, *feature)).or_insert(0) += 1;
+        *counts.entry((barcode, *feature)).or_insert(0.0) += weight;
     }
 
     Ok(Matrix {
@@ -142,8 +143,10 @@ pub(crate) fn write_matrix(matrix: &Matrix, output: &Path, gzip: bool) -> Result
     for barcode in &matrix.barcodes {
         writeln!(barcodes, "{barcode}")?;
     }
+    let is_fractional = matrix.counts.values().any(|&c| (c - c.round()).abs() > 1e-5);
+    let matrix_type = if is_fractional { "real" } else { "integer" };
     let mut mtx = writer(&output.join(format!("matrix.mtx{suffix}")), gzip)?;
-    writeln!(mtx, "%%MatrixMarket matrix coordinate integer general")?;
+    writeln!(mtx, "%%MatrixMarket matrix coordinate {matrix_type} general")?;
     writeln!(
         mtx,
         "%metadata_json: {{\"software_version\": \"cr-bam-to-mtx-{}\", \"format_version\": 2}}",
@@ -157,7 +160,11 @@ pub(crate) fn write_matrix(matrix: &Matrix, output: &Path, gzip: bool) -> Result
         matrix.counts.len()
     )?;
     for (&(barcode, feature), &count) in &matrix.counts {
-        writeln!(mtx, "{} {} {}", feature + 1, barcode + 1, count)?;
+        if is_fractional {
+            writeln!(mtx, "{} {} {:.4}", feature + 1, barcode + 1, count)?;
+        } else {
+            writeln!(mtx, "{} {} {}", feature + 1, barcode + 1, count.round() as u64)?;
+        }
     }
     Ok(())
 }
@@ -167,7 +174,7 @@ fn ascii(value: &str, field: &str) -> Result<VarLenAscii> {
         .with_context(|| format!("{field} contains a non-ASCII or NUL character: {value:?}"))
 }
 
-fn write_sparse_column(group: &hdf5::Group, values: &[u32], name: &str) -> Result<()> {
+fn write_sparse_column<T: hdf5::H5Type>(group: &hdf5::Group, values: &[T], name: &str) -> Result<()> {
     if values.is_empty() {
         group.new_dataset_builder().with_data(values).create(name)?;
     } else {
@@ -207,7 +214,9 @@ pub(crate) fn write_h5(matrix: &Matrix, path: &Path, genome: &str) -> Result<()>
     let genomes = vec![genome; matrix.features.len()];
     let all_tag_keys = vec![ascii("genome", "tag key")?];
 
-    let mut data = Vec::<u32>::with_capacity(matrix.counts.len());
+    let is_fractional = matrix.counts.values().any(|&c| (c - c.round()).abs() > 1e-5);
+    let mut data_u32 = Vec::<u32>::new();
+    let mut data_f32 = Vec::<f32>::new();
     let mut indices = Vec::<u32>::with_capacity(matrix.counts.len());
     let mut indptr = Vec::<u32>::with_capacity(matrix.barcodes.len() + 1);
     indptr.push(0);
@@ -217,13 +226,18 @@ pub(crate) fn write_h5(matrix: &Matrix, path: &Path, genome: &str) -> Result<()>
             if entry_barcode != barcode {
                 break;
             }
-            data.push(u32::try_from(count).context("UMI count exceeds HDF5 uint32 range")?);
+            if is_fractional {
+                data_f32.push(count as f32);
+            } else {
+                data_u32.push(u32::try_from(count.round() as u64).context("UMI count exceeds HDF5 uint32 range")?);
+            }
             indices
                 .push(u32::try_from(feature).context("feature index exceeds HDF5 uint32 range")?);
             entries.next();
         }
+        let total_entries = if is_fractional { data_f32.len() } else { data_u32.len() };
         indptr
-            .push(u32::try_from(data.len()).context("matrix has more than 2^32 nonzero entries")?);
+            .push(u32::try_from(total_entries).context("matrix has more than 2^32 nonzero entries")?);
     }
     if entries.next().is_some() {
         bail!("matrix contains a barcode index outside the barcode table");
@@ -234,7 +248,11 @@ pub(crate) fn write_h5(matrix: &Matrix, path: &Path, genome: &str) -> Result<()>
         .new_dataset_builder()
         .with_data(&barcodes)
         .create("barcodes")?;
-    write_sparse_column(&group, &data, "data")?;
+    if is_fractional {
+        write_sparse_column(&group, &data_f32, "data")?;
+    } else {
+        write_sparse_column(&group, &data_u32, "data")?;
+    }
     write_sparse_column(&group, &indices, "indices")?;
     write_sparse_column(&group, &indptr, "indptr")?;
     group

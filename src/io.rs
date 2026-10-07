@@ -302,7 +302,6 @@ pub fn open_text_reader(path: &Path) -> Result<Box<dyn BufRead>> {
 mod tests {
     use super::*;
     use flate2::read::MultiGzDecoder;
-    use std::io::Read as _;
 
     #[test]
     fn no_gzip_writes_plain_readable_fastq_with_plain_extension() {

@@ -66,7 +66,7 @@ pub(crate) struct Matrix {
     pub(crate) barcodes: Vec<String>,
     /// (barcode index, feature index) -> molecule count. Keeping the barcode
     /// first makes Matrix Market output match 10x reference's column-major order.
-    pub(crate) counts: BTreeMap<(usize, usize), u64>,
+    pub(crate) counts: BTreeMap<(usize, usize), f64>,
     pub(crate) records: u64,
     pub(crate) molecules: u64,
     pub(crate) barcodes_skipped: u64,

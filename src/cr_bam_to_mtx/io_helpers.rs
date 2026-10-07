@@ -6,7 +6,7 @@ use anyhow::{bail, Context, Result};
 
 use super::types::Feature;
 
-pub use crate::bam_helpers::{aux_i64, aux_string};
+pub use crate::bam_helpers::{aux_f64, aux_i64, aux_string};
 
 pub fn text_reader(path: &Path) -> Result<Box<dyn BufRead>> {
     crate::io::open_text_reader(path)

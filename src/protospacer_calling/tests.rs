@@ -228,8 +228,12 @@ fn decision_boundary_is_symmetric_for_equal_variance_equal_weight_components() {
     assert!((b - 3.0).abs() < 1e-3, "expected midpoint 3.0, got {b}");
 }
 
-fn tiny_matrix(barcodes: Vec<&str>, counts: BTreeMap<(usize, usize), u64>) -> Matrix {
-    let molecules = counts.values().sum();
+fn tiny_matrix(barcodes: Vec<&str>, raw_counts: BTreeMap<(usize, usize), u64>) -> Matrix {
+    let molecules = raw_counts.values().sum();
+    let counts: BTreeMap<(usize, usize), f64> = raw_counts
+        .into_iter()
+        .map(|(k, v)| (k, v as f64))
+        .collect();
     Matrix {
         features: vec![
             Feature {

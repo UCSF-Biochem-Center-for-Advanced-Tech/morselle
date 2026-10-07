@@ -54,7 +54,7 @@ pub fn build_decisions(
     metrics: &mut Metrics,
     saturation_interval: Option<u64>,
     workers: usize,
-    tagseq: bool,
+    _tagseq: bool,
     fractional_collisions: bool,
 ) -> (HashMap<RawKey, Decision>, Option<Saturation>) {
     let mut groups = HashMap::<(Dna, u32, u32), Vec<RawKey>>::new();

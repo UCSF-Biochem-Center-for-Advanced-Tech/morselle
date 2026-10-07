@@ -47,3 +47,13 @@ pub fn aux_char(record: &bam::Record, tag: &[u8]) -> Option<u8> {
         _ => None,
     }
 }
+
+/// Extract an optional float aux tag from a BAM record.
+pub fn aux_f64(record: &bam::Record, tag: &[u8]) -> Result<Option<f64>> {
+    match record.aux(tag) {
+        Ok(Aux::Float(v)) => Ok(Some(v as f64)),
+        Ok(_) => bail!("tag {} is not a float", String::from_utf8_lossy(tag)),
+        Err(_) => Ok(None),
+    }
+}
+
