@@ -11,8 +11,7 @@
 ## Testing & Change Discipline (read before committing)
 
 These rules exist because 0.5.7/0.5.8 shipped with `sbxpress molecules`
-crashing on every real BAM while all tests passed (see CHANGELOG
-"Unreleased" / 0.5.9).
+crashing on every real BAM while all tests passed (see CHANGELOG 0.5.9).
 
 - **Run `scripts/check.sh` before every commit** (`--quick` skips clippy).
   `git config core.hooksPath scripts/hooks` makes `git push` run it.

@@ -1,6 +1,6 @@
 # `sbxpress` Master Roadmap & Execution Plan
 
-> **Status**: Updated as of v0.5.8 (2026-10-06). Consolidates all historic plans (`docs/archive/FLEX_SUPPORT_PLAN.md`, `docs/archive/GENE_COLLISION_RESOLUTION_PLAN.md`, `docs/archive/OVERLAP_PLAN.md`, `docs/archive/PRESENTATION_PLAN.md`, `PIPELINE_NOTES.md`) into a single master tracking document.
+> **Status**: Updated as of v0.5.9 (2026-10-07). Consolidates all historic plans (`docs/archive/FLEX_SUPPORT_PLAN.md`, `docs/archive/GENE_COLLISION_RESOLUTION_PLAN.md`, `docs/archive/OVERLAP_PLAN.md`, `docs/archive/PRESENTATION_PLAN.md`, `PIPELINE_NOTES.md`) into a single master tracking document.
 
 ---
 
@@ -70,7 +70,7 @@ flowchart TD
 
 ### Priority 2 (Completed v0.5.6): Fractional UMI Collision Assignment for High-Depth Bulk & Tagseq Modes
 
-- **Status**: 🟢 **Completed in v0.5.6; reworked after review** (the 0.5.6–0.5.8 implementation crashed on real BAMs and wrote no representatives — see CHANGELOG "Unreleased").
+- **Status**: 🟢 **Completed in v0.5.6; reworked after review** (the 0.5.6–0.5.8 implementation crashed on real BAMs and wrote no representatives — see CHANGELOG 0.5.9).
 - **Implementation**:
   1. Added `--fractional-collisions` and `--no-fractional-collisions` flags to `sbx10x-molecules`. Enabled by default in `--tagseq` mode.
   2. For colliding genes $g_1 \dots g_k$ with read counts $r_1 \dots r_k$, assigns proportional credit $w_i = r_i / \sum r$, tagging records with `XW:A:F` and floating-point weight tag `ZW:f:<weight>` (`ZG` stays `annotate`'s gene call). `sbxpress cells` reads the resulting `f32` matrices without truncation.

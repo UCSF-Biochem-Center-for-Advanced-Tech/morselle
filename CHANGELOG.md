@@ -4,12 +4,12 @@ All notable changes to `sbxpress` are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.9] — 2026-10-07
 
-Review of the 0.5.2–0.5.8 changes made on 2026-10-06. 0.5.7 and 0.5.8 should
-not be used for GEX or tagseq counting: `sbxpress molecules` aborts on any BAM
-carrying `UB` (every extracted library), and otherwise writes no `xf:25`
-representatives, so `matrix` produces empty matrices.
+Review and repair of the 0.5.2–0.5.8 changes made on 2026-10-06. Replaces
+0.5.7 and 0.5.8, which are **BROKEN** (see their entries). Output of
+`molecules` + `matrix` is identical to 0.5.6 in every mode 0.5.6 had
+(verified by `tests/golden_outputs.rs` against the 0.5.6 binaries).
 
 ### Fixed
 - `sbxpress molecules`: restored the 0.5.6 UMI-correction, collision and BAM
@@ -57,6 +57,17 @@ order; MEX/H5 equal):
   7.3× extract, 2.2× extract+map, ~4× intermediate disk).
 
 ### Added
+- `sbxpress molecules --compression-level 0-9` (default unchanged) and
+  `scripts/sbxpress-pipeline.sh --molecule-compression-level`; level 1 was
+  ~24% faster overall for a ~12% larger BAM on a 1M-read benchmark.
+- Test gaps that let 0.5.7/0.5.8 pass every test while broken are closed:
+  `tests/pipeline_chain_e2e.rs` (each stage on the previous stage's real
+  output, incl. Flex probe-demux), `tests/golden_outputs.rs` (exact
+  output digests for 9 modes), `tests/docs_commands.rs` (documented flags
+  exist), `scripts/check_test_inventory.sh` (no silent test deletion),
+  `scripts/check.sh` (single gate), GitHub Actions CI, a pre-push hook
+  (`git config core.hooksPath scripts/hooks`), and testing rules in
+  AGENTS.md/CLAUDE.md. All nine new chain/golden cases fail on 0.5.8.
 - `tests/molecules_matrix_e2e.rs`: runs the real `sbx10x-molecules` and
   `cr-bam-to-mtx` binaries on a fixture with `UB`/`UR`/`ZG` and multi-gene
   `GX`, in serial, indexed and sharded modes and every collision policy.
@@ -66,12 +77,24 @@ order; MEX/H5 equal):
 
 ## [0.5.8] — 2026-10-06
 
+> **BROKEN — do not use; use 0.5.9.** `sbxpress molecules` aborts on any
+> BAM carrying `UB` (every extracted library) and otherwise writes no `xf:25`
+> representatives, so GEX/tagseq matrices are empty; `sbxpress cells`
+> truncates fractional counts; `scripts/sbxpress-pipeline.sh` (and the
+> `sbxpress-gex-pipeline.sh` forwarder in 0.5.7+) does not parse.
+
 ### Documentation
 - Updated `MANUAL.md` Section 7 with detailed technical documentation for fractional UMI collision resolution (`--fractional-collisions` in `sbxpress molecules --tagseq`) and real Matrix Market MTX / `f32` HDF5 count matrix materialization in `cr-bam-to-mtx`.
 - Updated `TECHNICAL_DESCRIPTION.md` IP metadata specification to v0.5.8 (~19,400 lines of Rust across 25 library modules and 12 binary engines).
 - Archived completed historic plan markdown files (`FLEX_SUPPORT_PLAN.md`, `GENE_COLLISION_RESOLUTION_PLAN.md`, `OVERLAP_PLAN.md`, `PRESENTATION_PLAN.md`, `mapping.md`) into `docs/archive/`.
 
 ## [0.5.7] — 2026-10-06
+
+> **BROKEN — do not use; use 0.5.9.** `sbxpress molecules` aborts on any
+> BAM carrying `UB` (every extracted library) and otherwise writes no `xf:25`
+> representatives, so GEX/tagseq matrices are empty; `sbxpress cells`
+> truncates fractional counts; `scripts/sbxpress-pipeline.sh` (and the
+> `sbxpress-gex-pipeline.sh` forwarder in 0.5.7+) does not parse.
 
 ### Added
 - Expanded hot-path microbenchmarks in `benches/pipeline_hot_paths.rs` (`bench_molecules_dedup`) benchmarking UMI directional graph collapse (~23 µs per 50 UMIs) and fractional vs winner-take-all decision matrix building (~128 µs per 1,000 UMIs).
@@ -82,6 +105,9 @@ order; MEX/H5 equal):
 - Converted `scripts/sbxpress-gex-pipeline.sh` into a clean forwarder script invoking the unified multi-mode driver script `scripts/sbxpress-pipeline.sh`.
 
 ## [0.5.6] — 2026-10-06
+
+> 0.5.4–0.5.6: the new `scripts/sbxpress-pipeline.sh` does not parse; the
+> Rust tools are fine. Fixed in 0.5.9.
 
 ### Added
 - Automated presentation & insert-size distribution reporting (`scripts/build_presentation.py`). Ingests pipeline metrics JSON files (`illumina_metrics.json`, `molecules_metrics.json`, `cell_calling_metrics.json`), exports cDNA insert-size distribution TSVs via `--export-insert-sizes`, and builds 10-slide PowerPoint presentations (`.pptx`).
