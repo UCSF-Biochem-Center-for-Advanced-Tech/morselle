@@ -15,6 +15,7 @@ use rayon::prelude::*;
 use tracing::info;
 
 use super::saturation::Saturation;
+use super::collisions::Resolved;
 use super::types::{Decision, Dna, Evidence, Metrics, RawKey};
 
 pub fn correct_group<S: BuildHasher>(
@@ -74,6 +75,9 @@ pub(crate) struct Molecule {
     /// hash-map value.
     pub(crate) best_rank: u32,
     pub(crate) min_read_hash: u32,
+    /// Collision outcome, filled in by `resolve_collisions` (kept here
+    /// rather than in a second root-keyed table to cut peak memory).
+    pub(crate) resolved: Resolved,
 }
 
 fn rank(item: &Evidence) -> u32 {
@@ -92,9 +96,29 @@ fn rank(item: &Evidence) -> u32 {
 /// in a 12bp space by chance often enough that "low-count neighbour =
 /// sequencing error" no longer holds. Trade-off: true 1bp UMI errors are not
 /// corrected either, so counts trend slightly high rather than low.
+/// (cell, sample, gene): the UMI-correction group of a raw key.
+fn same_umi_group(a: &RawKey, b: &RawKey) -> bool {
+    (a.cell, a.sample, a.gene) == (b.cell, b.sample, b.gene)
+}
+
+/// Roots for one (cell, sample, gene) group. Most groups hold a single raw
+/// UMI, whose root is itself -- skip `correct_group`'s allocations for them.
+fn correct_run<S: BuildHasher>(
+    run: &[RawKey],
+    evidence: &StdHashMap<RawKey, Evidence, S>,
+    roots: &mut HashMap<RawKey, RawKey>,
+) {
+    if let [only] = run {
+        roots.insert(*only, *only);
+    } else {
+        roots.extend(correct_group(run.to_vec(), evidence));
+    }
+}
+
 fn correct_umis<S: BuildHasher + Sync>(
     evidence: &StdHashMap<RawKey, Evidence, S>,
-    groups: HashMap<(Dna, u32, u32), Vec<RawKey>>,
+    sorted_keys: &[RawKey],
+    total_groups: usize,
     workers: usize,
     tagseq: bool,
 ) -> HashMap<RawKey, RawKey> {
@@ -117,32 +141,29 @@ fn correct_umis<S: BuildHasher + Sync>(
     }
     if workers <= 1 {
         eprintln!(
-            "[sbxpress molecules] phase=umi_correct mode=serial start groups={}",
-            groups.len()
+            "[sbxpress molecules] phase=umi_correct mode=serial start groups={total_groups}"
         );
-        return groups
-            .into_values()
-            .map(|keys| correct_group(keys, evidence))
-            .fold(HashMap::default(), merge_roots);
+        let mut roots = HashMap::with_capacity_and_hasher(sorted_keys.len(), Default::default());
+        for run in sorted_keys.chunk_by(same_umi_group) {
+            correct_run(run, evidence, &mut roots);
+        }
+        return roots;
     }
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
         .expect("creating UMI-correction worker pool");
-    info!(workers, groups = groups.len(), "correcting UMI groups in parallel");
+    info!(workers, groups = total_groups, "correcting UMI groups in parallel");
     eprintln!(
-        "[sbxpress molecules] phase=umi_correct start workers={} groups={}",
-        workers,
-        groups.len()
+        "[sbxpress molecules] phase=umi_correct start workers={workers} groups={total_groups}"
     );
-    let total_groups = groups.len();
     let completed = Arc::new(AtomicUsize::new(0));
     let checkpoint = (total_groups / 100).max(1_000);
     pool.install(|| {
-        groups
-            .into_par_iter()
-            .map(|(_, keys)| {
-                let roots = correct_group(keys, evidence);
+        sorted_keys
+            .par_chunk_by(same_umi_group)
+            .fold(HashMap::default, |mut roots, run| {
+                correct_run(run, evidence, &mut roots);
                 let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
                 if done % checkpoint == 0 || done == total_groups {
                     eprintln!("[sbxpress molecules] phase=umi_correct groups={done}/{total_groups}");
@@ -180,6 +201,7 @@ fn aggregate_molecules<S: BuildHasher>(
                 representative: item.best_ordinal,
                 best_rank: rank(item),
                 min_read_hash: item.min_read_hash,
+                resolved: Resolved::UNRESOLVED,
             });
     }
     molecules
@@ -201,32 +223,33 @@ pub fn build_decisions<S: BuildHasher + Sync>(
     // map (keyed on UMI alone within a group) silently overwrite one
     // sample's evidence with another's whenever two samples' reads for the
     // same cell+gene happen to share a UMI value.
-    let mut groups = HashMap::<(Dna, u32, u32), Vec<RawKey>>::default();
-    for &key in evidence.keys() {
-        groups
-            .entry((key.cell, key.sample, key.gene))
-            .or_default()
-            .push(key);
-    }
+    // One sorted key vector instead of a HashMap<(cell, sample, gene),
+    // Vec<RawKey>>: no per-group heap allocation (most groups hold a single
+    // UMI), and groups are contiguous runs. Group order never matters --
+    // correct_group sorts its own input and all tie-breaks are explicit.
+    let mut sorted_keys: Vec<RawKey> = evidence.keys().copied().collect();
+    sorted_keys.par_sort_unstable_by_key(|k| (k.cell, k.sample, k.gene, k.umi));
+    let total_groups = sorted_keys.chunk_by(same_umi_group).count();
     eprintln!(
         "[sbxpress molecules] phase=umi_group_index complete groups={} raw_nodes={}",
-        groups.len(),
+        total_groups,
         evidence.len()
     );
     let mut saturation =
         saturation_interval.map(|interval| Saturation::new(metrics.eligible_records, interval));
     if let Some(curve) = saturation.as_mut() {
-        for (&(cell, _sample, gene), keys) in &groups {
-            let min_hash = keys
+        for run in sorted_keys.chunk_by(same_umi_group) {
+            let min_hash = run
                 .iter()
                 .map(|key| evidence[key].min_read_hash)
                 .min()
                 .expect("non-empty UMI group");
-            curve.add_cell_gene(cell, gene, min_hash);
+            curve.add_cell_gene(run[0].cell, run[0].gene, min_hash);
         }
     }
 
-    let roots = correct_umis(evidence, groups, workers, tagseq);
+    let roots = correct_umis(evidence, &sorted_keys, total_groups, workers, tagseq);
+    drop(sorted_keys);
     eprintln!("[sbxpress molecules] phase=umi_correct complete roots={}", roots.len());
     // `+=`, not `=`: the sharded path calls build_decisions() once per shard
     // against the same accumulating Metrics.
@@ -234,7 +257,7 @@ pub fn build_decisions<S: BuildHasher + Sync>(
     metrics.umi_nodes_collapsed += roots.iter().filter(|(key, root)| key.umi != root.umi).count() as u64;
 
     eprintln!("[sbxpress molecules] phase=molecule_aggregate start");
-    let molecules = aggregate_molecules(evidence, &roots);
+    let mut molecules = aggregate_molecules(evidence, &roots);
     metrics.corrected_umi_nodes += molecules.len() as u64;
     metrics.molecules_before_gene_resolution += molecules.len() as u64;
     eprintln!(
@@ -242,11 +265,11 @@ pub fn build_decisions<S: BuildHasher + Sync>(
         molecules.len()
     );
 
-    let root_outcomes = super::collisions::resolve_collisions(&molecules, metrics, tagseq, fractional);
+    super::collisions::resolve_collisions(&mut molecules, metrics, tagseq, fractional);
 
     if let Some(curve) = saturation.as_mut() {
         for (&root, molecule) in &molecules {
-            if root_outcomes[&root].outcome.is_counted() {
+            if molecule.resolved.outcome.is_counted() {
                 curve.add_molecule(root.cell, molecule.min_read_hash);
             }
         }
@@ -256,12 +279,13 @@ pub fn build_decisions<S: BuildHasher + Sync>(
         .keys()
         .map(|&key| {
             let root = roots[&key];
-            let resolved = root_outcomes[&root];
+            let molecule = &molecules[&root];
+            let resolved = molecule.resolved;
             (
                 key,
                 Decision {
                     corrected: root.umi,
-                    representative: molecules[&root].representative,
+                    representative: molecule.representative,
                     collision_degree: resolved.degree,
                     outcome: resolved.outcome,
                     weight: resolved.weight,
