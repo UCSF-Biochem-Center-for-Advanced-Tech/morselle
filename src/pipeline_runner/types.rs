@@ -1,5 +1,4 @@
 /// Running counts for the pipeline summary.
-
 #[derive(Default)]
 pub(crate) struct Stats {
     pub reads: u64,
@@ -35,17 +34,40 @@ pub(crate) struct Stats {
     pub via_i7: u64,
     pub via_conflict: u64,
     pub per_sample: Vec<u64>,
+    // demux (early): the same i5/i7 assignment, computed the moment R1 is
+    // located -- before the CB gate and independent of whether R2/cDNA was
+    // ever found. Reachable for every read that got as far as R1, unlike
+    // `per_sample`/`undetermined` above (only reachable for reads that also
+    // cleared both gates). This is the closest SBX-side analog to Illumina's
+    // own post-BCL-Convert index-only demultiplex count -- see
+    // FLEX_SUPPORT_PLAN.md's read-metrics comparison.
     pub per_sample_early: Vec<u64>,
+    /// Of `per_sample_early`, how many also located a real R2/cDNA 3' boundary
+    /// (`Extracted::adapter_trimmed`) -- excludes reads that are structurally
+    /// too short/garbled to ever locate one, regardless of matching-algorithm
+    /// quality. The closest fair denominator for "of reads that had a real
+    /// shot at this, how many succeeded" when scoring a matcher in isolation
+    /// from upstream capture-length loss.
     pub per_sample_early_boundary_found: Vec<u64>,
     pub undetermined_early: u64,
     pub via_dual_early: u64,
     pub via_i5_only_early: u64,
     pub via_i7_only_early: u64,
     pub via_conflict_early: u64,
+    /// R1 itself was never located (orientation failed, or R1 not found even
+    /// though oriented) -- demux is structurally unreachable for these, same
+    /// as for Illumina's own index read, which requires nothing about R1/R2
+    /// content but does require the read to exist at all.
     pub index_unreachable: u64,
     // probe barcode
     pub probe_located: u64,
     pub probe_hit: u64,
+    /// `probe_hit` reads that *also* landed on an assigned (non-Undetermined)
+    /// sample from the outer index-based demux -- the real 4-way join (CB +
+    /// UMI + Sample Barcode + Probe Assigned) requested to replace
+    /// `probe_hit` alone as a "pre-dedup" proxy, since `probe_hit` on its own
+    /// still includes reads whose outer sample/library demux was
+    /// Undetermined.
     pub probe_hit_sample_assigned: u64,
 }
 

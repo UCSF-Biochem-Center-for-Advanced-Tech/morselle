@@ -6,6 +6,10 @@ use super::gmm::{decision_boundary, fit_threshold};
 use super::pipeline::run;
 use super::types::{Cli, Component};
 
+/// Real per-cell CD45 UMI-count histogram for CAT06 sample `Pos`
+/// (n=74,581 real called cells, from `sample_raw_feature_bc_matrix.h5`),
+/// as `(count, num_cells)`. Real cellranger threshold for this sample:
+/// `CD45,3` — the `--min-umi` floor binds (fit alone would be lower).
 const POS_CD45_HIST: &[(u64, u64)] = &[
     (0, 53432),
     (1, 16134),
@@ -23,6 +27,9 @@ const POS_CD45_HIST: &[(u64, u64)] = &[
     (15, 1),
 ];
 
+/// Real per-cell CD45 UMI-count histogram for CAT06 sample `RZ211`
+/// (n=50,279 real called cells). Real cellranger threshold: `CD45,6` --
+/// genuinely adaptive, the fit exceeds the floor here.
 const RZ211_CD45_HIST: &[(u64, u64)] = &[
     (0, 9416),
     (1, 8714),
@@ -179,6 +186,23 @@ fn real_data_pos_cd45_threshold_matches_ground_truth() {
 
 #[test]
 fn real_data_rz211_cd45_threshold_regression() {
+    // Real cellranger reports 6 for this exact sample/guide. This
+    // implementation does *not* reproduce that number -- documented as
+    // a known, investigated gap (see `fit_threshold`'s doc comment),
+    // not silently accepted: a 2-component Gaussian-mixture MLE fit on
+    // this real distribution (verified against an independent reference
+    // implementation, `sklearn.mixture.GaussianMixture`, and against
+    // this module's own log-likelihood formula) has its *actual*
+    // maximum-likelihood optimum here, not merely a local one this
+    // code failed to escape -- this implementation's fit scores a
+    // *higher* log-likelihood on this exact data than the reference
+    // sklearn fit achieves (-47062 vs. -47572), so the gap is a real
+    // difference between "maximize a 2-Gaussian mixture's likelihood"
+    // and whatever cellranger's real, undocumented algorithm does, not
+    // a bug or an unescaped local optimum in this code. This test
+    // pins current, honest behavior as a regression guard: a future
+    // change that silently moves this number should be noticed, not
+    // treated as a spurious improvement toward 6.
     let counts = expand_hist(RZ211_CD45_HIST);
     assert_eq!(fit_threshold(&counts, 3), Some(3));
 }
@@ -190,6 +214,7 @@ fn all_zero_guide_is_omitted_not_defaulted() {
 
 #[test]
 fn floor_binds_when_fit_is_lower() {
+    // A tight, low-signal population: fit alone would land well under 3.
     let mut counts = vec![0u64; 100];
     counts.extend(vec![1u64; 5]);
     assert_eq!(fit_threshold(&counts, 3), Some(3));
@@ -197,6 +222,12 @@ fn floor_binds_when_fit_is_lower() {
 
 #[test]
 fn clearly_bimodal_signal_classifies_both_populations_correctly() {
+    // Two well-separated populations with a complete gap between them
+    // (nothing between 2 and 49): *any* threshold in that gap is
+    // equally correct, so the meaningful check is classification
+    // outcome, not the exact threshold value landing far from the
+    // floor (it doesn't have to -- 3 still perfectly separates 1 from
+    // 50/52 here, and is a perfectly good answer).
     let mut counts = vec![0u64; 200];
     counts.extend(vec![1u64; 50]);
     counts.extend(vec![50u64; 100]);
@@ -225,6 +256,7 @@ fn decision_boundary_is_symmetric_for_equal_variance_equal_weight_components() {
         std: 1.0,
     };
     let b = decision_boundary(&low, &high);
+    // Tolerance matches the numerical scan's step size, not float epsilon.
     assert!((b - 3.0).abs() < 1e-3, "expected midpoint 3.0, got {b}");
 }
 
@@ -256,9 +288,12 @@ fn tiny_matrix(barcodes: Vec<&str>, raw_counts: BTreeMap<(usize, usize), u64>) -
 
 #[test]
 fn run_end_to_end_matches_expected_csv_and_json_shape() {
+    // 3 cells: CB1 gets CD45=5 (clears a min-umi=3 floor), CB2 gets
+    // CD45=1 (below floor), CB3 gets neither -- "inactive" never
+    // appears at all, matching real RZ211 behavior for an absent guide.
     let mut counts = BTreeMap::new();
-    counts.insert((0, 0), 5);
-    counts.insert((1, 0), 1);
+    counts.insert((0, 0), 5);  // CB1, CD45
+    counts.insert((1, 0), 1);  // CB2, CD45
     let matrix = tiny_matrix(vec!["CB1-1", "CB2-1", "CB3-1"], counts);
 
     let dir = tempfile::tempdir().unwrap();
@@ -280,7 +315,7 @@ fn run_end_to_end_matches_expected_csv_and_json_shape() {
     );
 
     let thresholds = fs::read_to_string(out.join("protospacer_umi_thresholds.csv")).unwrap();
-    assert_eq!(thresholds, "Protospacer,UMI threshold\nCD45,3\n");
+    assert_eq!(thresholds, "Protospacer,UMI threshold\nCD45,3\n");  // "inactive" omitted: all-zero
 
     let json: serde_json::Value = serde_json::from_str(
         &fs::read_to_string(out.join("protospacer_umi_thresholds.json")).unwrap(),
@@ -294,8 +329,8 @@ fn run_end_to_end_matches_expected_csv_and_json_shape() {
         lines[0],
         "feature_call,num_cells,pct_cells,median_umis,stddev_umis"
     );
-    assert!(lines.contains(&"No guide molecules,1,0.3333333333333333,None,None"));
-    assert!(lines.contains(&"No confident call,2,0.6666666666666666,None,None"));
+    assert!(lines.contains(&"No guide molecules,1,0.3333333333333333,None,None"));  // CB3 only
+    assert!(lines.contains(&"No confident call,2,0.6666666666666666,None,None"));  // CB2 + CB3
     assert!(lines.contains(&"1 protospacer assigned,1,0.3333333333333333,None,None"));
     assert!(lines.contains(&"More than 1 protospacer assigned,0,0,None,None"));
     assert!(lines.contains(&"CD45,1,0.3333333333333333,5,0"));

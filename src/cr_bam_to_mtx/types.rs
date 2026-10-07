@@ -69,7 +69,11 @@ pub(crate) struct Matrix {
     pub(crate) counts: BTreeMap<(usize, usize), f64>,
     pub(crate) records: u64,
     pub(crate) molecules: u64,
+    /// Counted molecules skipped because their barcode wasn't in the
+    /// template (only nonzero with `--skip-unlisted-barcodes`).
     pub(crate) barcodes_skipped: u64,
+    /// Counted molecules skipped because their `PB` tag wasn't in
+    /// `--probe-barcodes`'s allow-list (only nonzero with that flag set).
     pub(crate) probe_barcodes_skipped: u64,
 }
 

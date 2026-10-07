@@ -188,6 +188,8 @@ fn write_sparse_column<T: hdf5::H5Type>(group: &hdf5::Group, values: &[T], name:
     Ok(())
 }
 
+/// Write the standard 10x CSC HDF5 feature-barcode matrix alongside the MEX
+/// directory. The barcode-major BTreeMap is already in CSC traversal order.
 pub(crate) fn write_h5(matrix: &Matrix, path: &Path, genome: &str) -> Result<()> {
     let file = hdf5::File::create(path).with_context(|| format!("creating {}", path.display()))?;
     let group = file.create_group("matrix")?;
@@ -298,6 +300,7 @@ pub(crate) fn write_h5(matrix: &Matrix, path: &Path, genome: &str) -> Result<()>
     Ok(())
 }
 
+/// Run the BAM-to-matrix application.
 pub fn run(cli: &Cli) -> Result<()> {
     let started = Instant::now();
     if cli.gem_group == 0 {

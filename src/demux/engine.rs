@@ -40,6 +40,18 @@ pub struct Demuxer {
 }
 
 impl Demuxer {
+    /// Build from a sample sheet. The read-oriented index sequences are
+    /// `revcomp(i5)` and `i7` (forward), each expanded to ≤`index_max_mm`
+    /// neighbors for O(1), error-tolerant lookup.
+    ///
+    /// `cfg.mode`: `Some(I5)`/`Some(I7)` refuse (rather than silently risk
+    /// ambiguous assignment) unless that index alone separates every sample
+    /// with enough real Hamming margin for `cfg.index_max_mm`; `Some(Dual)`/
+    /// `Some(Both)` are taken as given (`Both`'s safety only needs the
+    /// declared (i5,i7) *pairs* to be distinct, true of any valid sheet, not
+    /// either index alone). `None` (auto) resolves to `Dual` if both indices
+    /// are standalone-safe, else whichever single index is safe, else `Both`
+    /// -- always logged, so the choice is never silent.
     pub fn new(sheet: &SampleSheet, cfg: DemuxCfg) -> Result<Self> {
         let i5_dist = min_pairwise_hamming(sheet, IndexSource::I5);
         let i7_dist = min_pairwise_hamming(sheet, IndexSource::I7);
@@ -104,6 +116,7 @@ impl Demuxer {
         self.resolved_mode
     }
 
+    /// Combine per-index sample matches into an outcome (`Dual`/`Both` modes only).
     fn combine(&self, a5: Option<usize>, a7: Option<usize>) -> Outcome {
         match (a5, a7) {
             (Some(x), Some(y)) if x == y => Outcome {
@@ -129,6 +142,10 @@ impl Demuxer {
         }
     }
 
+    /// One index's outcome, standing alone (`I5`/`I7` mode): a hit is
+    /// reported the same way dual-index reports a fallback single-index hit
+    /// (`I5Only`/`I7Only`), since semantically it's the same situation --
+    /// only one index was ever consulted.
     fn solo(sample: Option<usize>, via: DemuxVia) -> Outcome {
         match sample {
             Some(x) => Outcome {
@@ -142,6 +159,7 @@ impl Demuxer {
         }
     }
 
+    /// Assign a read from its (optional) i5/i7 read-region slices (fixed frame).
     pub fn assign(&self, i5_region: Option<&[u8]>, i7_region: Option<&[u8]>) -> Outcome {
         match self.resolved_mode {
             DemuxMode::I5 => Self::solo(
@@ -160,6 +178,8 @@ impl Demuxer {
         }
     }
 
+    /// Assign a read by offset-tolerant matching around the i5/i7 anchor starts.
+    /// `window` = max frame shift to try each side (0 = rigid, like [`assign`]).
     pub fn assign_windowed(
         &self,
         seq: &[u8],
@@ -200,6 +220,9 @@ fn unsafe_single_index_msg(mode: DemuxMode, dist: u32, mm: u32, required: u32) -
     )
 }
 
+/// Anchor START positions for i5 and i7 (before any offset search).
+/// i5 starts `R1_PRIMER.len() + index_len` before the CB; i7 starts
+/// `R2_PRIMER.len()` after the 3' adapter.
 pub fn index_anchor_starts(
     cb_start: usize,
     adapter_pos: Option<usize>,
@@ -210,6 +233,11 @@ pub fn index_anchor_starts(
     (i5, i7)
 }
 
+/// Slice the i5 and i7 read-regions from a canonical read using M1/M2 coords.
+///
+/// i5 = the `index_len` bp ending where the R1 primer starts (`cb_start -
+/// R1_PRIMER.len()`). i7 = the `index_len` bp starting after `rc(R2 primer)`
+/// (`adapter_pos + R2_PRIMER.len()`). Either is `None` if the read doesn't span it.
 pub fn index_regions<'a>(
     seq: &'a [u8],
     cb_start: usize,

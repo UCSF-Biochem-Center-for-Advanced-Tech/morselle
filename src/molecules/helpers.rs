@@ -33,6 +33,8 @@ pub fn choose_gene(record: &bam::Record) -> Option<(String, String)> {
             names.first().copied().unwrap_or(genes[0]).to_owned(),
         ));
     }
+    // For a 3' run, the annotator's unique terminal-supported gene resolves a
+    // genomic overlap without discarding the alignment.
     let zg = aux_string(record, b"ZG")?;
     if zg.contains(';') || zg.is_empty() {
         return None;
@@ -63,6 +65,10 @@ pub fn better(record: &bam::Record, ordinal: u64, evidence: &Evidence) -> bool {
                     && ordinal < evidence.best_ordinal)))
 }
 
+/// Intern a `PB` tag value into a compact id. Callers must have already
+/// rejected records with a missing/empty `PB` -- see `RawKey::sample`'s doc
+/// comment: a record with no confident sample-barcode call must not be
+/// evidence-eligible at all, not merged into a shared placeholder bucket.
 pub fn intern_sample(
     pb: &str,
     samples: &mut Vec<String>,
@@ -78,12 +84,19 @@ pub fn intern_sample(
     }
 }
 
+/// Stable hash of a record's raw (cell barcode, sample/probe barcode) pair,
+/// used only to pick a shard during `collate()` -- deliberately independent
+/// of any interned id, so collate never needs gene/sample interning tables
+/// built up front. Every real grouping/collision key in this file is scoped
+/// to `(cell, sample)`, so routing by this pair alone guarantees a shard
+/// never needs to see another shard's data.
 pub fn shard_hash(cb: &[u8], pb: Option<&[u8]>) -> u32 {
     let mut value = 0xcbf29ce484222325u64;
     for &byte in cb {
         value ^= byte as u64;
         value = value.wrapping_mul(0x100000001b3);
     }
+    // Separator so e.g. cb="AB",pb="C" hashes differently from cb="A",pb="BC".
     value ^= 0xff;
     value = value.wrapping_mul(0x100000001b3);
     for &byte in pb.unwrap_or(&[]) {
@@ -97,6 +110,9 @@ pub fn shard_hash(cb: &[u8], pb: Option<&[u8]>) -> u32 {
 }
 
 pub fn record_identity(record: &bam::Record) -> u64 {
+    // A deterministic representative tie-breaker for independently fetched
+    // regions. QNAMEs are unique for this input; coordinates/flags make the
+    // identity robust if a producer reuses names.
     let mut value = 0xcbf29ce484222325u64;
     for part in [
         record.qname(),

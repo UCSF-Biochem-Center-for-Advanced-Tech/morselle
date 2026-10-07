@@ -24,8 +24,14 @@ pub(crate) struct Shared<'a> {
     pub orient_mode: OrientMode,
     pub extract_cfg: ExtractCfg,
     pub demuxer: Option<&'a Demuxer>,
+    /// Per-sample (indexed like `demuxer`'s `sample_ids()`) "does this
+    /// sample's declared name look like a Flex GEX library" -- the routing
+    /// signal for `ExtractCfg::flex_r2_boundary`'s hard-gate default. Empty
+    /// when `demuxer` is `None`.
     pub gex_by_sample: &'a [bool],
     pub whitelist: Option<&'a Whitelist>,
+    /// 10x Flex probe-barcode whitelist (FLEX_SUPPORT_PLAN.md Phase 1). `None`
+    /// unless `--probe-barcode-whitelist` was given — zero cost otherwise.
     pub probe_wl: Option<&'a ProbeWhitelist>,
     pub cb_len: usize,
     pub umi_len: usize,
@@ -35,16 +41,36 @@ pub(crate) struct Shared<'a> {
     pub reframe_window: usize,
     pub lenient: bool,
     pub index_len: usize,
+    /// Max frame shift tried when matching i5/i7 (absorbs index-shifting indels).
     pub index_window: isize,
+    /// Number of sample targets; the Undetermined target (when demuxing) is at
+    /// index `n_samples`.
     pub n_samples: usize,
+    /// Output chunks per logical target (`--split`). Physical writer for logical
+    /// target `t`, chunk `c` is `targets[t * split + c]`.
     pub split: usize,
+    /// Emit only R2 FASTQs with 10x-style barcode/UMI SAM tags in the
+    /// FASTQ comment, for minimap2 `-y` pass-through.
     pub minimap2: bool,
+    /// Add SBX processing provenance tags to R2 FASTQ comments.
     pub processing_tags: bool,
     pub targets: &'a [PairShardWriter],
+    /// Side channel for reads that never produce a pair. See `--failed-output`.
     pub failed: Option<&'a ShardWriter>,
+    /// Round-robin source for `process_file`'s per-file chunk assignment (the
+    /// "many files" path). Shared and atomic, not per-thread: real per-file
+    /// yield varies a lot (some raw shards pass far more reads than others),
+    /// and rayon's work-stealing doesn't guarantee an even file count per
+    /// thread either, so keying chunk-choice off which thread happened to
+    /// claim a file let a handful of high-yield files landing on the same
+    /// thread permanently skew that one chunk file to several times the
+    /// median size. A shared counter, incremented once per file regardless
+    /// of which thread claims it, decorrelates chunk assignment from any
+    /// thread-level yield clustering.
     pub chunk_counter: &'a AtomicUsize,
 }
 
+/// Resolve the per-file orientation to enforce (detecting it for `Auto`).
 pub(crate) fn file_orientation(input: &Path, sh: &Shared) -> Result<Option<Orientation>> {
     let expected = match sh.orient_mode {
         OrientMode::P5Led => Some(Orientation::P5Led),
@@ -55,6 +81,10 @@ pub(crate) fn file_orientation(input: &Path, sh: &Shared) -> Result<Option<Orien
     Ok(expected)
 }
 
+/// One-file-per-thread path (used when files ≥ workers): orient → extract → demux →
+/// gate → emit every read in one file on a single worker. Returns this file's
+/// `Stats` (merged by the caller). Each file inflates serially on its own thread, so
+/// parallelism comes from many files running at once.
 pub(crate) fn process_file(input: &Path, sh: &Shared) -> Result<Stats> {
     let mut stats = Stats::new(sh.n_samples);
     let expected = file_orientation(input, sh)?;
@@ -63,6 +93,15 @@ pub(crate) fn process_file(input: &Path, sh: &Shared) -> Result<Stats> {
         ..sh.orient_cfg
     };
 
+    // One chunk per logical target for this whole file (parallel per-sample
+    // compression). Chosen via a shared round-robin counter, not this
+    // thread's identity: real per-file yield varies substantially, and
+    // tying chunk choice to the processing thread let a handful of
+    // high-yield files that happened to land on the same thread (via
+    // rayon's work-stealing) permanently skew that thread's chunk to
+    // several times the median size (real CAT06 full run: 2 of 128 chunks
+    // came out ~4.4x the median, becoming the long-pole stragglers for
+    // every downstream per-chunk consumer).
     let chunk = sh.chunk_counter.fetch_add(1, Ordering::Relaxed) % sh.split;
     let n_targets = sh.targets.len() / sh.split;
     let mut bufs = make_target_bufs(n_targets);
@@ -88,6 +127,10 @@ pub(crate) fn process_file(input: &Path, sh: &Shared) -> Result<Stats> {
     Ok(stats)
 }
 
+/// Reader thread body: pull files from the shared work queue, detect+enforce each
+/// file's orientation, and stream record batches into `tx`. One reader per file
+/// (serial gzip inflate can't be parallelized within a file), so many readers only
+/// help across files; a single large file uses one reader feeding the whole pool.
 fn reader_loop(
     files: &[PathBuf],
     next: &AtomicUsize,
@@ -106,7 +149,7 @@ fn reader_loop(
             if batch.len() >= BATCH_READS {
                 let full = std::mem::replace(&mut batch, Batch::with_orientation(expected));
                 if tx.send(full).is_err() {
-                    return Ok(());
+                    return Ok(());  // all workers gone
                 }
             }
         }
@@ -117,6 +160,8 @@ fn reader_loop(
     Ok(())
 }
 
+/// Worker thread body: consume batches, run [`process_one`] per record, and flush
+/// output to this worker's `chunk` shard. Returns the worker's accumulated `Stats`.
 fn worker_loop(worker_id: usize, sh: &Shared, rx: Receiver<Batch>) -> Result<Stats> {
     let chunk = worker_id % sh.split;
     let n_targets = sh.targets.len() / sh.split;
@@ -155,12 +200,17 @@ fn worker_loop(worker_id: usize, sh: &Shared, rx: Receiver<Batch>) -> Result<Sta
     Ok(stats)
 }
 
+/// Pipelined path (used when files < workers): `n_readers` reader threads decouple
+/// serial gzip decode from processing, streaming batches over a bounded channel to
+/// `n_workers` workers — so a single large file still saturates the machine. Returns
+/// one `Stats` per worker (merged by the caller).
 pub(crate) fn run_pipelined(
     inputs: &[PathBuf],
     sh: &Shared,
     n_readers: usize,
     n_workers: usize,
 ) -> Result<Vec<Stats>> {
+    // Bounded so readers apply backpressure instead of racing ahead into memory.
     let (tx, rx) = bounded::<Batch>(n_workers * 2);
     let next = AtomicUsize::new(0);
 
@@ -171,7 +221,7 @@ pub(crate) fn run_pipelined(
                 scope.spawn(|| reader_loop(inputs, &next, sh, tx))
             })
             .collect();
-        drop(tx);
+        drop(tx);  // workers see the channel close once every reader clone is dropped
 
         let worker_handles: Vec<_> = (0..n_workers)
             .map(|w| {
@@ -181,6 +231,7 @@ pub(crate) fn run_pipelined(
             .collect();
         drop(rx);
 
+        // Surface any reader error, then collect the workers' stats.
         for h in reader_handles {
             h.join().expect("reader thread panicked")?;
         }

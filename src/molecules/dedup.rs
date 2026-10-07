@@ -18,6 +18,13 @@ pub fn correct_group(
     evidence: &HashMap<RawKey, Evidence>,
 ) -> HashMap<RawKey, RawKey> {
     keys.sort_by_key(|key| (std::cmp::Reverse(evidence[key].reads), key.umi));
+    // Every raw UMI in a (cell, gene) group is already distinct (RawKey
+    // includes the UMI, and `evidence` is keyed on the full RawKey), so
+    // indexing by UMI once and generating each child's 3*len single-mismatch
+    // neighbors directly replaces an O(n^2) all-pairs Hamming scan with O(n)
+    // hash lookups. This matters because raw UMI diversity per (cell, gene)
+    // is heavily skewed toward highly expressed genes, where n^2 previously
+    // dominated the whole molecules stage.
     let by_umi: HashMap<Dna, RawKey> = keys.iter().map(|&k| (k.umi, k)).collect();
     let mut roots = HashMap::with_capacity(keys.len());
     for &child in &keys {
@@ -88,6 +95,16 @@ fn correct_umis(
     tagseq: bool,
 ) -> HashMap<RawKey, RawKey> {
     if tagseq {
+        // Pooled-sample mode: directional UMI correction assumes a
+        // low-count 1-mismatch neighbor is a sequencing error of a nearby
+        // high-count node. At pooled-sample UMI diversity that assumption
+        // breaks down the same way cross-gene collision does -- two
+        // genuinely distinct molecules can land 1 Hamming-distance apart
+        // in a 12bp space purely by chance and get merged into one. Skip
+        // correction entirely: every raw (already exact-duplicate-collapsed)
+        // node is its own molecule. Trade-off: genuine 1bp sequencing
+        // errors in the UMI itself are no longer corrected either, so
+        // molecule counts trend slightly high rather than slightly low.
         eprintln!(
             "[sbxpress molecules] phase=umi_correct skipped (--tagseq) raw_nodes={}",
             evidence.len()
@@ -172,6 +189,12 @@ pub fn build_decisions(
     tagseq: bool,
     fractional: bool,
 ) -> (HashMap<RawKey, Decision>, Option<Saturation>) {
+    // Grouped by (cell, sample, gene), not just (cell, gene): the same CB
+    // whitelist is shared across every sample in a pooled Flex run, so
+    // omitting `sample` here would let correct_group()'s internal by-UMI
+    // map (keyed on UMI alone within a group) silently overwrite one
+    // sample's evidence with another's whenever two samples' reads for the
+    // same cell+gene happen to share a UMI value.
     let mut groups = HashMap::<(Dna, u32, u32), Vec<RawKey>>::new();
     for &key in evidence.keys() {
         groups

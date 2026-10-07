@@ -22,6 +22,10 @@ fn tenx_whitelist_gets_gem_group_suffix() {
 fn an_existing_gem_group_suffix_is_accepted_but_gem_group_flag_wins() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("barcodes.txt");
+    // Shape of a real exported barcode list (barcodes.tsv.gz,
+    // filtered_barcodes.csv, or probe-demux's CB values) -- note the
+    // second line's "-2" doesn't match the requested --gem-group 3, and
+    // --gem-group wins rather than the file's own suffix.
     fs::write(&path, "AACCGGTT-1\nTTGGCCAA-2\n").unwrap();
     assert_eq!(
         read_cell_barcodes(&path, 3).unwrap(),
@@ -134,6 +138,8 @@ fn writes_compatibility_csc_h5() {
     );
 }
 
+/// A tiny synthetic BAM with two distinct cell barcodes, each with one
+/// representative (xf bit 8 set) molecule on GENE1.
 fn two_barcode_bam(dir: &Path) -> PathBuf {
     let path = dir.join("in.bam");
     let mut header = bam::Header::new();
@@ -187,6 +193,9 @@ fn skip_unlisted_barcodes_drops_them_instead_of_erroring() {
     assert_eq!(matrix.counts.len(), 1);
 }
 
+/// A single shared cell barcode (one real Flex GEM) carrying molecules
+/// under two different probe barcodes -- the exact shape probe_demux.rs
+/// now legitimately lists in more than one sample's --cell-barcodes.
 fn shared_gem_two_probe_barcodes_bam(dir: &Path) -> PathBuf {
     let path = dir.join("in.bam");
     let mut header = bam::Header::new();
@@ -219,6 +228,8 @@ fn shared_gem_two_probe_barcodes_bam(dir: &Path) -> PathBuf {
 
 #[test]
 fn without_a_probe_barcode_allowlist_a_shared_gem_counts_both_samples_molecules() {
+    // Documents the real cross-contamination risk a shared GEM creates
+    // when --probe-barcodes is not used.
     let dir = tempfile::tempdir().unwrap();
     let bam = shared_gem_two_probe_barcodes_bam(dir.path());
     let matrix = read_matrix(&bam, None, None, None, 1, false, None).unwrap();

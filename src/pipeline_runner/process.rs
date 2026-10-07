@@ -14,6 +14,11 @@ use super::formatting::{
 use super::types::{ProcessingTags, Stats};
 use super::worker::Shared;
 
+/// Process one read: orient → extract → CB classify/rescue → gate → demux → emit
+/// into `bufs` (flushing the crossing batch to `chunk`), accumulating into `stats`.
+/// `orient_cfg` carries the enforced per-file orientation. Shared by both the
+/// one-file-per-thread path ([`process_file`]) and the pipelined path
+/// ([`worker_loop`]).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn process_one(
     id: &[u8],
@@ -34,6 +39,16 @@ pub(crate) fn process_one(
             stats.oriented += 1;
         }
 
+        // Early, i5-ONLY library-type hint -- routes ExtractCfg::flex_r2_boundary's
+        // hard-gate default away from libraries the sample sheet's own i5 index
+        // confidently says aren't Flex GEX (e.g. CRISPR/Feature Barcoding sharing
+        // this invocation). Deliberately separate from `early_outcome` below: i5
+        // alone needs only `r1s` (`index_anchor_starts`'s i5 arm), so unlike the
+        // full i5+i7 dual lookup -- which needs `e.adapter_pos`, i.e. extract()'s
+        // own output -- this can run *before* extract() decides which boundary
+        // strategy to use. A read this doesn't confidently resolve (no sheet, or
+        // i5 itself unreadable) defaults to `false` -- `--flex` assumes every read
+        // is Flex GEX unless the sheet affirmatively says otherwise.
         let likely_non_gex = sh
             .demuxer
             .and_then(|d| {
@@ -52,6 +67,13 @@ pub(crate) fn process_one(
             likely_non_gex,
         );
 
+        // Demux (early): i5/i7 assignment the moment R1 is located, before
+        // any CB-specific work and independent of whether R2/cDNA is ever
+        // found. Both index anchors depend only on `e.r1`/`e.adapter_pos`
+        // (both already set by `extract()` above), never on CB classification
+        // or gating -- so this is the earliest point the assignment can run,
+        // and it's cached (not recomputed) for the actual routing decision
+        // further down, so output is unaffected by moving it here.
         let early_outcome: Option<Outcome> = sh.demuxer.and_then(|d| {
             let r1s = e.r1.map(|(s, _)| s)?;
             let (i5s, i7s) = index_anchor_starts(r1s, e.adapter_pos, sh.index_len);
@@ -87,6 +109,7 @@ pub(crate) fn process_one(
             }
         }
 
+        // Classify the cell barcode (CB = first cb_len bp of R1) if a whitelist.
         let cb_status = match (sh.whitelist, e.r1) {
             (Some(w), Some((r1s, _))) => Some(w.classify(&o.seq[r1s..r1s + sh.cb_len])),
             _ => None,
@@ -98,6 +121,10 @@ pub(crate) fn process_one(
             _ => {}
         }
 
+        // Location confidence: the 16 bp CB is definitively bracketed when both
+        // flanks are present — the R1-primer tail (5') is lock-confirmed and the
+        // dT-primer run (3') is long enough. Then a whitelist miss is a true base
+        // error, not a mis-location.
         let located_confident =
             o.r1_tail_confirmed && e.polyt_run_len >= MIN_POLYT_FLANK && e.r1.is_some();
         if cb_status.is_some() && located_confident {
@@ -107,6 +134,12 @@ pub(crate) fn process_one(
             stats.cb_fail_confident += 1;
         }
 
+        // CB rescue (synthesizes a corrected R1). M5 indel realign (--realign);
+        // then CB reframe (--cb-reframe); then lenient Hamming-2 (--lenient).
+        // Reframe and lenient are gated on confident location.
+        // A unique Hamming-1 match is a correction, not merely a classification:
+        // emit the canonical whitelist sequence in R1 so downstream CB tags and
+        // fixed barcode templates refer to the same cell identifier.
         let mut corrected_r1: Option<(Vec<u8>, Vec<u8>)> = match (sh.whitelist, e.r1, cb_status) {
             (Some(w), Some((r1s, r1e)), Some(CbStatus::Within1)) => {
                 w.correct_within1(&o.seq[r1s..r1s + sh.cb_len]).map(|cb| {
@@ -118,6 +151,9 @@ pub(crate) fn process_one(
             _ => None,
         };
 
+        // XB: how the emitted barcode passed or was rescued. Values 0/1 are
+        // whitelist exact/within-1; 2/3/4 are indel/reframe/Hamming-2 rescue;
+        // 5 means no whitelist and 6 means an unrescued miss emitted with gating off.
         let mut barcode_route = match cb_status {
             Some(CbStatus::OnWhitelist) => 0,
             Some(CbStatus::Within1) => 1,
@@ -144,6 +180,10 @@ pub(crate) fn process_one(
                         }
                     }
                 }
+                // CB reframe rescue: a homopolymer indel shifted the 16 bp CB grab;
+                // try nearby frames (+1 first) for a unique within-1 whitelist hit,
+                // re-registering the UMI off the dT anchor (so R1 stays 28 bp).
+                // Gated on confident location to keep precision.
                 if corrected_r1.is_none() && sh.cb_reframe && located_confident {
                     if let Some(pts) = o.polyt_start {
                         if pts >= sh.umi_len {
@@ -162,6 +202,9 @@ pub(crate) fn process_one(
                         }
                     }
                 }
+                // Lenient within-2 substitution rescue: only when the CB is
+                // confidently located (so the 2 mismatches are real base errors),
+                // keeping the original (correctly-positioned) UMI.
                 if corrected_r1.is_none() && sh.lenient && located_confident {
                     if let Some(cb2) = w.correct_within2(&o.seq[r1s..r1s + sh.cb_len]) {
                         let mut s = cb2.to_vec();
@@ -182,6 +225,9 @@ pub(crate) fn process_one(
             ReadClass::Unparseable => stats.class_unparseable += 1,
         }
 
+        // Emit the ORIGINAL read (pre-orientation, untrimmed) to the side
+        // channel on every path that does not produce a pair, so no input read
+        // is silently dropped.
         let mut push_failed = |reason: &str, stats: &mut Stats| -> Result<()> {
             if sh.failed.is_none() {
                 return Ok(());
@@ -202,6 +248,7 @@ pub(crate) fn process_one(
         };
 
         let (Some((r1s, r1e)), Some((r2s, r2e))) = (e.r1, e.r2) else {
+            // need both R1 and R2 to emit a pair
             let reason = if o.orientation == Orientation::Unknown {
                 "unoriented"
             } else if e.r1.is_none() {
@@ -213,6 +260,7 @@ pub(crate) fn process_one(
             return Ok(());
         };
 
+        // Gate: drop CB-fail pairs that weren't rescued (unless gating is off).
         if sh.cb_gate && !cb_ok {
             stats.gated_out += 1;
             push_failed("cb_fail", stats)?;
@@ -229,7 +277,11 @@ pub(crate) fn process_one(
             stats.r1_not_28 += 1;
         }
 
-        let mut index_route = 5;
+        // Route to a target index: sample, Undetermined (= n_samples), or combined.
+        // Reuses `early_outcome` (computed right after `extract()`, above) --
+        // same inputs (`r1s`/`e.adapter_pos`/`o.seq` are unchanged since
+        // then), so this is the identical result, not a fresh decision.
+        let mut index_route = 5;  // XI=5: demultiplexing was not requested.
         let mut sample_assigned = false;
         let target_idx = if sh.demuxer.is_some() {
             let outcome =
@@ -263,6 +315,16 @@ pub(crate) fn process_one(
             0
         };
 
+        // R1 (CB+UMI) and R2 (cDNA) sit on the SAME strand of the canonical read,
+        // but Illumina paired-end mates come from OPPOSITE strands. The first-strand
+        // cDNA following polyT is the reverse complement of the mRNA sense, so the
+        // canonical R2 slice maps antisense. Emit revcomp(R2) with reversed quality
+        // to match the Illumina convention (R1 as-is, R2 flipped) — otherwise Cell
+        // Ranger reports ~50% "Reads Mapped Antisense to Gene". The `--max-r2-len`
+        // cap is applied here (at write, on the reverse-complemented read): the R2
+        // primer reads from the adapter-proximal end, so keeping the first N bases
+        // mirrors a sequencer stopping after N cycles. `push_fastq_r2_rc` writes the
+        // revcomp straight into the buffer, touching only the emitted (≤N) bases.
         let buf = &mut bufs[target_idx];
         if !sh.minimap2 {
             push_fastq(&mut buf.0, id, r1_seq, r1_qual);
@@ -279,6 +341,8 @@ pub(crate) fn process_one(
             },
             barcode_route,
             index_route,
+            // XA bits: 1=R1-primer tail, 2=poly-T anchor, 4=cDNA adapter
+            // trimmed, 8=file-level expected/detected orientation applied.
             anchor_bits: (o.r1_tail_confirmed as u8)
                 | (((e.polyt_run_len >= MIN_POLYT_FLANK) as u8) << 1)
                 | ((e.adapter_trimmed as u8) << 2)
@@ -341,13 +405,16 @@ pub(crate) fn process_one(
         if e.adapter_trimmed {
             stats.adapter_trimmed += 1;
         }
-        let len = emitted_r2 as u64;
+        let len = emitted_r2 as u64;  // emitted (post-cap) R2 length
         stats.r2_len_sum += len;
         stats.r2_len_max = stats.r2_len_max.max(len);
     }
     Ok(())
 }
 
+/// Detect a file's dominant orientation from a pre-scan of confident reads.
+/// Returns `Some` only when ≥80% of confident reads agree (else `None` → per-read
+/// auto). Each SBX run is orientation-pure, so this is normally unambiguous.
 pub(crate) fn detect_orientation(
     input: &Path,
     base_cfg: &OrientCfg,
@@ -370,6 +437,8 @@ pub(crate) fn detect_orientation(
         let seq = rec.seq();
         let qual = rec.qual().unwrap_or(&[]);
         let o = orient(&seq, qual, &cfg);
+        // Only `polyt_run_len` below is read (set before the boundary branch)
+        // -- this pre-scan never touches `e.r2`, so the routing hint is moot.
         let e = extract(&o.seq, o.cb_umi, o.polyt_start, extract_cfg, false);
         if o.r1_tail_confirmed && e.polyt_run_len >= 10 {
             match o.orientation {
@@ -381,7 +450,7 @@ pub(crate) fn detect_orientation(
     }
     let total = p5 + p7;
     if total < 50 {
-        return Ok(None);
+        return Ok(None);  // too few confident reads to decide
     }
     let frac5 = p5 as f64 / total as f64;
     Ok(if frac5 >= 0.8 {

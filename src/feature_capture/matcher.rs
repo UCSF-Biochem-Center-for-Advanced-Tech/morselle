@@ -2,17 +2,35 @@ use std::collections::HashMap;
 use crate::hamming_index::HammingIndex;
 use super::types::Feature;
 
+/// All features sharing one exact anchor sequence + capture-barcode length
+/// (the unit a single `HammingIndex` can serve, since Hamming needs a fixed
+/// key length).
 struct PatternGroup {
     capture_len: usize,
     capture_index: HammingIndex<usize>,
 }
 
+/// One anchor length's three lookup indexes: exact-length
+/// substitution-tolerant, plus single-deletion- and single-insertion-shifted
+/// (zero extra mismatch tolerance, mirroring `probe_set::ProbeMatcher` --
+/// see its doc comment for why: real SBX errors are indel-dominated, not
+/// substitutions, and a fixed-length Hamming index can't recover those on
+/// its own no matter how large `anchor_max_mm` is set).
 struct AnchorIndexSet {
     exact: HammingIndex<usize>,
     del: HammingIndex<usize>,
     ins: HammingIndex<usize>,
 }
 
+/// Matches a read against a [`FeatureReference`]: locate the anchor (a
+/// windowed, Hamming-tolerant forward scan from the read start, mirroring
+/// `demux::assign_windowed`/`probe_barcode::locate`), then the following
+/// capture barcode against the anchor's matching feature group.
+///
+/// Handles a reference with more than one distinct anchor sequence or
+/// capture-barcode length (real for a panel mixing feature types, e.g.
+/// CRISPR Guide Capture + Antibody Capture in one experiment) by grouping
+/// features into anchor-length buckets, each with its own windowed search.
 pub struct FeatureMatcher {
     anchor_by_len: Vec<(usize, AnchorIndexSet)>,
     groups: Vec<PatternGroup>,
@@ -73,6 +91,18 @@ impl FeatureMatcher {
         group.capture_index.get(&read[bc_start..bc_end])
     }
 
+    /// Locate the anchor within the first `anchor_window` bp of `read`
+    /// (leftmost, smallest anchor length first when several are tried at
+    /// the same position — real references have one anchor length in
+    /// practice, so this rarely matters), then match the following capture
+    /// barcode. Returns the matched feature's index into the original
+    /// `features` slice.
+    ///
+    /// At each offset, tries the exact-length anchor window first, then the
+    /// single-deletion- and single-insertion-shifted windows -- real SBX
+    /// errors inside the anchor span itself are indel-dominated, the same
+    /// finding `probe_set::ProbeMatcher::locate` already acts on for GEX
+    /// probe matching.
     pub fn locate(&self, read: &[u8]) -> Option<usize> {
         for (anchor_len, idx_set) in &self.anchor_by_len {
             let anchor_len = *anchor_len;
@@ -86,6 +116,10 @@ impl FeatureMatcher {
                         return Some(feature_idx);
                     }
                 }
+                // Deletion-shaped: the read is missing a base the anchor
+                // has, so the real anchor span here is one bp SHORTER, and
+                // the capture barcode starts one bp earlier than the exact
+                // case would suggest.
                 if anchor_len >= 1 {
                     let del_end = offset + anchor_len - 1;
                     if del_end <= read.len() {
@@ -96,6 +130,9 @@ impl FeatureMatcher {
                         }
                     }
                 }
+                // Insertion-shaped: the read carries an extra base the
+                // anchor doesn't, so the real anchor span here is one bp
+                // LONGER, and the capture barcode starts one bp later.
                 let ins_end = offset + anchor_len + 1;
                 if ins_end <= read.len() {
                     if let Some(group_id) = idx_set.ins.get(&read[offset..ins_end]) {

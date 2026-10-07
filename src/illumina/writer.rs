@@ -20,6 +20,8 @@ pub fn write_failed_record(
     out.write_all(b"\n")
 }
 
+/// Append one tagged FASTQ record. `seq`/`qual` are already in R2 (sense)
+/// orientation; `yc` describes the merge in that same orientation.
 #[allow(clippy::too_many_arguments)]
 pub fn write_record(
     output: &mut dyn Write,
@@ -34,6 +36,10 @@ pub fn write_record(
     qual: &[u8],
     yc: Option<&YcTag>,
 ) -> std::io::Result<()> {
+    // Illumina FASTQ identifiers commonly include a whitespace-delimited
+    // mate/control/index comment (for example `2:N:0:...`). Minimap2 -y treats
+    // everything after the first whitespace as SAM-style auxiliary fields, so
+    // emit only the canonical cluster name before our tags.
     output.write_all(b"@")?;
     output.write_all(canonical_id(id))?;
     output.write_all(b"\tCR:Z:")?;

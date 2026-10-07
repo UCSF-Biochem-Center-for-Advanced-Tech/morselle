@@ -1,3 +1,8 @@
+//! Add 10x-compatible GENCODE annotation tags to a genomic BAM.
+//!
+//! This stage performs feature assignment only. It deliberately does not correct
+//! UMIs or set `xf`: those require evidence aggregated across all reads sharing a
+//! cell/gene/UMI neighborhood and belong in the subsequent molecule-calling stage.
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -203,6 +208,7 @@ fn write_unordered_batch(
         batch
             .into_par_iter()
             .for_each_with(sender, |sender, record| {
+                // The receiver is alive until every worker finishes this batch.
                 let _ = sender.send(annotate_record(
                     record,
                     annotation,
@@ -220,6 +226,9 @@ fn write_unordered_batch(
     Ok(())
 }
 
+/// Annotate one consecutive minimap2 query group and add mapper/annotation
+/// ambiguity tags without a name sort or an intermediate BAM. `NH` is the number
+/// of *reported* primary+secondary hits, bounded by minimap2's `-N` setting.
 fn write_multimap_group(
     group: Vec<bam::Record>,
     annotation: &Annotation,
@@ -259,6 +268,9 @@ fn write_multimap_group(
             );
         }
     }
+    // The reference-pipeline `mm` convention additionally records a MAPQ promotion. We deliberately
+    // retain minimap2's native MAPQ; here `mm=1` means the compatible-gene rescue
+    // condition alone: multiple reported hits and exactly one compatible gene.
     let rescued = nh > 1 && genes.len() == 1;
     for (hi, &index) in hits.iter().enumerate() {
         replace_i32_tag(&mut records[index], b"NH", Some(nh))?;

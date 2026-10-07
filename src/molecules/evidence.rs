@@ -26,6 +26,13 @@ pub fn collate<P: AsRef<Path>>(inputs: &[P], threads: usize, shard_paths: &[P]) 
             .with_context(|| format!("opening {}", first.display()))?;
         bam::Header::from_template(reader.header())
     };
+    // Uncompressed: shard files are pure ephemeral intermediates, deleted
+    // right after quant reads each one exactly once -- same lesson as
+    // extract's --no-gzip finding (PROFILING.md: 53.9% of extract's CPU was
+    // zlib, --no-gzip gave an 8x win). Collate was previously the dominant
+    // cost of the whole --shards run for exactly this reason: 8 writers all
+    // doing default-level BGZF compression, serialized onto the single
+    // collate loop thread.
     let mut writers: Vec<bam::Writer> = shard_paths
         .iter()
         .map(|path| {
@@ -115,6 +122,9 @@ pub fn collect_evidence(
         let Some((gene, _name)) = choose_gene(&record) else {
             continue;
         };
+        // PB is a Flex-only identity component. Tag-seq (and ordinary
+        // non-Flex assays) deliberately use CB alone and must not be gated on
+        // a PB tag that their chemistry never produces.
         let sample = if let Some(pb) = aux_string(&record, b"PB").filter(|v| !v.is_empty()) {
             intern_sample(&pb, &mut samples, &mut sample_ids)
         } else if !require_pb {
@@ -195,6 +205,8 @@ pub fn merge_evidence_maps(
     mut left: HashMap<RawKey, Evidence>,
     mut right: HashMap<RawKey, Evidence>,
 ) -> HashMap<RawKey, Evidence> {
+    // Keeping the larger allocation avoids repeated hash-table growth during
+    // the parallel reduction tree.
     if left.len() < right.len() {
         std::mem::swap(&mut left, &mut right);
     }
@@ -228,6 +240,8 @@ pub fn collect_region(
     let mut no_sample_records = 0_u64;
     for result in reader.records() {
         let record = result.context("reading BAM region in evidence pass")?;
+        // An indexed query can return an alignment overlapping its left edge.
+        // Assign by alignment start so adjacent work items never double-count.
         if record.tid() != tid as i32 || record.pos() < start as i64 || record.pos() >= end as i64 {
             continue;
         }

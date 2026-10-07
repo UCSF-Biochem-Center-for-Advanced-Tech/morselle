@@ -56,6 +56,8 @@ pub fn run(cli: &Cli) -> Result<()> {
     info!(probes = reference.probes.len(), path = %cli.probe_set.display(), "loaded probe set");
     let matcher = ProbeMatcher::build(&reference.probes, cli.max_mm, cli.window);
 
+    // Distinct genes, first-seen order, for the synthetic contig header and
+    // the (optional) canonical gene manifest.
     let mut gene_order: Vec<&str> = Vec::new();
     let mut gene_index: HashMap<&str, usize> = HashMap::new();
     let mut gene_name: HashMap<&str, &str> = HashMap::new();

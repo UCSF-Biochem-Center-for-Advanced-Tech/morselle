@@ -57,6 +57,7 @@ pub struct OrientCfg {
 }
 
 impl OrientCfg {
+    /// CB+UMI bracket width.
     pub(crate) fn bracket(&self) -> usize {
         self.cb_len + self.umi_len
     }
@@ -65,12 +66,18 @@ impl OrientCfg {
 /// Result of orienting one read to canonical P5→P7.
 #[derive(Debug)]
 pub struct Oriented<'a> {
+    /// Canonical sequence (borrowed when no flip, owned revcomp when flipped).
     pub seq: Cow<'a, [u8]>,
+    /// Canonical quality, aligned to `seq`.
     pub qual: Cow<'a, [u8]>,
     pub orientation: Orientation,
     pub method: OrientMethod,
+    /// SBX leader present at the 5' end of the *original* read.
     pub leader_present: bool,
+    /// Start of the dT-primer run in canonical coords (= end of CB+UMI).
     pub polyt_start: Option<usize>,
+    /// CB+UMI block `[start, end)` in canonical coords.
     pub cb_umi: Option<(usize, usize)>,
+    /// The 10 bp R1-primer-tail bracket confirm passed.
     pub r1_tail_confirmed: bool,
 }

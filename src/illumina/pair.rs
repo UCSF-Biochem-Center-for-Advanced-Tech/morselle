@@ -86,6 +86,9 @@ pub fn convert_pair(
                     bail!("R2 record {} has no qualities", pair_number)
                 };
 
+                /// Record a failure, emit the untouched pair to the side channel,
+                /// and move on. Every `continue` below goes through this, so
+                /// `records_read == records_emitted + records_failed` holds.
                 macro_rules! fail_pair {
                     ($reason:expr) => {{
                         let reason: &str = $reason;
@@ -126,16 +129,28 @@ pub fn convert_pair(
                     }};
                 }
 
+                // Step 1: try to reconstruct the whole fragment from the RAW
+                // mates. This must happen before anything is trimmed — the RT
+                // primer's dT block is the polyA complement, so R1 and rc(R2)
+                // describe the same span only while both are intact.
                 let merged: Option<Merged> = overlap_cfg.and_then(|cfg| {
                     overlap_in(&mut scratch, &r1_seq, r1_qual, &r2_seq, r2_qual, cfg)
                 });
 
+                // Buffers for the merged path, kept alive across the branch.
                 let mut merged_seq: Vec<u8> = Vec::new();
                 let mut merged_qual: Vec<u8> = Vec::new();
                 let mut merged_tag: Option<YcTag> = None;
+                // Non-merged path only: end of the emitted R2 window, trimmed
+                // back from r2_seq.len() when --trim-r2-polya finds read-through.
                 let mut r2_trim_end = r2_seq.len();
 
                 if let Some(m) = &merged {
+                    // (a) sins / mins. The merged molecule is
+                    // `CB | UMI | dT | rc(cDNA)` — the same canonical layout the
+                    // SBX arm produces — so it goes through the *same* extractor
+                    // rather than bespoke logic. Running identical code on both
+                    // arms is what keeps the comparison honest.
                     match m.class {
                         InsertClass::Short => metrics.overlap_short += 1,
                         InsertClass::Medium => metrics.overlap_medium += 1,
@@ -158,7 +173,7 @@ pub fn convert_pair(
                         Some((0, CB_LEN + UMI_LEN)),
                         Some(CB_LEN + UMI_LEN),
                         extract_cfg,
-                        false,
+                        false,  // no Flex support in this binary; see the extract_cfg literal above
                     );
                     let (cdna_start, cdna_end) = match e.r2 {
                         Some(range) => range,
@@ -175,6 +190,10 @@ pub fn convert_pair(
                         .entry(cdna_end - cdna_start)
                         .or_insert(0) += 1;
 
+                    // Emit the cDNA reverse-complemented into R2 orientation, so
+                    // every downstream stage sees the convention it already
+                    // expects. The tag is trimmed to the emitted window and
+                    // flipped with it — reversing the string would be wrong.
                     merged_seq = revcomp(&m.seq[cdna_start..cdna_end]);
                     merged_qual = m.qual[cdna_start..cdna_end].iter().rev().copied().collect();
                     if emit_yc {
@@ -188,6 +207,7 @@ pub fn convert_pair(
                             .is_none_or(|t| t.sequence_length() as usize == merged_seq.len()));
                     }
                 } else {
+                    // (b) lins, or overlap disabled: the standard Illumina path.
                     if overlap_cfg.is_some() {
                         metrics.overlap_long += 1;
                     }
@@ -196,6 +216,12 @@ pub fn convert_pair(
                         metrics.barcode_rejected += 1;
                         fail_pair!("short_r1");
                     }
+                    // R2 alone can still read through a short fragment into its
+                    // poly-A tail (and beyond, into the reverse-complemented
+                    // UMI/CB/primer) even when there is no R1 to merge against.
+                    // --overlap catches this by reconstructing the fragment from
+                    // both mates; this is the same check for reads that never
+                    // get that treatment.
                     if let Some(min_run) = r2_polya_min_run {
                         if let Some(run) = homopolymer::first_run_at_least(&r2_seq, b'A', min_run)
                         {
@@ -210,6 +236,9 @@ pub fn convert_pair(
                     }
                 }
 
+                // The barcode comes from the merged molecule when we have one —
+                // on a short fragment R2 read back through it, so CB and UMI
+                // carry summed duplex quality.
                 let (raw_cb, raw_umi, cb_qual, umi_qual, out_seq, out_qual) = match &merged {
                     Some(m) => (
                         &m.seq[..CB_LEN],

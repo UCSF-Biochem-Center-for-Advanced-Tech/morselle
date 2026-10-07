@@ -4,7 +4,28 @@ use anyhow::{ensure, Context, Result};
 use clap::Parser;
 use serde::Serialize;
 
+/// Nominal length for each synthetic per-gene contig — see
+/// `feature_capture.rs`'s identical constant for why the exact value
+/// doesn't matter (downstream tools never read real coordinates off this
+/// BAM, only tags).
 pub const SYNTHETIC_CONTIG_LEN: i64 = 1_000_000;
+/// Center of the probe-sequence window, in bp from the start of the emitted
+/// R2 read.
+///
+/// Was empirically 69 (FLEX_SUPPORT_PLAN.md Phase 6) when `extract()` bounded
+/// R2's far end with the generic Illumina adapter search, which mostly
+/// failed to find anything (13.5% hit rate on real data) and fell back to
+/// the raw read's own end -- an arbitrary, per-read-variable amount of
+/// trailing junk past the real probe insert, hence the wide empirical spread
+/// and the offset landing well past 0.
+///
+/// Now 0: `extract()`'s `ExtractCfg::flex_r2_boundary` (2026-09-17) bounds R2
+/// at the real structural landmark -- the constant sequence immediately
+/// following `Ligated_Probe_insert` -- so the probe insert is the first
+/// thing in the emitted R2, always, for any read where `extract()` located
+/// that boundary at all. `--window` still absorbs the residual few-bp jitter
+/// from `extract()`'s own anchor-match tolerance, just centered at 0 now
+/// instead of a wide, mostly-arbitrary spread.
 pub const DEFAULT_PROBE_SEQ_OFFSET: usize = 0;
 
 /// A probe-set reference row.
@@ -23,6 +44,8 @@ pub struct ProbeSetReference {
 }
 
 impl ProbeSetReference {
+    /// Parse a real cellranger probe-set CSV. Leading `#key=value` metadata
+    /// lines (panel name, reference genome, ...) are skipped verbatim.
     pub fn load(path: &Path) -> Result<Self> {
         let text = fs::read_to_string(path)
             .with_context(|| format!("reading probe set {}", path.display()))?;
@@ -106,27 +129,45 @@ impl ProbeSetReference {
     about = "Assign 10x Flex GEX reads to genes via the real probe-set reference (not genome alignment)"
 )]
 pub struct Cli {
+    /// `--minimap2`-preset R2 FASTQ from `extract` (carries `CR/CB/UR/UB`,
+    /// and `PR/PB` when a Flex probe barcode was also located).
     #[arg(value_name = "R2_FASTQ")]
     pub r2_fastq: PathBuf,
 
+    /// Real cellranger probe-set CSV (`gene_id,probe_seq,probe_id,included,region,gene_name`).
     #[arg(long)]
     pub probe_set: PathBuf,
 
+    /// Output BAM: mapped (synthetic per-gene contig, `GX`/`GN` tags) on a
+    /// match, unmapped (correctly skipped by `molecules`/`matrix`) on none.
     #[arg(short, long, value_name = "BAM")]
     pub output: PathBuf,
 
+    /// Canonical `id\tname\tGene Expression` manifest for `matrix --features`.
+    /// Created if absent; verified (not overwritten) if it already exists
+    /// and doesn't match -- mirrors `annotate`'s `--genes-mtx`.
     #[arg(long)]
     pub genes_out: Option<PathBuf>,
 
+    /// Optional metrics JSON (hit rate).
     #[arg(long)]
     pub metrics: Option<PathBuf>,
 
+    /// Max mismatches for a confident probe-sequence match. Kept small by
+    /// default: `HammingIndex` precomputes every ≤max_mm neighbor of every
+    /// probe, and neighbor count grows combinatorially (`C(50,k)*3^k`) --
+    /// 1 is ~8M entries (fast, a few hundred MB); 2 would be ~590M (tens of
+    /// GB), impractical to build.
     #[arg(long, default_value_t = 1)]
     pub max_mm: u32,
 
+    /// Max bp each side of [`DEFAULT_PROBE_SEQ_OFFSET`] searched, to absorb
+    /// per-read jitter in the measured dT-run boundary (same mechanism as
+    /// `--probe-barcode-window`/`--anchor-window` elsewhere in this plan).
     #[arg(long, default_value_t = 15)]
     pub window: isize,
 
+    /// Worker threads for parallel probe matching and BAM record construction (0 = auto/num_cpus).
     #[arg(short, long, default_value_t = 0)]
     pub threads: usize,
 }

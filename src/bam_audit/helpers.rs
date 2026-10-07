@@ -7,6 +7,7 @@ use rustc_hash::FxHashSet;
 pub use crate::anchors::revcomp;
 use super::types::{ClipClasses, HOMO, K};
 
+/// All k-mers of `m` and its reverse complement — indel-robust motif detection.
 pub fn kmers(m: &[u8]) -> Vec<[u8; K]> {
     let mut v = Vec::new();
     for s in [m.to_vec(), revcomp(m)] {
@@ -35,6 +36,8 @@ pub fn has_kmer(clip: &[u8], set: &[[u8; K]]) -> bool {
     })
 }
 
+/// SplitMix64 — stable across machines, so the molecule subsample is identical
+/// for every BAM (that is what makes the dumps joinable).
 pub fn splitmix64(mut z: u64) -> u64 {
     z = z.wrapping_add(0x9E3779B97F4A7C15);
     let mut x = z;
@@ -43,6 +46,8 @@ pub fn splitmix64(mut z: u64) -> u64 {
     x ^ (x >> 31)
 }
 
+/// Stable FNV-1a hash for variable-length molecule components. This is used only
+/// for bounded-memory cardinality sampling, not identity reconstruction.
 pub fn stable_hash(parts: &[&[u8]]) -> u64 {
     let mut value = 0xcbf29ce484222325u64;
     for part in parts {
@@ -56,6 +61,7 @@ pub fn stable_hash(parts: &[&[u8]]) -> u64 {
     value
 }
 
+/// 2-bit pack a barcode/UMI; None on any non-ACGT base.
 pub fn pack(s: &[u8]) -> Option<u64> {
     let mut c = 0u64;
     for &b in s {
@@ -71,6 +77,7 @@ pub fn pack(s: &[u8]) -> Option<u64> {
     Some(c)
 }
 
+/// Decode a 2-bit packed code of `len` bases.
 pub fn unpack(mut code: u64, len: usize) -> String {
     let mut s = vec![b'A'; len];
     for i in (0..len).rev() {
@@ -82,6 +89,7 @@ pub fn unpack(mut code: u64, len: usize) -> String {
 
 pub use crate::bam_helpers::{aux_char, aux_int, aux_str};
 
+/// Classify a soft-clipped sequence: what did the aligner refuse to align?
 pub fn classify(clip: &[u8], adapter_k: &[[u8; K]], tso_k: &[[u8; K]]) -> &'static str {
     let n = clip.len() as f64;
     let a = clip.iter().filter(|&&b| b == b'A').count() as f64 / n;

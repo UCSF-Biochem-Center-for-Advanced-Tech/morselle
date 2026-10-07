@@ -2,12 +2,13 @@ use std::path::PathBuf;
 use clap::Parser;
 use serde::Serialize;
 
+/// Longest read-length bin edge; everything above lands in the final bin.
 pub const BIN: usize = 25;
-pub const N_BINS: usize = 29;
+pub const N_BINS: usize = 29;  // 0..700+ in 25bp steps
 
-pub const MIN_CLIP: usize = 5;
-pub const K: usize = 8;
-pub const HOMO: f64 = 0.8;
+pub const MIN_CLIP: usize = 5;  // a clip must be this long to be classified
+pub const K: usize = 8;  // k-mer seed for indel-robust motif matching
+pub const HOMO: f64 = 0.8;  // fraction of one base to call a homopolymer clip
 
 pub const ADAPTER: &[u8] = b"AGATCGGAAGAGC";
 pub const TSO: &[u8] = b"AAGCAGTGGTATCAACGCAGAGTACATGGG";
@@ -47,25 +48,36 @@ pub struct Cli {
     pub cells: Option<PathBuf>,
 }
 
+/// Per-molecule alignment evidence, accumulated across ALL of a molecule's reads
+/// (not just the counted representative). This is what lets us adjudicate, for the
+/// SAME molecule seen on two platforms, which one mapped it better: uniquely vs
+/// multi-mapped (`min_nh`), into a gene body vs intergenic (`region`), and whether
+/// it was confidently counted with a gene (`counted` / `rep_gene`).
 #[derive(Default)]
 pub struct MolAccum {
     pub n_reads: u32,
-    pub min_nh: u32,
+    pub min_nh: u32,  // 1 = uniquely placed somewhere
     pub max_mapq: u8,
-    pub region: u8,
+    pub region: u8,  // bit2=exonic, bit1=intronic, bit0=intergenic (best kept)
     pub max_readlen: u32,
-    pub counted: bool,
-    pub eligible: bool,
-    pub rep_gene: String,
+    pub counted: bool,  // any read is a counted representative (xf bit 8)
+    pub eligible: bool,  // any read has 10x reference/sbxpress xf bit 16
+    pub rep_gene: String,  // gene of the counted representative
 }
 
 #[derive(Default, Serialize)]
 pub struct MappingDiagnostics {
+    /// NH buckets: 1, 2, 3-5, 6-10, 11+.
     pub nh_histogram: [u64; 5],
+    /// MAPQ buckets: 0, 1-2, 3-254, 255.
     pub mapq_histogram: [u64; 4],
+    /// Rows are NH buckets; columns are GX degree 0, 1, 2+.
     pub nh_by_gene_degree: [[u64; 3]; 5],
+    /// Reads by soft-clip fraction: 0, (0,10], (10,25], (25,50], >50%.
     pub clip_fraction_histogram: [u64; 5],
+    /// AS-XS score-gap buckets: missing either score, <=5, 6-20, >20.
     pub alignment_score_gap_histogram: [u64; 4],
+    /// Gene IDs most often called on NH>1 reads (top 25, after the scan).
     pub top_ambiguous_genes: Vec<NamedCount>,
 }
 
@@ -150,10 +162,12 @@ pub struct CollisionOutcomeRecords {
 pub struct Audit {
     pub label: String,
     pub bam: String,
+    // totals
     pub records: u64,
     pub primary: u64,
     pub mapped: u64,
     pub unmapped: u64,
+    // mapping / annotation (primary mapped only)
     pub unique_nh1: u64,
     pub mapq255: u64,
     pub exonic: u64,
@@ -162,24 +176,31 @@ pub struct Audit {
     pub gene_called: u64,
     pub unique_gene_called: u64,
     pub multi_gene: u64,
+    /// Compatibility degree histograms: buckets 0, 1, 2, 3, and 4+.
     pub gene_degree: [u64; 5],
     pub transcript_degree: [u64; 5],
     pub terminal_collision_evaluated: u64,
     pub terminal_collision_resolved: u64,
     pub terminal_collision_unresolved: u64,
     pub terminal_collision_unsupported: u64,
+    // fidelity
     pub mismatches: u64,
     pub aligned_bases: u64,
+    // lengths
     pub read_bases: u64,
     pub read_len_max: usize,
+    // trimming
     pub softclip_bases: u64,
     pub heavily_clipped: u64,
     pub clip5: ClipClasses,
     pub clip3: ClipClasses,
+    // molecules
     pub reads_with_cb_umi: u64,
-    pub molecules: u64,
+    pub molecules: u64,  // xf bit-8 representatives (10x reference's counted molecules)
+    /// Exact 10x reference/sbxpress xf values most relevant to molecule counting.
     pub xf_17_eligible: u64,
     pub xf_25_representative: u64,
+    /// Individual xf bit counts (a record may contribute to several fields).
     pub xf_confident_transcriptome: u64,
     pub xf_discarded_feature: u64,
     pub xf_discordant_genes: u64,
@@ -193,18 +214,27 @@ pub struct Audit {
     pub mapping_diagnostics: MappingDiagnostics,
     pub aligned_length_bins: Vec<MappingLenBin>,
     pub molecule_funnel: MoleculeFunnel,
+    /// Sampled CB+UB read-support histogram: 1, 2, 3, 4, 5-9, 10-19, 20+ reads.
     pub read_support_histogram: [u64; 7],
+    /// Expected observed CB+UB nodes after random read downsampling, estimated from
+    /// the consistent molecule hash sample.
     pub saturation_curve: Vec<SaturationPoint>,
     pub genes_detected: u64,
     pub cells_detected: u64,
     pub molecules_per_cell: MoleculesPerCell,
     pub molecules_emitted: u64,
+    /// Subsample rate used for both the dump and the distinct-molecule estimate.
     pub molecule_sample: u64,
+    /// Distinct (CB,UMI) seen in the subsample, and the reads landing on them.
+    /// The gate depends only on (CB,UMI), so every read of a sampled molecule is
+    /// kept — making `reads_per_molecule` an unbiased estimate in bounded memory.
     pub sampled_molecules: u64,
     pub sampled_reads_with_cb_umi: u64,
     pub distinct_molecules_est: u64,
     pub reads_per_molecule: f64,
+    // per length bin
     pub bins: Vec<LenBin>,
+    // run info
     pub elapsed_secs: f64,
     pub records_per_sec: u64,
 }

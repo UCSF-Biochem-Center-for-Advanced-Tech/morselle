@@ -15,18 +15,19 @@ fn cfg() -> OrientCfg {
     }
 }
 
+/// Build a synthetic canonical 3' read from the anchor consts.
 fn synthetic_canonical(cb: &[u8], umi: &[u8]) -> Vec<u8> {
     let mut v = Vec::new();
     v.extend_from_slice(SBX_LEADER);
     v.extend_from_slice(P5);
-    v.extend_from_slice(b"ACGTACGTAC");
+    v.extend_from_slice(b"ACGTACGTAC");  // i5 (10)
     v.extend_from_slice(R1_PRIMER);
-    v.extend_from_slice(cb);
-    v.extend_from_slice(umi);
-    v.extend_from_slice(&[b'T'; 30]);
-    v.extend_from_slice(b"GACTGACTGACTGACTGACTGACT");
+    v.extend_from_slice(cb);  // 16
+    v.extend_from_slice(umi);  // 12
+    v.extend_from_slice(&[b'T'; 30]);  // poly(dT)
+    v.extend_from_slice(b"GACTGACTGACTGACTGACTGACT");  // cDNA
     v.extend_from_slice(R2_PRIMER);
-    v.extend_from_slice(b"TGCATGCATG");
+    v.extend_from_slice(b"TGCATGCATG");  // i7 (10)
     v.extend_from_slice(P7);
     v
 }
@@ -46,7 +47,7 @@ fn orients_canonical_no_flip() {
     let (s, e) = o.cb_umi.unwrap();
     assert_eq!(&o.seq[s..s + 16], cb);
     assert_eq!(&o.seq[s + 16..e], umi);
-    assert_eq!(o.seq.as_ref(), seq.as_slice());
+    assert_eq!(o.seq.as_ref(), seq.as_slice());  // borrowed, unchanged
 }
 
 #[test]
@@ -61,10 +62,12 @@ fn orients_reversed_and_flips_back() {
     assert_eq!(o.orientation, Orientation::P7Led);
     assert_eq!(o.method, OrientMethod::Homopolymer);
     assert!(o.r1_tail_confirmed);
+    // Flipped back to the exact canonical sequence.
     assert_eq!(o.seq.as_ref(), canonical.as_slice());
     let (s, e) = o.cb_umi.unwrap();
     assert_eq!(&o.seq[s..s + 16], cb);
     assert_eq!(&o.seq[s + 16..e], umi);
+    // Qual was reversed to track the flip.
     let mut q_rev = qual.clone();
     q_rev.reverse();
     assert_eq!(o.qual.as_ref(), q_rev.as_slice());
@@ -80,14 +83,16 @@ fn unknown_when_no_anchor() {
     assert!(o.cb_umi.is_none());
 }
 
+/// Canonical structure but with the dT run too short for the cheap path,
+/// forcing a fallback.
 fn no_homopolymer_read() -> Vec<u8> {
     let mut seq = Vec::new();
     seq.extend_from_slice(P5);
     seq.extend_from_slice(b"ACGTACGTAC");
     seq.extend_from_slice(R1_PRIMER);
-    seq.extend_from_slice(b"AAACCCAAGAAACCCA");
-    seq.extend_from_slice(b"ACGTACGTACGT");
-    seq.extend_from_slice(b"GGGTT");
+    seq.extend_from_slice(b"AAACCCAAGAAACCCA");  // CB
+    seq.extend_from_slice(b"ACGTACGTACGT");  // UMI
+    seq.extend_from_slice(b"GGGTT");  // short, non-T-ending spacer
     seq.extend_from_slice(b"GACGACGACGACGACGACGA");
     seq
 }
@@ -130,17 +135,18 @@ fn levenshtein_fallback_orients() {
 
 #[test]
 fn fixed_orientation_reanchors_past_false_homopolymer() {
+    // True structure near 5', plus a LONGER false poly-T deeper in the cDNA.
     let cb = b"AAACCCAAGAAACACT";
     let umi = b"ACGTACGTACGT";
     let mut s = Vec::new();
     s.extend_from_slice(P5);
-    s.extend_from_slice(b"ACGTACGTAC");
+    s.extend_from_slice(b"ACGTACGTAC");  // i5
     s.extend_from_slice(R1_PRIMER);
     s.extend_from_slice(cb);
     s.extend_from_slice(umi);
-    s.extend(std::iter::repeat(b'T').take(20));
-    s.extend_from_slice(b"GACGACGACGACGACGACGACGACGACGAC");
-    s.extend(std::iter::repeat(b'T').take(40));
+    s.extend(std::iter::repeat(b'T').take(20));  // true dT primer
+    s.extend_from_slice(b"GACGACGACGACGACGACGACGACGACGAC");  // cDNA
+    s.extend(std::iter::repeat(b'T').take(40));  // FALSE longer poly-T in cDNA
     s.extend_from_slice(b"GACGACGACGAC");
     let qual = vec![b'I'; s.len()];
 
@@ -148,6 +154,7 @@ fn fixed_orientation_reanchors_past_false_homopolymer() {
     c.expected = Some(Orientation::P5Led);
     let o = orient(&s, &qual, &c);
     assert_eq!(o.orientation, Orientation::P5Led);
+    // Re-anchored to the TRUE CB despite the longer downstream poly-T.
     let (cs, _) = o.cb_umi.unwrap();
     assert_eq!(&o.seq[cs..cs + 16], cb);
 }

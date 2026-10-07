@@ -52,6 +52,7 @@ pub fn assign(
         cb: &'a str,
         total: u64,
         probe_barcodes: Vec<String>,
+        /// Samples whose declared set clears `min_molecules`, desc by sum.
         occupants: Vec<(&'a str, u64)>,
     }
 
@@ -201,6 +202,11 @@ pub fn gem_overlap(
 
 use crate::bam_helpers::{aux_i64, aux_string};
 
+/// Tally molecule counts per `(CB, PB)` from an annotated+corrected BAM,
+/// gated on the `xf` representative-molecule bit (avoids PCR-duplicate
+/// inflation — matches `cr_bam_to_mtx.rs`'s own `xf & 8` gate). Records
+/// missing `CB` or with an empty/missing `PB` (no confident probe-barcode
+/// call) are skipped.
 pub fn read_bam_tally(path: &Path) -> Result<BTreeMap<(String, String), u64>> {
     let mut reader =
         bam::Reader::from_path(path).with_context(|| format!("opening BAM {}", path.display()))?;
@@ -246,6 +252,15 @@ fn write_sample_assignment(assignments: &[Assignment], path: &Path) -> Result<()
     Ok(())
 }
 
+/// `matrix --cell-barcodes` (see `cr_bam_to_mtx.rs::read_cell_barcodes`)
+/// expects *bare* ACGT barcodes and appends its own `-{gem_group}` suffix —
+/// it rejects a barcode that already carries one (not pure ACGT). Our own
+/// `CB` tag convention always carries `-1` already (see `lib.rs`'s
+/// `minimap2_header` emission), so strip it back off here to keep
+/// `<sample>.barcodes.txt` directly usable, matching the plan's own
+/// "feeds `matrix --cell-barcodes` directly" requirement. Strips any
+/// trailing `-<digits>`, not just `-1`, in case a future multi-gem-group run
+/// carries a different suffix.
 pub fn strip_gem_suffix(cb: &str) -> &str {
     match cb.rfind('-') {
         Some(i) if !cb[i + 1..].is_empty() && cb[i + 1..].bytes().all(|b| b.is_ascii_digit()) => {
@@ -281,6 +296,12 @@ pub fn write_per_sample_barcodes(
     Ok(())
 }
 
+/// `<sample>.probe_barcodes.txt`: this sample's declared probe-barcode ids,
+/// one per line, straight from the sample sheet (not derived from
+/// assignments — a sample's declared set is static). Feeds
+/// `cr-bam-to-mtx --probe-barcodes` so that a GEM shared with another sample
+/// (see the module doc comment) only contributes *this* sample's own
+/// molecules to *this* sample's matrix, not the shared GEM's whole total.
 pub fn write_per_sample_probe_barcodes(sheet: &ProbeSampleSheet, out_dir: &Path) -> Result<()> {
     for s in &sheet.samples {
         let path = out_dir.join(format!("{}.probe_barcodes.txt", s.id));
@@ -318,6 +339,8 @@ pub fn build_metrics(
     let mut occupancy_by_cb: HashMap<&str, usize> = HashMap::new();
     let mut assigned = 0;
     let mut unassigned = 0;
+    // One row per GEM for this status (unlike Assigned, never duplicated
+    // across samples), so the row count is already the distinct-GEM count.
     let mut high_occupancy_gems = 0;
     for a in assignments {
         distinct_cbs.insert(a.cell_barcode.as_str());

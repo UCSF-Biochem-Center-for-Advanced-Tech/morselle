@@ -77,6 +77,7 @@ fn tagseq_barcodes_selects_exact_list_ignoring_umi_rank() {
     };
     write_h5(&matrix, &raw_path, "GRCh38").unwrap();
     let barcodes_path = temp.path().join("samples.txt");
+    // Bare barcode, no gem-group suffix, matching the whitelist format.
     fs::write(&barcodes_path, "bc2\n").unwrap();
     let output = temp.path().join("outs");
     run(&Cli {

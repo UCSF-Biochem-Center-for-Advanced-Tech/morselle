@@ -12,6 +12,8 @@ fn write_csv(text: &str) -> tempfile::NamedTempFile {
     f
 }
 
+/// Real header + shape (25bp probes here, not the real 50bp, purely to
+/// keep test literals short -- ProbeSetReference doesn't hardcode a length).
 const REAL_SHAPE: &str = "\
 #probe_set_file_format=3.0
 #panel_name=test
@@ -25,7 +27,7 @@ ENSG2,TTTTGGGGCCCCAAAATGCATGCAT,ENSG2|GENE2|ghi,TRUE,unspliced,GENE2
 fn loads_only_included_true_rows() {
     let f = write_csv(REAL_SHAPE);
     let r = ProbeSetReference::load(f.path()).unwrap();
-    assert_eq!(r.probes.len(), 2);
+    assert_eq!(r.probes.len(), 2);  // the FALSE row is excluded
     assert_eq!(r.probes[0].gene_id, "ENSG1");
     assert_eq!(r.probes[0].region, "spliced");
     assert_eq!(r.probes[1].gene_id, "ENSG2");
@@ -64,7 +66,7 @@ fn tolerates_a_mismatch_within_budget() {
     let r = ProbeSetReference::load(f.path()).unwrap();
     let matcher = ProbeMatcher::build(&r.probes, 1, 15);
     let mut probe = b"AAAACCCCGGGGTTTTACGTACGTA".to_vec();
-    probe[3] = b'G';
+    probe[3] = b'G';  // 1 mismatch, within max_mm=1
     let read = read_with_probe_at(DEFAULT_PROBE_SEQ_OFFSET, &probe);
     assert_eq!(matcher.locate(&read), Some(0));
 }
@@ -74,6 +76,9 @@ fn windowed_search_absorbs_offset_jitter() {
     let f = write_csv(REAL_SHAPE);
     let r = ProbeSetReference::load(f.path()).unwrap();
     let matcher = ProbeMatcher::build(&r.probes, 1, 15);
+    // 5bp late: still within the +-15 window. (Not "early" -- offset 0
+    // has no room to go earlier; residual extract()-side anchor jitter
+    // only ever pushes the probe insert a few bp *later* than 0.)
     let read = read_with_probe_at(DEFAULT_PROBE_SEQ_OFFSET + 5, b"AAAACCCCGGGGTTTTACGTACGTA");
     assert_eq!(matcher.locate(&read), Some(0));
 }
@@ -84,17 +89,20 @@ fn distinguishes_two_genes_probes() {
     let r = ProbeSetReference::load(f.path()).unwrap();
     let matcher = ProbeMatcher::build(&r.probes, 1, 15);
     let read = read_with_probe_at(DEFAULT_PROBE_SEQ_OFFSET, b"TTTTGGGGCCCCAAAATGCATGCAT");
-    assert_eq!(matcher.locate(&read), Some(1));
+    assert_eq!(matcher.locate(&read), Some(1));  // GENE2's probe
 }
 
 #[test]
 fn recovers_a_single_deletion_in_the_probe_span() {
+    // Real SBX error mode (2026-09-18 diagnostic): the read is missing a
+    // base the probe has -- del_index should still resolve it, at the
+    // *shorter* (probe_len - 1) window.
     let f = write_csv(REAL_SHAPE);
     let r = ProbeSetReference::load(f.path()).unwrap();
     let matcher = ProbeMatcher::build(&r.probes, 1, 15);
     let probe = b"AAAACCCCGGGGTTTTACGTACGTA";
     let mut deleted = probe[..10].to_vec();
-    deleted.extend_from_slice(&probe[11..]);
+    deleted.extend_from_slice(&probe[11..]);  // drop the base at position 10
     assert_eq!(deleted.len(), probe.len() - 1);
     let read = read_with_probe_at(DEFAULT_PROBE_SEQ_OFFSET, &deleted);
     assert_eq!(matcher.locate(&read), Some(0));
@@ -102,12 +110,15 @@ fn recovers_a_single_deletion_in_the_probe_span() {
 
 #[test]
 fn recovers_a_single_insertion_in_the_probe_span() {
+    // The rarer real shape (9.2% of recoverable indel-shaped misses vs
+    // 85.2% deletion) but still real -- ins_index resolves it at the
+    // *longer* (probe_len + 1) window.
     let f = write_csv(REAL_SHAPE);
     let r = ProbeSetReference::load(f.path()).unwrap();
     let matcher = ProbeMatcher::build(&r.probes, 1, 15);
     let probe = b"AAAACCCCGGGGTTTTACGTACGTA";
     let mut inserted = probe[..10].to_vec();
-    inserted.push(b'T');
+    inserted.push(b'T');  // extra base not present in the real probe
     inserted.extend_from_slice(&probe[10..]);
     assert_eq!(inserted.len(), probe.len() + 1);
     let read = read_with_probe_at(DEFAULT_PROBE_SEQ_OFFSET, &inserted);
@@ -116,6 +127,7 @@ fn recovers_a_single_insertion_in_the_probe_span() {
 
 #[test]
 fn indel_recovery_still_distinguishes_two_genes() {
+    // A deletion shouldn't blur two real, distinct probes together.
     let f = write_csv(REAL_SHAPE);
     let r = ProbeSetReference::load(f.path()).unwrap();
     let matcher = ProbeMatcher::build(&r.probes, 1, 15);
@@ -123,7 +135,7 @@ fn indel_recovery_still_distinguishes_two_genes() {
     let mut deleted = probe2[..5].to_vec();
     deleted.extend_from_slice(&probe2[6..]);
     let read = read_with_probe_at(DEFAULT_PROBE_SEQ_OFFSET, &deleted);
-    assert_eq!(matcher.locate(&read), Some(1));
+    assert_eq!(matcher.locate(&read), Some(1));  // GENE2's probe, not GENE1's
 }
 
 #[test]
@@ -146,7 +158,7 @@ fn genes_manifest_create_then_verify_round_trips() {
         text,
         "ENSG1\tGENE1\tGene Expression\nENSG2\tGENE2\tGene Expression\n"
     );
-    establish_genes_manifest(&out, &genes).unwrap();
+    establish_genes_manifest(&out, &genes).unwrap();  // idempotent
 }
 
 #[test]
@@ -219,5 +231,5 @@ fn run_end_to_end_writes_mapped_and_unmapped_records_with_carried_tags() {
     let unmapped = &records[1];
     assert!(unmapped.is_unmapped());
     assert!(unmapped.aux(b"GX").is_err());
-    assert!(unmapped.aux(b"PB").is_err());
+    assert!(unmapped.aux(b"PB").is_err());  // PB optional, absent here
 }

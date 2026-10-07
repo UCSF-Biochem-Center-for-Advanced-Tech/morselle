@@ -60,6 +60,7 @@ pub fn run(cli: &Cli) -> Result<()> {
             .collect(),
         ..Default::default()
     };
+    // Per-molecule evidence for the subsample. Bounded: ~distinct_molecules / sample.
     let mut sampled: FxHashMap<u64, MolAccum> = FxHashMap::default();
     let mut counted_per_cell: FxHashMap<String, u64> = FxHashMap::default();
     let mut detected_genes: FxHashSet<String> = FxHashSet::default();
@@ -82,6 +83,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         }
         a.mapped += 1;
 
+        // --- read-orientation sequence + cigar (BAM stores both reference-oriented) ---
         let mut seq = rec.seq().as_bytes();
         let mut cig: Vec<Cigar> = rec.cigar().iter().copied().collect();
         if rec.is_reverse() {
@@ -108,6 +110,7 @@ pub fn run(cli: &Cli) -> Result<()> {
             })
             .sum();
 
+        // --- tags ---
         let nh = aux_int(&rec, b"NH").unwrap_or(1);
         let nm = aux_int(&rec, b"nM").unwrap_or(0).max(0) as u64;
         let re = aux_char(&rec, b"RE").unwrap_or(b'?');
@@ -222,6 +225,7 @@ pub fn run(cli: &Cli) -> Result<()> {
             }
         }
 
+        // --- soft-clip content (the contamination signal) ---
         if c5 >= MIN_CLIP {
             b.clip5 += 1;
             bump(&mut a.clip5, classify(&seq[..c5], &adapter_k, &tso_k));
@@ -231,6 +235,7 @@ pub fn run(cli: &Cli) -> Result<()> {
             bump(&mut a.clip3, classify(&seq[rl - c3..], &adapter_k, &tso_k));
         }
 
+        // --- molecules ---
         let cb_full = aux_str(&rec, b"CB");
         let cb = cb_full.map(|s| s.split('-').next().unwrap_or(s));
         let ub = aux_str(&rec, b"UB");
@@ -279,8 +284,11 @@ pub fn run(cli: &Cli) -> Result<()> {
                     detected_genes.insert(gene.to_string());
                 }
             }
+            // Consistent hash-subsample keyed on (CB,UMI) only: the SAME molecules are
+            // selected in every BAM (dumps join), and every read of a sampled molecule
+            // is accumulated (so per-molecule evidence and reads/molecule are unbiased).
             if let Some((pcb, pub_)) = pack(cbs.as_bytes()).zip(pack(ubs.as_bytes())) {
-                let key = (pcb << 24) | pub_;
+                let key = (pcb << 24) | pub_;  // lossless: CB in bits 24.., UMI in 0..23
                 if cli.molecule_sample <= 1 || splitmix64(key) % cli.molecule_sample == 0 {
                     a.sampled_reads_with_cb_umi += 1;
                     let m = sampled.entry(key).or_default();
@@ -315,6 +323,9 @@ pub fn run(cli: &Cli) -> Result<()> {
         }
     }
 
+    // Dump one line per sampled molecule (all its reads aggregated). Columns:
+    //   CB  UMI  counted  rep_gene  n_reads  min_nh  max_mapq  region  max_readlen
+    // region: E>N>I>. (best hit). rep_gene is '-' when the molecule was not counted.
     if let Some(w) = mol_out.as_mut() {
         for (key, m) in &sampled {
             let cbs = unpack(key >> 24, 16);
@@ -435,6 +446,8 @@ pub fn run(cli: &Cli) -> Result<()> {
             0.0
         }
     };
+    // Contamination is expressed as % of ALL mapped reads, not % of clips, so the
+    // numbers are directly comparable across platforms.
     eprintln!(
         "RUN SUMMARY  {}\n  records {}  primary {}  unmapped {} ({:.2}%)\n  \
          unique(NH=1) {:.2}%  MAPQ255 {:.2}%  geneGX {:.2}%  multi-gene {:.3}%\n  \

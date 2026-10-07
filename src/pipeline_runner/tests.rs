@@ -6,6 +6,8 @@ mod tests {
     };
     use crate::pipeline_runner::types::ProcessingTags;
 
+    /// The optimized R2 emitter must produce byte-identical output to the original
+    /// `revcomp(seq[start..end])` + reversed-qual + truncate approach it replaced.
     fn reference_r2(
         id: &[u8],
         seq: &[u8],
@@ -31,6 +33,7 @@ mod tests {
         let seq = b"ACGTACGTNNGGCCTTAAACGTACGTTTGGCCAA";
         let qual: Vec<u8> = (0..seq.len() as u8).map(|i| b'!' + (i % 40)).collect();
         let id = b"read/1";
+        // Sweep sub-ranges and caps (including 0 = uncapped and caps > length).
         for start in 0..6 {
             for end in (start + 1)..=seq.len() {
                 for cap in [0usize, 1, 5, 10, end - start, end - start + 5] {

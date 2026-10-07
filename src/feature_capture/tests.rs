@@ -12,6 +12,7 @@ fn write_csv(text: &str) -> tempfile::NamedTempFile {
     f
 }
 
+/// Real CAT06 shape: two CRISPR guides sharing one anchor.
 const REAL_SHAPE: &str = "\
 id,name,read,pattern,sequence,feature_type
 CD45,CD45,R2,TTCCAGCTTAGCTCTTAAAC(BC),CTGTTACCCTAAGAACAAAC,CRISPR Guide Capture
@@ -24,6 +25,8 @@ fn loads_real_shape() {
     let r = FeatureReference::load(f.path()).unwrap();
     assert_eq!(r.features.len(), 2);
     assert_eq!(r.features[0].id, "CD45");
+    assert_eq!(r.features[0].anchor, b"TTCCAGCTTAGCTCTTAAAC");
+    assert_eq!(r.features[0].barcode, b"CTGTTACCCTAAGAACAAAC");
     assert_eq!(r.features[0].feature_type, "CRISPR Guide Capture");
 }
 
@@ -67,9 +70,9 @@ fn tolerates_mismatches_within_budget() {
     let r = FeatureReference::load(f.path()).unwrap();
     let matcher = FeatureMatcher::build(&r.features, 2, 1, 30);
     let mut anchor = b"TTCCAGCTTAGCTCTTAAAC".to_vec();
-    anchor[3] = b'G';
+    anchor[3] = b'G';  // 1 mismatch, within anchor_max_mm=2
     let mut capture = b"CTGTTACCCTAAGAACAAAC".to_vec();
-    capture[0] = b'A';
+    capture[0] = b'A';  // 1 mismatch, within capture_max_mm=1
     let read = read_with_anchor_capture(10, &anchor, &capture);
     assert_eq!(matcher.locate(&read), Some(0));
 }
@@ -89,17 +92,21 @@ fn distinguishes_two_guides_sharing_one_anchor() {
     let r = FeatureReference::load(f.path()).unwrap();
     let matcher = FeatureMatcher::build(&r.features, 2, 1, 30);
     let read = read_with_anchor_capture(10, b"TTTCTGGACTTCAGTGGACG", b"GGTGCACTCTGGAGAAGTCC");
-    assert_eq!(matcher.locate(&read), Some(1));
+    assert_eq!(matcher.locate(&read), Some(1));  // "inactive"
 }
 
 #[test]
 fn recovers_a_single_deletion_in_the_anchor_span() {
+    // Mirrors probe_set::tests::recovers_a_single_deletion_in_the_probe_span:
+    // the read is missing a base the anchor has -- del index should still
+    // resolve it, at the *shorter* (anchor_len - 1) window, and the
+    // capture barcode should still be found starting right after it.
     let f = write_csv(REAL_SHAPE);
     let r = FeatureReference::load(f.path()).unwrap();
     let matcher = FeatureMatcher::build(&r.features, 2, 1, 30);
     let anchor = b"TTCCAGCTTAGCTCTTAAAC";
     let mut deleted = anchor[..10].to_vec();
-    deleted.extend_from_slice(&anchor[11..]);
+    deleted.extend_from_slice(&anchor[11..]);  // drop the base at position 10
     assert_eq!(deleted.len(), anchor.len() - 1);
     let read = read_with_anchor_capture(10, &deleted, b"CTGTTACCCTAAGAACAAAC");
     assert_eq!(matcher.locate(&read), Some(0));
@@ -107,12 +114,13 @@ fn recovers_a_single_deletion_in_the_anchor_span() {
 
 #[test]
 fn recovers_a_single_insertion_in_the_anchor_span() {
+    // Mirrors probe_set::tests::recovers_a_single_insertion_in_the_probe_span.
     let f = write_csv(REAL_SHAPE);
     let r = FeatureReference::load(f.path()).unwrap();
     let matcher = FeatureMatcher::build(&r.features, 2, 1, 30);
     let anchor = b"TTCCAGCTTAGCTCTTAAAC";
     let mut inserted = anchor[..10].to_vec();
-    inserted.push(b'T');
+    inserted.push(b'T');  // extra base not present in the real anchor
     inserted.extend_from_slice(&anchor[10..]);
     assert_eq!(inserted.len(), anchor.len() + 1);
     let read = read_with_anchor_capture(10, &inserted, b"CTGTTACCCTAAGAACAAAC");
@@ -121,6 +129,8 @@ fn recovers_a_single_insertion_in_the_anchor_span() {
 
 #[test]
 fn indel_recovery_still_distinguishes_two_guides() {
+    // A deletion in one guide's anchor shouldn't cause it to be confused
+    // with the other guide sharing the same anchor sequence.
     let f = write_csv(REAL_SHAPE);
     let r = FeatureReference::load(f.path()).unwrap();
     let matcher = FeatureMatcher::build(&r.features, 2, 1, 30);
@@ -128,9 +138,13 @@ fn indel_recovery_still_distinguishes_two_guides() {
     let mut deleted = anchor[..8].to_vec();
     deleted.extend_from_slice(&anchor[9..]);
     let read = read_with_anchor_capture(10, &deleted, b"GGTGCACTCTGGAGAAGTCC");
-    assert_eq!(matcher.locate(&read), Some(1));
+    assert_eq!(matcher.locate(&read), Some(1));  // "inactive", not "CD45"
 }
 
+/// Proves the generalization: a mixed panel (a CRISPR-flavored feature
+/// and an "Antibody Capture"-flavored one with a *different* anchor)
+/// resolves correctly -- the matcher doesn't special-case feature_type
+/// or assume one universal anchor.
 #[test]
 fn handles_a_mixed_panel_with_different_anchors_per_feature_type() {
     let csv = "\
@@ -163,6 +177,7 @@ fn features_tsv_create_then_verify_round_trips() {
         text,
         "CD45\tCD45\tCRISPR Guide Capture\ninactive\tinactive\tCRISPR Guide Capture\n"
     );
+    // idempotent re-run against the same reference
     establish_features_tsv(&out, &r.features).unwrap();
 }
 
@@ -250,5 +265,5 @@ fn run_end_to_end_writes_mapped_and_unmapped_records_with_carried_tags() {
     assert_eq!(unmapped.qname(), b"read2");
     assert!(unmapped.aux(b"GX").is_err());
     assert_eq!(unmapped.aux(b"CB").unwrap(), Aux::String("TTTTGGGGCCCC-1"));
-    assert!(unmapped.aux(b"PB").is_err());
+    assert!(unmapped.aux(b"PB").is_err());  // PB optional, absent here
 }

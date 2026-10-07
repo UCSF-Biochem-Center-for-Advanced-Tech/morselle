@@ -65,6 +65,8 @@ fn linear_slope(x: &[f64], y: &[f64]) -> f64 {
     numerator / denominator
 }
 
+/// Simple Good-Turing proportions, following the Gale-Sampson implementation
+/// used by 10x reference. Returns None when fewer than ten frequency classes exist.
 fn sgt_proportions(freq: &[u64]) -> Option<(Vec<f64>, f64)> {
     let mut nr = BTreeMap::<u64, u64>::new();
     for &r in freq {

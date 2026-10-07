@@ -8,16 +8,21 @@ use super::types::{FallbackMode, OrientCfg, OrientMethod, Oriented};
 const BRACKET_LOCK_WINDOW: isize = 6;
 const TAIL_SEARCH_WINDOW: usize = 120;
 
+/// Detect the SBX leader in the first ≤8 bp of the original read (≤1 mm).
 fn detect_leader(seq: &[u8]) -> bool {
     let n = SBX_LEADER.len().min(seq.len());
     n == SBX_LEADER.len() && hamming(&seq[..n], SBX_LEADER) <= 1
 }
 
+/// Hamming distance of the R1-primer tail ending just before `cb_start`.
 fn r1_tail_mm(canon: &[u8], cb_start: usize) -> Option<u32> {
     let tail = R1_PRIMER_TAIL.len();
     (cb_start >= tail).then(|| hamming(&canon[cb_start - tail..cb_start], R1_PRIMER_TAIL))
 }
 
+/// Lock the CB+UMI bracket precisely: slide the 10 bp R1-primer tail over a small
+/// window around `approx_cb_start` and return the offset-corrected `cb_start` with
+/// the best (≤ `max_mm`) match. `None` if the tail can't be confirmed nearby.
 fn lock_bracket(canon: &[u8], approx_cb_start: usize, max_mm: u32) -> Option<usize> {
     let mut best: Option<(u32, usize)> = None;
     for d in -BRACKET_LOCK_WINDOW..=BRACKET_LOCK_WINDOW {
@@ -35,6 +40,12 @@ fn lock_bracket(canon: &[u8], approx_cb_start: usize, max_mm: u32) -> Option<usi
     best.map(|(_, s)| s)
 }
 
+/// Orient a single read to canonical P5→P7 (3' assay).
+///
+/// When `cfg.expected` is set (the run's known orientation), we *enforce* it via
+/// [`orient_fixed`] — only the matching dT-primer identity is sought, so a cDNA
+/// homopolymer can't flip or mis-anchor the read. Otherwise we auto-detect per
+/// read via [`orient_auto`].
 pub fn orient<'a>(seq: &'a [u8], qual: &'a [u8], cfg: &OrientCfg) -> Oriented<'a> {
     let leader_present = detect_leader(seq);
     match cfg.expected {
@@ -44,6 +55,7 @@ pub fn orient<'a>(seq: &'a [u8], qual: &'a [u8], cfg: &OrientCfg) -> Oriented<'a
     }
 }
 
+/// Finalize an `Oriented` from a located `cb_start` (+ optional raw dT-run start).
 fn make<'a>(
     seq: Cow<'a, [u8]>,
     qual: Cow<'a, [u8]>,
@@ -70,6 +82,10 @@ fn make<'a>(
     }
 }
 
+/// Orient with the run's orientation *known* (`flip` = P7-led). Looks only for
+/// the canonical dT-primer (poly-T) validated by the R1-tail; if that fails,
+/// re-anchors via a direct R1-tail prefix search (fixes false homopolymer
+/// anchors); else falls back to the unconfirmed homopolymer offset.
 fn orient_fixed<'a>(
     seq: &'a [u8],
     qual: &'a [u8],
@@ -91,6 +107,8 @@ fn orient_fixed<'a>(
         (Cow::Borrowed(seq), Cow::Borrowed(qual))
     };
 
+    // 1) Canonical dT-primer (poly-T) with room for CB+UMI before it, locked to
+    //    the R1-tail. The lock rejects false anchors whose -28 offset has no tail.
     let t_run = longest_run(&canon_seq, b'T')
         .filter(|r| r.len >= cfg.min_homopolymer && r.start >= bracket);
     if let Some(t) = t_run {
@@ -110,6 +128,8 @@ fn orient_fixed<'a>(
             }
         }
     }
+    // 2) Re-anchor: the chosen homopolymer didn't confirm (likely a cDNA poly-T).
+    //    Search the 5' window directly for the R1-tail.
     if let Some(cb_start) = tail_in_prefix(&canon_seq, TAIL_SEARCH_WINDOW, cfg.r1_tail_max_mm) {
         return make(
             canon_seq,
@@ -123,6 +143,7 @@ fn orient_fixed<'a>(
             bracket,
         );
     }
+    // 3) Best-effort unconfirmed homopolymer (dT present but R1-tail degraded).
     if let Some(t) = t_run {
         if let Some(cb_start) = t.start.checked_sub(bracket) {
             return make(
@@ -138,6 +159,7 @@ fn orient_fixed<'a>(
             );
         }
     }
+    // 4) Nothing locatable — orientation known but no barcode bracket.
     Oriented {
         seq: canon_seq,
         qual: canon_qual,
@@ -150,6 +172,8 @@ fn orient_fixed<'a>(
     }
 }
 
+/// Orient by auto-detecting strand from whichever dT-primer homopolymer is
+/// longer (used when the run orientation is unknown/ambiguous).
 fn orient_auto<'a>(
     seq: &'a [u8],
     qual: &'a [u8],
@@ -159,14 +183,19 @@ fn orient_auto<'a>(
     let bracket = cfg.bracket();
     let n = seq.len();
 
+    // --- Stage A: homopolymer scan (cheap) ---
     let t_run = longest_run(seq, b'T').filter(|r| r.len >= cfg.min_homopolymer);
     let a_run = longest_run(seq, b'A').filter(|r| r.len >= cfg.min_homopolymer);
 
+    // A T-run is a canonical dT-primer candidate only if there's room for the
+    // CB+UMI block before it. An A-run is the reversed dT-primer only if there's
+    // room for the (revcomp) CB+UMI block after it.
     let t_ok = t_run.filter(|r| r.start >= bracket);
     let a_ok = a_run.filter(|r| n.saturating_sub(r.end()) >= bracket);
 
     let flip = match (t_ok, a_ok) {
         (Some(t), Some(a)) => {
+            // Both plausible: longer run wins; tie → expected hint; else canonical.
             if t.len > a.len {
                 false
             } else if a.len > t.len {
@@ -180,8 +209,10 @@ fn orient_auto<'a>(
         (None, None) => return dispatch_fallback(seq, qual, cfg, leader_present),
     };
 
+    // --- Build canonical seq/qual + dT-primer start in canonical coords ---
     let (canon_seq, canon_qual, polyt_start): (Cow<[u8]>, Cow<[u8]>, usize) = if flip {
         let a = a_ok.expect("a_ok set when flip");
+        // A-run [start, end) maps to a T-run at [n-end, n-start) after revcomp.
         let polyt_start = n - a.end();
         let mut q = qual.to_vec();
         q.reverse();
@@ -197,6 +228,11 @@ fn orient_auto<'a>(
         Orientation::P5Led
     };
 
+    // The homopolymer locates the bracket approximately; lock it precisely to the
+    // R1-primer tail over a small window (handles dT-boundary fuzz). Fall back to
+    // the raw homopolymer offset (unconfirmed) if the tail isn't found nearby.
+    // `polyt_start` stays the *raw* dT-run start: the gap (polyt_start - cb_start)
+    // is the measured CB+UMI span, whose deviation from 28 flags an indel (M5).
     let approx_cb_start = polyt_start.checked_sub(bracket);
     let locked = approx_cb_start.and_then(|s| lock_bracket(&canon_seq, s, cfg.r1_tail_max_mm));
     let r1_tail_confirmed = locked.is_some();
@@ -217,6 +253,7 @@ fn orient_auto<'a>(
     }
 }
 
+/// Build an Unknown result (no orientation).
 fn unknown<'a>(seq: &'a [u8], qual: &'a [u8], leader_present: bool) -> Oriented<'a> {
     Oriented {
         seq: Cow::Borrowed(seq),
@@ -230,6 +267,7 @@ fn unknown<'a>(seq: &'a [u8], qual: &'a [u8], leader_present: bool) -> Oriented<
     }
 }
 
+/// Route reads without a homopolymer to the configured fallback.
 fn dispatch_fallback<'a>(
     seq: &'a [u8],
     qual: &'a [u8],
@@ -243,6 +281,8 @@ fn dispatch_fallback<'a>(
     }
 }
 
+/// Best Hamming match of the R1-primer tail within the first `window` bp; returns
+/// the CB start (one past the tail) for the best hit ≤ `max_mm`. Allocation-free.
 fn tail_in_prefix(seq: &[u8], window: usize, max_mm: u32) -> Option<usize> {
     let tail = R1_PRIMER_TAIL;
     let m = tail.len();
@@ -263,6 +303,8 @@ fn tail_in_prefix(seq: &[u8], window: usize, max_mm: u32) -> Option<usize> {
     best.map(|(_, end)| end)
 }
 
+/// Cheap fallback: scan both read ends for the R1-primer tail by Hamming. No
+/// Levenshtein, no per-call allocation (except the revcomp when flipping).
 fn fallback_hamming_tail<'a>(
     seq: &'a [u8],
     qual: &'a [u8],
@@ -270,6 +312,7 @@ fn fallback_hamming_tail<'a>(
     leader_present: bool,
 ) -> Oriented<'a> {
     let bracket = cfg.bracket();
+    // Try as canonical (P5-led): tail near the 5' end.
     if let Some(cb_start) = tail_in_prefix(seq, TAIL_SEARCH_WINDOW, cfg.r1_tail_max_mm) {
         let cb_umi = (cb_start + bracket <= seq.len()).then(|| (cb_start, cb_start + bracket));
         return Oriented {
@@ -283,6 +326,7 @@ fn fallback_hamming_tail<'a>(
             r1_tail_confirmed: cb_umi.is_some(),
         };
     }
+    // Otherwise try the reverse strand: revcomp, then tail near 5' of canonical.
     let rc = revcomp(seq);
     if let Some(cb_start) = tail_in_prefix(&rc, TAIL_SEARCH_WINDOW, cfg.r1_tail_max_mm) {
         let cb_umi = (cb_start + bracket <= rc.len()).then(|| (cb_start, cb_start + bracket));
@@ -302,6 +346,8 @@ fn fallback_hamming_tail<'a>(
     unknown(seq, qual, leader_present)
 }
 
+/// Thorough fallback: locate the R1 primer on both strands with a Levenshtein
+/// search and orient from the better hit. Expensive — opt-in via `--thorough`.
 fn fallback_levenshtein<'a>(
     seq: &'a [u8],
     qual: &'a [u8],
@@ -337,6 +383,7 @@ fn fallback_levenshtein<'a>(
         (Cow::Borrowed(seq), Cow::Borrowed(qual))
     };
 
+    // r1_end is on the as-given strand; map to canonical coords if we flipped.
     let cb_start = if flip { n - r1_end } else { r1_end };
     let cb_umi = (cb_start + bracket <= canon_seq.len()).then(|| (cb_start, cb_start + bracket));
     let polyt_start = cb_umi.map(|(_, e)| e);
@@ -353,12 +400,18 @@ fn fallback_levenshtein<'a>(
     }
 }
 
+/// Best Levenshtein match of `needle` in `haystack`: `(end_index, distance)`.
 fn best_search(needle: &[u8], haystack: &[u8]) -> Option<(usize, u32)> {
     triple_accel::levenshtein_search(needle, haystack)
         .min_by_key(|m| m.k)
         .map(|m| (m.end, m.k))
 }
 
+/// 5' (TSO-spacer) assay orientation — not yet implemented.
+///
+/// The current data is all 3' GEX (poly-dT spacer). When 5' libraries are added,
+/// orientation there keys off the TSO and the distal poly-A tail instead of the
+/// dT primer. Tracked as a future extension.
 pub fn orient_5p_stub<'a>(_seq: &'a [u8], _qual: &'a [u8], _cfg: &OrientCfg) -> Oriented<'a> {
     unimplemented!("5' (TSO) assay orientation not yet implemented")
 }

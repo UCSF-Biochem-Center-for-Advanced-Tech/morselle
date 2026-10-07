@@ -1,3 +1,4 @@
+//! 10x-style GEX cell calling: OrdMag followed by multinomial EmptyDrops.
 pub mod algo;
 pub mod h5;
 pub mod helpers;

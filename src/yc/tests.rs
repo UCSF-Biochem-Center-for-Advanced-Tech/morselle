@@ -4,6 +4,7 @@ use super::types::complement_code;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
+/// Base complement, with gaps passing through.
 fn comp(base: u8) -> u8 {
     match base {
         b'A' => b'T',
@@ -18,6 +19,7 @@ fn parse(text: &str) -> YcTag {
     YcTag::parse(text.as_bytes()).unwrap()
 }
 
+/// Every code that actually stands for a strand disagreement.
 fn usable_codes() -> Vec<u8> {
     (b'A'..=b'Z')
         .filter(|&c| !is_reserved(c))
@@ -33,6 +35,8 @@ fn tables_are_well_formed() {
     assert_eq!(DECODE_R1.len(), 26);
     assert_eq!(DECODE_R2.len(), 26);
     assert_eq!(COMPLEMENT.len(), 26);
+    // The four identity slots really are identities, so they can never be
+    // produced by `pair_code` and never encode a disagreement.
     for base in [b'A', b'C', b'G', b'T'] {
         assert_eq!(
             code_bases(base),
@@ -41,6 +45,7 @@ fn tables_are_well_formed() {
             base as char
         );
     }
+    // Reserved slots are gap/gap.
     for reserved in [b'N', b'U'] {
         let index = (reserved - b'A') as usize;
         assert_eq!(DECODE_R1[index], GAP);
@@ -51,6 +56,7 @@ fn tables_are_well_formed() {
 
 #[test]
 fn published_code_table_matches_documented_matrix() {
+    // The matrix published in the XOOS docs, rows R1, columns R2.
     let expected: &[(u8, u8, u8)] = &[
         (b'A', b'C', b'M'),
         (b'A', b'G', b'R'),
@@ -84,6 +90,7 @@ fn published_code_table_matches_documented_matrix() {
         );
         assert_eq!(code_bases(code), Some((r1, r2)), "code {}", code as char);
     }
+    // The matrix is exhaustive: 20 usable codes, one per off-diagonal cell.
     assert_eq!(usable_codes().len(), expected.len());
 }
 
@@ -98,6 +105,7 @@ fn complement_table_complements_the_bases() {
             "complement of {}",
             code as char
         );
+        // ...and it is an involution, in both cases.
         assert_eq!(complement_code(complemented), code);
         let lower = code.to_ascii_lowercase();
         assert!(complement_code(lower).is_ascii_lowercase());
@@ -144,6 +152,8 @@ fn decodes_published_example_1() {
 #[test]
 fn decodes_published_example_2() {
     let tag = parse("+1WK1I1L+");
+    // Concordant positions (0, 3, 5) must match; the rest are the caller's
+    // choice and do not affect what the strands decode to.
     let seq = b"CAGAAGA";
     let decoded = decode(&tag, seq, &vec![b'I'; seq.len()]).unwrap();
     assert_eq!(decoded.r1_seq, b"CAGAAG");
@@ -206,6 +216,8 @@ fn reports_span_and_provenance() {
 
 #[test]
 fn lowercase_codes_span_no_consensus_position() {
+    // Consensus has a gap: R1 keeps its A, R2 its C, neither costs a
+    // consensus position, and both decode at Q0.
     let tag = parse("+1m1+");
     assert_eq!(tag.sequence_length(), 2);
     assert_eq!(tag.count_discordant(), 1);
@@ -235,10 +247,12 @@ fn reverse_complement_is_an_involution() {
 fn reverse_complement_swaps_tails_and_complements_codes() {
     let mut tag = parse("4+13-3");
     tag.reverse_complement();
+    // The R1 tail was on the left and is now on the right, and vice versa.
     assert_eq!(tag.to_string(), "3-13+4");
 
     let mut tag = parse("+1WK1I1L+");
     tag.reverse_complement();
+    // Reversed order, each code complemented: L->Z, I->X, K->B, W->H.
     assert_eq!(tag.to_string(), "+Z1X1BH1+");
 }
 
@@ -289,6 +303,7 @@ fn trimming_everything_empties_the_tag() {
 
 #[test]
 fn trimming_drops_zero_length_ops_at_the_boundary() {
+    // The leading `m` describes a base in the region being trimmed away.
     let mut tag = parse("+m1W1+");
     assert_eq!(tag.sequence_length(), 3);
     tag.trim(1, 0);
@@ -365,6 +380,7 @@ fn gapless_alignments_round_trip_losslessly() {
         };
 
         let r1_duplex = random_bases(&mut rng, width);
+        // Mostly agree, so runs and codes both get exercised.
         let r2_duplex: Vec<u8> = r1_duplex
             .iter()
             .map(|&b| {
@@ -383,6 +399,7 @@ fn gapless_alignments_round_trip_losslessly() {
                 .unwrap();
         assert_eq!(stats.n_columns_coerced, 0);
 
+        // Consensus takes R1 at disagreements; the tag is lossless either way.
         let mut consensus = Vec::new();
         consensus.extend_from_slice(&left_tail);
         consensus.extend_from_slice(&r1_duplex);

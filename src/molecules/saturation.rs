@@ -36,6 +36,9 @@ impl Saturation {
     }
 
     pub fn bin(&self, hash: u32) -> usize {
+        // `hash / 2^32 * total_reads` is the zero-based read depth at which a
+        // uniformly selected read becomes available.  This avoids any reliance
+        // on the coordinate order of the BAM.
         (((hash as u128 * self.total_reads as u128) >> 32) as u64 / self.interval) as usize
     }
 

@@ -128,6 +128,16 @@ mod tests {
         );
     }
 
+    /// Core correctness guarantee behind `--shards`: every real grouping
+    /// (`(cell, sample, gene)`) and collision-resolution (`(cell, sample,
+    /// umi)`) key in `build_decisions` is scoped to `(cell, sample)`, so
+    /// partitioning evidence by `(cell, sample)` into independent shards and
+    /// merging each shard's own `build_decisions()` output must produce
+    /// exactly the decisions (and exactly the accumulated metrics) that a
+    /// single global `build_decisions()` call over the same evidence would
+    /// -- this is what makes it safe to process shards one at a time,
+    /// discarding memory in between, instead of materializing one global
+    /// evidence/roots/decisions table.
     #[test]
     fn sharding_by_cell_sample_matches_global_build_decisions() {
         let cells: Vec<Dna> = [
@@ -151,6 +161,11 @@ mod tests {
         .map(|s| Dna::pack(s).unwrap())
         .collect();
 
+        // A synthetic but real-shaped evidence set: several cells, some with
+        // more than one sample (matching the pooled-Flex architecture this
+        // whole fix targets), several genes, a within-group UMI-correction
+        // pair (umis[0]/umis[1] differ by 1 base), and a cross-gene
+        // collision (umis[2] shared by two genes in the same cell+sample).
         let mut evidence = HashMap::new();
         let mut next_ordinal = 0_u64;
         let mut push = |evidence: &mut HashMap<RawKey, Evidence>,
@@ -172,19 +187,28 @@ mod tests {
                     reads,
                     best_ordinal: ordinal,
                     best_mapq: 60,
+                    // Distinct per entry (real reads essentially never tie
+                    // exactly): an exact rank tie makes `molecule_aggregate`'s
+                    // representative choice depend on HashMap iteration
+                    // order, which a shard's own map instance need not share
+                    // with the global one -- a real but orthogonal,
+                    // pre-existing property of tie-breaking, not something
+                    // this test is meant to exercise.
                     best_aligned: 100 + ordinal as u32,
                     min_read_hash: ordinal as u32,
                 },
             );
         };
         for (i, &cell) in cells.iter().enumerate() {
-            let sample = (i % 3) as u32;
-            push(&mut evidence, cell, sample, 0, umis[0], 10);
-            push(&mut evidence, cell, sample, 0, umis[1], 2);
-            push(&mut evidence, cell, sample, 1, umis[2], 4);
-            push(&mut evidence, cell, sample, 2, umis[2], 3);
+            let sample = (i % 3) as u32;  // several cells reuse the same sample id, and vice versa
+            push(&mut evidence, cell, sample, 0, umis[0], 10);  // major
+            push(&mut evidence, cell, sample, 0, umis[1], 2);  // 1bp error of major -> corrects into it
+            push(&mut evidence, cell, sample, 1, umis[2], 4);  // gene 1, umi X
+            push(&mut evidence, cell, sample, 2, umis[2], 3);  // gene 2, same umi X, same (cell,sample) -> real cross-gene collision
+                                                              // Same cell, a DIFFERENT sample, reusing the same UMI+a new gene:
+                                                              // must NOT be pulled into the collision group above.
             push(&mut evidence, cell, (sample + 1) % 3, 3, umis[2], 5);
-            push(&mut evidence, cell, sample, 4, umis[3], 1);
+            push(&mut evidence, cell, sample, 4, umis[3], 1);  // plain unique molecule
         }
 
         let mut global_metrics = Metrics::default();
@@ -194,6 +218,9 @@ mod tests {
         let mut shard_maps: Vec<HashMap<RawKey, Evidence>> =
             (0..SHARDS).map(|_| HashMap::new()).collect();
         for (&key, &item) in &evidence {
+            // Mirrors shard_hash's real invariant (route by (cell, sample)
+            // alone) without needing raw bytes -- any valid partition
+            // function proves the same property.
             let idx = (key.cell.0 ^ (key.sample as u64).wrapping_mul(0x9E3779B97F4A7C15)) % SHARDS;
             shard_maps[idx as usize].insert(key, item);
         }
@@ -232,6 +259,8 @@ mod tests {
             sharded_metrics.raw_cell_gene_umis,
             global_metrics.raw_cell_gene_umis
         );
+        // Sanity: this synthetic input actually exercises correction and
+        // collision resolution, not just a trivial all-unique case.
         assert!(global_metrics.umi_nodes_collapsed > 0);
         assert!(global_metrics.collision_groups > 0);
     }
@@ -256,6 +285,14 @@ mod tests {
         );
     }
 
+    /// Core correctness guarantee behind reading multiple un-merged input
+    /// BAMs directly (the real motivation: skip samtools cat/sort/index
+    /// entirely, since collate() only ever does a plain sequential scan --
+    /// see the `bam` CLI field doc comment). Splitting the exact same
+    /// records across two "chunk" files must route every record into the
+    /// same shard, in the same multiset, as collating from one file holding
+    /// all of them -- collate() doesn't care how many files or what order
+    /// the records arrive in, only their CB+PB content.
     #[test]
     fn collate_from_multiple_inputs_matches_collate_from_one() {
         let dir = tempfile::tempdir().unwrap();
@@ -267,6 +304,7 @@ mod tests {
             ("r5", 5, "TTTTAAAACCCCGGGGTTTT", "AAAACCCCGGGG", "ENSG1"),
         ];
 
+        // One pre-merged file, all records together.
         let merged_path = dir.path().join("merged.bam");
         write_test_bam(&merged_path, &all_records);
         let merged_shards: Vec<PathBuf> = (0..3)
@@ -274,6 +312,8 @@ mod tests {
             .collect();
         collate(&[merged_path], 1, &merged_shards).unwrap();
 
+        // The same records, split across three un-merged "chunk" files
+        // (simulating raw per-chunk probeset-align output, no cat/sort/index).
         let chunk_paths: Vec<PathBuf> = (0..3)
             .map(|i| dir.path().join(format!("chunk_{i}.bam")))
             .collect();

@@ -76,6 +76,7 @@ pub struct YcTag {
 
 impl Default for YcTag {
     fn default() -> Self {
+        // `+` is the documented default delimiter for an empty tail.
         Self {
             left_overhang: 0,
             left_is_r1: true,
@@ -115,6 +116,8 @@ pub enum YcError {
     SeqQualMismatch { seq: usize, qual: usize },
 }
 
+/// The `(R1, R2)` base pair a code stands for, or `None` if the code is not a
+/// usable YC code. Case-insensitive: case encodes consensus presence, not bases.
 pub fn code_bases(code: u8) -> Option<(u8, u8)> {
     let upper = code.to_ascii_uppercase();
     if !upper.is_ascii_uppercase() || is_reserved(upper) {
@@ -124,6 +127,10 @@ pub fn code_bases(code: u8) -> Option<(u8, u8)> {
     Some((DECODE_R1[index], DECODE_R2[index]))
 }
 
+/// The code for an `(R1, R2)` pair, or `None` if the pair has no encoding.
+///
+/// Concordant pairs deliberately return `None` — they are runs, not codes. The
+/// four identity slots (`A`/`C`/`G`/`T`) are therefore never emitted.
 pub fn pair_code(r1: u8, r2: u8) -> Option<u8> {
     if r1 == r2 {
         return None;
@@ -134,6 +141,7 @@ pub fn pair_code(r1: u8, r2: u8) -> Option<u8> {
         .map(|i| b'A' + i)
 }
 
+/// The code standing for the base-complement of `code`'s pair, preserving case.
 pub fn complement_code(code: u8) -> u8 {
     if code.is_ascii_uppercase() {
         COMPLEMENT[(code - b'A') as usize]
@@ -142,6 +150,7 @@ pub fn complement_code(code: u8) -> u8 {
     }
 }
 
+/// Parse a non-negative integer, rejecting leading zeros.
 pub fn parse_u64(text: &[u8]) -> Result<u64, YcError> {
     let rendered = || String::from_utf8_lossy(text).into_owned();
     if text.len() > 1 && text[0] == b'0' {

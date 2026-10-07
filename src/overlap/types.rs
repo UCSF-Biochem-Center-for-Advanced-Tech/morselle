@@ -28,6 +28,8 @@ impl Default for OverlapCfg {
             kmer: 8,
             kmer_offset: 1,
             check_lengths: 20,
+            // NOT HTStream's 8. A false merge yields a chimeric read that maps
+            // to the wrong place, which is strictly worse than not merging.
             min_overlap: 20,
             max_mismatch: 100,
             max_mismatch_density: 0.25,

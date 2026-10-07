@@ -34,6 +34,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         v
     };
 
+    // Per-cell calls: which called features clear their threshold.
     let mut per_cell_calls: Vec<Vec<(usize, u64)>> = vec![Vec::new(); n_cells];
     for &fi in &called_features {
         let threshold = thresholds[&fi];
@@ -48,6 +49,7 @@ pub fn run(cli: &Cli) -> Result<()> {
     fs::create_dir_all(&cli.output)
         .with_context(|| format!("creating {}", cli.output.display()))?;
 
+    // protospacer_calls_per_cell.csv
     {
         let mut w = BufWriter::new(File::create(
             cli.output.join("protospacer_calls_per_cell.csv"),
@@ -73,6 +75,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         }
     }
 
+    // protospacer_umi_thresholds.csv / .json
     {
         let mut csv = BufWriter::new(File::create(
             cli.output.join("protospacer_umi_thresholds.csv"),
@@ -92,6 +95,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         )?;
     }
 
+    // protospacer_calls_summary.csv
     {
         let mut rows = Vec::new();
         let no_guide_molecules = (0..n_cells)
@@ -110,6 +114,8 @@ pub fn run(cli: &Cli) -> Result<()> {
             .collect();
         let more_than_one = per_cell_calls.iter().filter(|c| c.len() > 1).count();
 
+        // Fraction (0-1 scale), matching real cellranger output exactly
+        // (e.g. `0.70568911653102`, not a percentage).
         let pct = |n: usize| n as f64 / n_cells as f64;
         rows.push(SummaryRow {
             feature_call: "No guide molecules".into(),

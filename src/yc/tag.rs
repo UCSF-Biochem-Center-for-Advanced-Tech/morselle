@@ -4,6 +4,11 @@ use super::types::{
 };
 
 impl YcTag {
+    /// Parse a tag from its wire form.
+    ///
+    /// Deliberately lenient about the four identity codes (`A`/`C`/`G`/`T`):
+    /// we never emit them, but we accept them so that tags written by other
+    /// implementations round-trip rather than erroring out.
     pub fn parse(text: &[u8]) -> Result<Self, YcError> {
         if !text.is_ascii() {
             return Err(YcError::NotAscii);
@@ -68,20 +73,27 @@ impl YcTag {
         })
     }
 
+    /// Total consensus positions this tag accounts for.
     pub fn sequence_length(&self) -> u64 {
         self.left_overhang
             + self.duplex.iter().map(|op| op.consensus_len()).sum::<u64>()
             + self.right_overhang
     }
 
+    /// True if any part of the read was covered by both strands.
     pub fn is_duplex(&self) -> bool {
         !self.duplex.is_empty()
     }
 
+    /// True if no part of the read was covered by both strands. An empty tag
+    /// counts as simplex.
     pub fn is_simplex(&self) -> bool {
         self.duplex.is_empty()
     }
 
+    /// Positions where the two strands disagreed. Counts zero-length (lowercase)
+    /// operators too — the strands still disagreed there, the consensus just
+    /// dropped the base.
     pub fn count_discordant(&self) -> u64 {
         self.duplex
             .iter()
@@ -89,10 +101,12 @@ impl YcTag {
             .count() as u64
     }
 
+    /// Consensus positions covered by both strands, concordant and discordant.
     pub fn count_duplex(&self) -> u64 {
         self.duplex.iter().map(|op| op.consensus_len()).sum()
     }
 
+    /// Provenance of every consensus position, in order.
     pub fn base_types(&self) -> Vec<BaseType> {
         let mut types = Vec::with_capacity(self.sequence_length() as usize);
         types.extend(std::iter::repeat_n(
@@ -118,6 +132,10 @@ impl YcTag {
         types
     }
 
+    /// Reverse-complement the tag, to accompany a reverse-complemented consensus.
+    ///
+    /// A tag cannot be reversed by reversing its string: the tails swap ends
+    /// *and* every code must go through the complement table.
     pub fn reverse_complement(&mut self) {
         std::mem::swap(&mut self.left_overhang, &mut self.right_overhang);
         std::mem::swap(&mut self.left_is_r1, &mut self.right_is_r1);
@@ -129,12 +147,20 @@ impl YcTag {
         }
     }
 
+    /// Trim `left` consensus positions off the 5' end and `right` off the 3' end,
+    /// as when an aligner soft-clips the read. Trimming more than the tag spans
+    /// empties it.
+    ///
+    /// Zero-length (lowercase) operators sitting at a trimmed boundary are
+    /// dropped: they describe bases in the trimmed-away region.
     pub fn trim(&mut self, left: u64, right: u64) {
         self.trim_left(left);
         self.trim_right(right);
         self.normalize();
     }
 
+    /// Put the tag in canonical form: a tail with no bases carries no strand
+    /// information, so it takes the documented default delimiter `+`.
     pub fn normalize(&mut self) {
         if self.left_overhang == 0 {
             self.left_is_r1 = true;
@@ -166,6 +192,7 @@ impl YcTag {
             self.duplex.remove(0);
         }
         if remaining > 0 {
+            // Trimmed past the duplex segment entirely.
             let taken = remaining.min(self.right_overhang);
             self.right_overhang -= taken;
         }

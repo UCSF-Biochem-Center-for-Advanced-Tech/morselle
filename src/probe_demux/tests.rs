@@ -33,6 +33,8 @@ fn tally(entries: &[(&str, &str, u64)]) -> BTreeMap<(String, String), u64> {
 
 #[test]
 fn sums_across_a_samples_whole_declared_set() {
+    // Pos's declared set is D-A01|D-A02; a CB split across both should
+    // sum to a single Pos call, not lose to a naive top-single-barcode vote.
     let t = tally(&[("CB1", "D-A01", 30), ("CB1", "D-A02", 25)]);
     let out = assign(&sheet(), &t, &DemuxCfg { min_molecules: 10 });
     assert_eq!(out.len(), 1);
@@ -52,6 +54,11 @@ fn below_floor_is_unassigned() {
 
 #[test]
 fn two_samples_each_clearing_the_floor_both_get_assigned() {
+    // Real Flex multiplex pooling: a GEM legitimately holding cells from
+    // two different pooled samples is the expected case, not a doublet
+    // to reject outright -- see the module doc comment. With only 3
+    // possible samples in this toy sheet, occupancy=2 is nowhere near
+    // any realistic high-occupancy-GEM cutoff.
     let t = tally(&[("CB1", "D-A01", 50), ("CB1", "D-A03", 40)]);
     let out = assign(&sheet(), &t, &DemuxCfg { min_molecules: 10 });
     assert_eq!(out.len(), 2);
@@ -74,6 +81,8 @@ fn two_samples_each_clearing_the_floor_both_get_assigned() {
 
 #[test]
 fn a_little_bleed_from_a_second_sample_does_not_trigger_high_occupancy() {
+    // second sample present but below the floor -> ordinary Assigned, not
+    // a doublet call.
     let t = tally(&[("CB1", "D-A01", 50), ("CB1", "D-A03", 2)]);
     let out = assign(&sheet(), &t, &DemuxCfg { min_molecules: 10 });
     assert_eq!(out[0].status, Status::Assigned);
@@ -83,21 +92,31 @@ fn a_little_bleed_from_a_second_sample_does_not_trigger_high_occupancy() {
 
 #[test]
 fn molecules_on_an_undeclared_probe_barcode_count_against_purity_but_not_toward_any_sample() {
-    let t = tally(&[("CB1", "D-A01", 20), ("CB1", "A-F04", 15)]);
+    let t = tally(&[("CB1", "D-A01", 20), ("CB1", "A-F04", 15)]);  // A-F04 not declared by anyone
     let out = assign(&sheet(), &t, &DemuxCfg { min_molecules: 10 });
     assert_eq!(out[0].status, Status::Assigned);
+    // molecules is this row's own sample sum (20), not the GEM total
+    // (35) -- A-F04's 15 molecules aren't Pos's to claim.
     assert_eq!(out[0].molecules, 20);
     assert!((out[0].purity - 20.0 / 35.0).abs() < 1e-9);
 }
 
 #[test]
 fn negbinom_quantile_matches_hand_computed_values() {
+    // r=2.0, p=0.5: cdf crosses 0.999 at k=12 (hand-verified via the
+    // same P(k)=P(k-1)*p*(k-1+r)/k recurrence, P(0)=(1-p)^r=0.25).
     assert_eq!(negbinom_quantile(2.0, 0.5, 0.999), 12);
+    // r<=0 (no occupied GEMs to fit) disables the filter.
     assert_eq!(negbinom_quantile(0.0, 0.5, 0.999), u64::MAX);
 }
 
 #[test]
 fn high_occupancy_gem_tail_is_filtered_but_ordinary_multi_sample_gems_are_not() {
+    // 40 samples, one probe barcode each. 39 "normal" GEMs each hold
+    // only one sample's worth of signal (occupancy=1); one "artifact"
+    // GEM holds every sample's probe barcode at once (occupancy=40) --
+    // the kind of GEM 10x's real high-occupancy-GEM filter targets
+    // (chip clog / wetting failure), not ordinary pooling.
     let samples: Vec<ProbeSample> = (1..=40)
         .map(|i| ProbeSample {
             id: format!("S{i}"),
@@ -160,11 +179,14 @@ fn gem_overlap_reports_only_pairs_with_shared_cells() {
     assert_eq!(r.barcode1_gems, 2);
     assert_eq!(r.barcode2_gems, 1);
     assert_eq!(r.common_gems, 1);
-    assert!((r.overlap - 1.0).abs() < 1e-9);
+    assert!((r.overlap - 1.0).abs() < 1e-9);  // common / min(2,1) = 1/1
 }
 
 #[test]
 fn gem_overlap_ignores_undeclared_noise_barcodes() {
+    // A-F04 is a single-read background call, not a real declared probe
+    // barcode -- without filtering it'd produce a spurious overlap=1.0
+    // row against any real barcode it happens to coincide with.
     let t = tally(&[("CB1", "D-A01", 10), ("CB1", "A-F04", 1)]);
     let declared: std::collections::HashSet<&str> = ["D-A01", "D-A02"].into();
     let rows = gem_overlap(&t, &declared);
@@ -198,10 +220,10 @@ fn bam_tally_gates_on_xf_bit_8_and_skips_missing_or_empty_pb() {
         r.push_aux(b"xf", Aux::I32(xf)).unwrap();
         writer.write(&r).unwrap();
     };
-    push(Some("CB1-1"), Some("D-A01"), 25);
-    push(Some("CB1-1"), Some("D-A01"), 17);
-    push(Some("CB1-1"), Some(""), 25);
-    push(Some("CB2-1"), None, 25);
+    push(Some("CB1-1"), Some("D-A01"), 25);  // representative (bit 8 set, 25 = 0b11001)
+    push(Some("CB1-1"), Some("D-A01"), 17);  // NOT representative (17 = 0b10001, no bit 8)
+    push(Some("CB1-1"), Some(""), 25);  // representative but empty PB -> skipped
+    push(Some("CB2-1"), None, 25);  // representative but no PB tag -> skipped
     drop(writer);
 
     let tally = read_bam_tally(&bam_path).unwrap();
@@ -213,12 +235,15 @@ fn bam_tally_gates_on_xf_bit_8_and_skips_missing_or_empty_pb() {
 fn strip_gem_suffix_removes_trailing_digits_only() {
     assert_eq!(strip_gem_suffix("ACGTACGTACGTACGT-1"), "ACGTACGTACGTACGT");
     assert_eq!(strip_gem_suffix("ACGTACGTACGTACGT-12"), "ACGTACGTACGTACGT");
-    assert_eq!(strip_gem_suffix("ACGTACGTACGTACGT"), "ACGTACGTACGTACGT");
-    assert_eq!(strip_gem_suffix("D-A01"), "D-A01");
+    assert_eq!(strip_gem_suffix("ACGTACGTACGTACGT"), "ACGTACGTACGTACGT");  // no suffix
+    assert_eq!(strip_gem_suffix("D-A01"), "D-A01");  // trailing non-digit -> untouched
 }
 
 #[test]
 fn per_sample_barcode_files_are_bare_acgt_matrix_cell_barcodes_ready() {
+    // The real bug this guards: matrix --cell-barcodes rejects a barcode
+    // that already carries a gem-group suffix (it appends its own), so
+    // writing "CB1-1" instead of "CB1" would break the Phase 2 -> 3 handoff.
     let t = tally(&[
         ("AAACCCAAGAAACCCA-1", "D-A01", 50),
         ("TTTGGGTTCTTTGGGT-1", "D-A02", 50),

@@ -79,6 +79,14 @@ pub const NO_SAMPLE: u32 = u32::MAX;
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct RawKey {
     pub cell: Dna,
+    /// Interned `PB` (probe/sample barcode) tag, or `NO_SAMPLE` if absent.
+    /// Required for Flex data: the same 16bp `CB` whitelist is shared
+    /// across every sample in a pooled Flex run (confirmed on real CAT06
+    /// data -- 99.8% of observed cell barcodes are shared by more than one
+    /// sample), so `cell` alone is not a unique cell identity there. Every
+    /// place that groups or looks up by `(cell, ...)` for correction or
+    /// collision-resolution purposes must include `sample` too, or reads
+    /// from different samples sharing a `CB` get silently merged.
     pub sample: u32,
     pub gene: u32,
     pub umi: Dna,
@@ -90,6 +98,8 @@ pub struct Evidence {
     pub best_ordinal: u64,
     pub best_mapq: u8,
     pub best_aligned: u32,
+    // A 32-bit rank has sub-read resolution even for this 1.6B-read run, and
+    // keeps Evidence at its pre-saturation 24-byte layout.
     pub min_read_hash: u32,
 }
 
@@ -174,6 +184,12 @@ pub struct Metrics {
     pub elapsed_secs: f64,
 }
 
+/// Adds one shard's local counters into the run-wide accumulator. Used by
+/// the concurrent shard path, where each shard builds its own `Metrics`
+/// (starting from `Metrics::default()`) rather than sharing one `&mut
+/// Metrics` across threads. `input_bam`/`output_bam`/`tagseq`/`saturation`/
+/// `elapsed_secs` are set once at the top level, not per-shard, so they're
+/// deliberately left alone here.
 pub fn merge_metrics(target: &mut Metrics, source: &Metrics) {
     target.records += source.records;
     target.eligible_records += source.eligible_records;

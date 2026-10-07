@@ -31,6 +31,14 @@ pub fn read_barcodes(path: &Path) -> Result<Vec<String>> {
         .collect::<std::io::Result<Vec<_>>>()?)
 }
 
+/// A bare barcode (10x's own whitelist files, e.g. `3M-february-2018.txt`,
+/// are the typical `--cell-barcodes` shape) or one that already carries a
+/// gem-group suffix (as real exported barcode lists do — `barcodes.tsv.gz`,
+/// `filtered_barcodes.csv`, or our own `probe-demux`'s CB values) are both
+/// accepted; either way `--gem-group` is what actually gets applied, so an
+/// existing suffix is optional input, never required, and never silently
+/// overrides the flag. Mirrors `cell_calling.rs`'s `resolve_tagseq_barcodes`,
+/// which tolerates the same ambiguity for the same reason.
 pub fn read_cell_barcodes(path: &Path, gem_group: u32) -> Result<Vec<String>> {
     text_reader(path)?
         .lines()

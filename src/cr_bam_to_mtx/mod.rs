@@ -1,3 +1,4 @@
+//! Reconstruct a 10x reference raw gene-expression matrix from its barcoded BAM.
 mod io_helpers;
 mod matrix_ops;
 mod types;

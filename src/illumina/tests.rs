@@ -1,3 +1,5 @@
+//! Convert standard paired Illumina 10x GEX FASTQs into the tagged R2-only
+//! FASTQ contract consumed by `minimap2 -y` in the sbxpress workflow.
 use super::converter::run;
 use super::types::{canonical_id, metrics_path, Cli};
 use flate2::read::MultiGzDecoder;
@@ -12,6 +14,8 @@ fn normalizes_common_mate_suffixes() {
     assert_eq!(canonical_id(b"read"), b"read");
 }
 
+/// Clap's `default_value_t` does not feed `Default`, so mirror the defaults
+/// here; tests flip only what they are exercising.
 fn base_cli(root: &Path, output: PathBuf) -> Cli {
     Cli {
         r1: vec![root.join("tests/fixtures/illumina_R1.fastq")],
@@ -61,6 +65,7 @@ fn converts_exact_and_hamming1_and_gates_failure() {
     assert!(text.contains("CR:Z:AAACCCAAGAAACACA"));
     assert!(text.contains("CB:Z:AAACCCAAGAAACACT-1"));
     assert!(!text.contains("read_rejected"));
+    // Overlap is off by default, so nothing about the output may change.
     assert!(!text.contains("YC:Z:"));
 }
 
@@ -83,13 +88,16 @@ fn converts_multiple_pairs_to_numbered_shards() {
     assert!(metrics.contains("\"records_read\": 6"));
 }
 
+/// A long-R1 pair that merges: R1 100 bp, R2 150 bp reading past the CB into
+/// the R1 primer, over an 82 bp cDNA.
 fn write_overlapping_fixture(dir: &Path) -> (PathBuf, PathBuf, Vec<u8>) {
-    const CB: &[u8] = b"AAACCCAAGAAACACT";
+    const CB: &[u8] = b"AAACCCAAGAAACACT";  // on the whitelist fixture
     const UMI: &[u8] = b"ACGTACGTACGT";
     let mut core: Vec<u8> =
         b"CTGATCGATCGTAGCTAGCATCGATCGTAGCTAGCATCGATCGATGCTAGCTAGCATCGATCGTAGCTAGCATCGATCGATCC"
             .to_vec();
     core.truncate(82);
+    // End on C so rc(core) does not start with T and blur the dT boundary.
     *core.last_mut().unwrap() = b'C';
     assert_eq!(core.len(), 82);
 
@@ -137,9 +145,13 @@ fn overlap_merges_and_emits_the_full_cdna_with_a_yc_tag() {
     let header = lines.next().unwrap();
     let seq = lines.next().unwrap();
 
+    // The barcode is still tagged exactly as on the unmerged path...
     assert!(header.contains("CR:Z:AAACCCAAGAAACACT"));
     assert!(header.contains("CB:Z:AAACCCAAGAAACACT-1"));
+    // ...and the emitted read is now the whole 82 bp cDNA, sense strand,
+    // rather than the 150 bp R2 with its barcode read-through.
     assert_eq!(seq.as_bytes(), &core[..]);
+    // 5'-most 40 bp came from R2 alone; the remaining 42 bp are duplex.
     assert!(header.ends_with("\tYC:Z:40-42+"), "header was {header}");
 
     let metrics = std::fs::read_to_string(metrics_path(&output)).unwrap();
@@ -152,6 +164,8 @@ fn overlap_merges_and_emits_the_full_cdna_with_a_yc_tag() {
 
 #[test]
 fn failed_output_accounts_for_every_input_read() {
+    // The stock fixture has 3 pairs, one of which carries an unmatchable
+    // barcode. With --failed-output nothing may be silently dropped.
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let temp = tempfile::tempdir().unwrap();
     let output = temp.path().join("tagged.fastq.gz");
@@ -166,6 +180,7 @@ fn failed_output_accounts_for_every_input_read() {
 
     let r1_text = read_gz(&failed_r1);
     let r2_text = read_gz(&failed_r2);
+    // Both mates of the failed pair, with the reason and the original header.
     assert!(r1_text.contains("@read_rejected"), "R1 was: {r1_text}");
     assert!(r2_text.contains("@read_rejected"), "R2 was: {r2_text}");
     assert!(r1_text.contains("XF:Z:cb_unmatched"));
@@ -184,6 +199,8 @@ fn failed_output_accounts_for_every_input_read() {
 
 #[test]
 fn failed_reads_are_emitted_verbatim() {
+    // The side channel must be re-runnable, so the mates come back byte for
+    // byte apart from the appended reason tag.
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let temp = tempfile::tempdir().unwrap();
     let failed = temp.path().join("failed");
@@ -214,6 +231,10 @@ fn failed_reads_are_emitted_verbatim() {
 
 #[test]
 fn both_paths_emit_the_same_orientation() {
+    // The same fragment down both routes: once merged, once forced onto the
+    // lins path by an unreachable --overlap-min-overlap. The merged read must
+    // be the sense-strand cDNA, and R2 (emitted verbatim by the lins path)
+    // begins with exactly those bases — so the two paths agree.
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let temp = tempfile::tempdir().unwrap();
     let (r1, r2, core) = write_overlapping_fixture(temp.path());
@@ -230,7 +251,7 @@ fn both_paths_emit_the_same_orientation() {
     cli.r1 = vec![r1];
     cli.r2 = vec![r2];
     cli.overlap = true;
-    cli.overlap_min_overlap = 200;
+    cli.overlap_min_overlap = 200;  // longer than either read: cannot merge
     run(cli).unwrap();
 
     let merged_seq = read_gz(&merged_out).lines().nth(1).unwrap().to_string();
@@ -245,11 +266,15 @@ fn both_paths_emit_the_same_orientation() {
         lins_seq.starts_with(&merged_seq),
         "the lins path emits R2 verbatim, which must begin with the same bases"
     );
+    // The merge recovers the cDNA and drops the polyA/barcode read-through
+    // that the lins path leaves on the end of R2.
     assert!(lins_seq.len() > merged_seq.len());
 }
 
 #[test]
 fn a_non_overlapping_pair_falls_back_to_the_standard_path() {
+    // The stock fixtures are far too short to overlap, so with --overlap on
+    // they must all be counted as lins and emitted exactly as before.
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let temp = tempfile::tempdir().unwrap();
     let plain = temp.path().join("plain.fastq.gz");
@@ -267,6 +292,10 @@ fn a_non_overlapping_pair_falls_back_to_the_standard_path() {
     assert!(metrics.contains("\"overlap_long_lins\": 3"));
 }
 
+/// A short-R1 (28 bp CB+UMI only, no overlap possible) pair whose R2 reads
+/// past a `cdna_len`-bp insert into a 15 bp poly-A tail and 10 bp of junk
+/// beyond it — the shape a short fragment takes on a standard 10x-style
+/// read layout, where nothing merges because R1 never reaches the cDNA.
 fn write_r2_readthrough_fixture(dir: &Path, cdna_len: usize) -> (PathBuf, PathBuf, Vec<u8>) {
     const CB: &[u8] = b"AAACCCAAGAAACACT";
     const UMI: &[u8] = b"ACGTACGTACGT";
@@ -280,6 +309,9 @@ fn write_r2_readthrough_fixture(dir: &Path, cdna_len: usize) -> (PathBuf, PathBu
         .take(cdna_len)
         .copied()
         .collect();
+    // End on C: the pattern can land on A at an arbitrary cdna_len, which
+    // would abut the poly-A block appended below and shift the run's true
+    // start one base earlier than intended.
     if let Some(last) = cdna.last_mut() {
         *last = b'C';
     }
@@ -306,6 +338,7 @@ fn trim_r2_polya_trims_readthrough_when_cdna_survives_min_len() {
     let temp = tempfile::tempdir().unwrap();
     let (r1, r2, cdna) = write_r2_readthrough_fixture(temp.path(), 60);
 
+    // Without the flag: R2 is emitted verbatim, poly-A and junk included.
     let plain_out = temp.path().join("plain.fastq.gz");
     let mut cli = base_cli(&root, plain_out.clone());
     cli.r1 = vec![r1.clone()];
@@ -314,6 +347,7 @@ fn trim_r2_polya_trims_readthrough_when_cdna_survives_min_len() {
     let plain_seq = read_gz(&plain_out).lines().nth(1).unwrap().to_string();
     assert!(plain_seq.len() > cdna.len(), "untrimmed R2 carries the tail");
 
+    // With the flag: R2 is cut back to just the cDNA before the poly-A run.
     let trimmed_out = temp.path().join("trimmed.fastq.gz");
     let mut cli = base_cli(&root, trimmed_out.clone());
     cli.r1 = vec![r1];
@@ -332,6 +366,7 @@ fn trim_r2_polya_trims_readthrough_when_cdna_survives_min_len() {
 fn trim_r2_polya_discards_when_cdna_left_is_too_short() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let temp = tempfile::tempdir().unwrap();
+    // 20 bp of cDNA before the poly-A run, below the default 50 bp min.
     let (r1, r2, _cdna) = write_r2_readthrough_fixture(temp.path(), 20);
 
     let output = temp.path().join("tagged.fastq.gz");

@@ -40,6 +40,10 @@ pub fn run(cli: Cli) -> Result<()> {
         adapter_max_mm: cli.adapter_max_mm,
         trim_tso: cli.trim_tso,
         max_r2_len: 0,
+        // No Flex support in this binary (already-demultiplexed Illumina
+        // R1/R2 input, no probe-barcode concept here). flex_r2_boundary is
+        // false, so this floor is never consulted; 65 just matches Flex's
+        // own default for consistency.
         flex_r2_boundary: false,
         flex_min_cdna_len_no_anchor: 65,
     };
@@ -51,6 +55,8 @@ pub fn run(cli: Cli) -> Result<()> {
         bail!("whitelist is empty: {}", cli.whitelist.display());
     }
     let targets_per_input = 1 + usize::from(cli.failed_output.is_some());
+    // Preserve the historical default: every target gets one writer even when
+    // the caller leaves --split at 1. Explicit larger values are a total budget.
     let allocation = shard_allocation(
         cli.split.max(cli.r1.len() * targets_per_input),
         cli.r1.len() * targets_per_input,
@@ -238,6 +244,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 .collect::<Vec<_>>()
                 .join(", ")
         );
+        // Every input record is now accounted for in exactly one place.
         debug_assert_eq!(
             metrics.records_read,
             metrics.records_emitted + metrics.records_failed

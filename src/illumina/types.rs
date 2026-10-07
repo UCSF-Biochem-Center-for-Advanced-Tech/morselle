@@ -124,21 +124,33 @@ pub struct Metrics {
     pub barcode_rejected: u64,
     pub short_r1: u64,
     pub overlap_enabled: bool,
+    /// Merged, fragment shorter than a read: read-through was present on a mate.
     pub overlap_short_sins: u64,
+    /// Merged, neither mate ran off the end of the molecule.
     pub overlap_medium_mins: u64,
+    /// Not merged: the mates did not reach each other.
     pub overlap_long_lins: u64,
+    /// Merged, but no cDNA survived extraction (below `--min-cdna-len`).
     pub merged_without_cdna: u64,
     pub merged_bases: u64,
     pub discordant_bases: u64,
     pub yc_n_columns_coerced: u64,
     pub yc_unencodable: u64,
+    /// Merged fragments whose TSO was found and trimmed (needs `--trim-tso`).
     pub tso_trimmed: u64,
+    /// Non-merged R2 reads trimmed at a detected poly-A read-through (needs
+    /// `--trim-r2-polya`).
     pub r2_polya_trimmed: u64,
+    /// Of those, the cDNA remaining before the poly-A run was below
+    /// `--min-cdna-len`, so the pair was discarded instead of emitted (see
+    /// `r2_polya_short` in `failed_by_reason`).
     pub r2_polya_discarded: u64,
     pub r2_polya_bases_trimmed: u64,
+    /// Reads written to the failed-output side channel, by reason.
     pub records_failed: u64,
     pub failed_by_reason: BTreeMap<String, u64>,
     pub failed_outputs: Vec<PathBuf>,
+    /// cDNA length of each merged fragment, excluding CB+UMI+dT.
     pub insert_length_histogram: BTreeMap<usize, u64>,
     pub elapsed_secs: f64,
 }
@@ -197,6 +209,8 @@ pub fn shard_path(output: &Path, index: usize, count: usize) -> PathBuf {
     }
 }
 
+/// Evenly apportion a total shard budget among logical output targets. Earlier
+/// targets receive the one-slot remainder deterministically.
 pub fn shard_allocation(total: usize, targets: usize) -> Result<Vec<usize>> {
     if total < targets {
         bail!("--split ({total}) must be at least the number of active output targets ({targets})");
@@ -269,6 +283,8 @@ impl AsyncFailedWriter {
     }
 }
 
+/// Paths for a failed-pair shard: `<prefix>_R1.fastq.gz` / `<prefix>_R2.fastq.gz`,
+/// carrying the same `.shard-NNN` infix as the main output when sharded.
 pub fn failed_paths(prefix: &Path, index: usize, count: usize) -> (PathBuf, PathBuf) {
     let text = prefix.as_os_str().to_string_lossy().into_owned();
     let stem = if count == 1 {

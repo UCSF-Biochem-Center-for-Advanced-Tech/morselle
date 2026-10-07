@@ -33,6 +33,8 @@ fn features_tsv_bytes(features: &[Feature]) -> Vec<u8> {
     out
 }
 
+/// Create-or-verify `--features-out`, mirroring `annotate_bam.rs`'s
+/// `establish_genes_mtx`.
 pub fn establish_features_tsv(path: &Path, features: &[Feature]) -> Result<()> {
     let expected = features_tsv_bytes(features);
     if path.exists() {

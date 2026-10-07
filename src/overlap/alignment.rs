@@ -39,7 +39,10 @@ pub fn check_overlap(
         return None;
     }
 
+    // 5' overhang: kept only when it is R1 running past the start of rc(R2).
+    // The mirror case is rc(R2)'s adapter read-through, which we drop.
     let left_overhang = if start1 > start2 { start1 } else { 0 };
+    // 3' overhang: kept only when rc(R2) runs past the end of R1, likewise.
     let right_overhang = if reach1 < reach2 { reach2 - span } else { 0 };
 
     let mut seq = Vec::with_capacity(left_overhang + span + right_overhang);
@@ -54,6 +57,7 @@ pub fn check_overlap(
         let qa = r1q[start1 + i].saturating_sub(QUAL_OFFSET) as u16;
         let qb = rc2q[start2 + i].saturating_sub(QUAL_OFFSET) as u16;
         if a.eq_ignore_ascii_case(&b) {
+            // Independent observations agree: their evidence adds, up to the cap.
             seq.push(a);
             qual.push((qa + qb).min(cfg.qual_cap as u16) as u8 + QUAL_OFFSET);
         } else {
@@ -65,10 +69,26 @@ pub fn check_overlap(
     }
 
     if right_overhang > 0 {
+        // `start2 + span`, not `span`: without HTStream's mate swap the rc(R2)
+        // offset need not be zero.
         seq.extend_from_slice(&rc2[start2 + span..]);
         qual.extend_from_slice(&rc2q[start2 + span..]);
     }
 
+    // HTStream classifies by comparing the merge to the longest input read. That
+    // is unreliable here because the mates are not symmetric: R1 may be
+    // sequenced shorter than R2, and R2 additionally covers the polyA and the
+    // barcode. Use the geometric signal the classification actually means —
+    // read-through happened iff *either* mate ran past the end of the molecule:
+    //
+    //   * `reach1 > reach2` — R1 ran past rc(R2)'s 3' end, into adapter.
+    //   * `start2 > 0`      — rc(R2) began before R1's first base. R1's
+    //     sequencing primer starts exactly at the molecule's 5' end, so
+    //     anything rc(R2) contributes before it is R1-primer read-through.
+    //
+    // Checking only the first misses the asymmetric case: a 100 bp R1 that never
+    // reaches the adapter, paired with a 150 bp R2 that reads clean through the
+    // CB. The fragment is plainly short; only `start2` says so.
     let class = if start2 > 0 || reach1 > reach2 {
         InsertClass::Short
     } else {
@@ -84,6 +104,8 @@ pub fn check_overlap(
         false,
     ) {
         Ok((tag, stats)) => (Some(tag), stats),
+        // Only reachable for IUPAC ambiguity codes beyond `N`. Keep the merge,
+        // drop the tag rather than losing the read.
         Err(_) => (None, EncodeStats::default()),
     };
 
@@ -121,6 +143,7 @@ pub fn overlap_in(
         return None;
     }
 
+    // Disjoint field borrows, so the index can be filled while rc(R2) is read.
     let Scratch {
         index,
         probes,
@@ -128,6 +151,7 @@ pub fn overlap_in(
         rc2q,
     } = scratch;
 
+    // rc(R2) shares R1's strand, so the two can be compared directly.
     rc2.clear();
     rc2.extend(r2.iter().rev().map(|&base| comp(base)));
     rc2q.clear();
@@ -141,6 +165,8 @@ pub fn overlap_in(
     }
     let offset = cfg.kmer_offset.max(1);
 
+    // Index the longer mate and probe the shorter one's ends. Only the shorter
+    // read is guaranteed to have an end inside the overlap.
     let index_is_r1 = r1.len() >= rc2.len();
     let (indexed, probed) = if index_is_r1 { (r1, rc2) } else { (rc2, r1) };
     build_index(indexed, k, offset, index);
@@ -148,6 +174,11 @@ pub fn overlap_in(
         return None;
     }
 
+    // Collect up to `check_lengths` *usable* seeds inward from each end.
+    // HTStream probes a fixed number of positions, which fails here: the dT
+    // block puts a long homopolymer exactly where the mates meet, so a
+    // positional window can be entirely unindexable. Counting usable seeds
+    // instead walks past the run without unbounding the work.
     let budget = cfg.check_lengths.max(1);
     let last_start = probed.len() - k;
     probes.clear();
@@ -175,6 +206,8 @@ pub fn overlap_in(
     for &(probe, key) in probes.iter() {
         let probe = probe as usize;
         for &(_, hit) in seed_positions(index, key) {
+            // Map the seed back into (R1, rc(R2)) coordinates. The merge always
+            // happens in R1's frame regardless of which mate was indexed.
             let (loc1, loc2) = if index_is_r1 {
                 (hit as usize, probe)
             } else {

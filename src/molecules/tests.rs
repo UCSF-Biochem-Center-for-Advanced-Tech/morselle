@@ -50,6 +50,8 @@ fn one_mismatch_neighbors_match_brute_force_hamming() {
             assert_eq!(target.hamming(n), Some(1));
         }
 
+        // Cross-check against brute-force scan over random candidates:
+        // membership in the neighbor set must agree with hamming == 1.
         for _ in 0..50 {
             let candidate_seq: String = (0..12)
                 .map(|_| bases[rng.gen_range(0..4)] as char)
@@ -112,6 +114,13 @@ fn corrects_within_gene_then_resolves_cross_gene_collision() {
     );
 }
 
+/// Real-data-motivated regression: on real CAT06 Flex data, 99.8% of
+/// observed cell barcodes are shared by more than one sample (the same
+/// CB whitelist is reused across every pooled sample), so `cell` alone
+/// is not a unique identity there. Two different samples' reads sharing
+/// a cell+gene+UMI must never be merged into one evidence node, corrected
+/// against each other, or resolved as a cross-gene collision against
+/// each other -- each must come out `Outcome::Unique` on its own.
 #[test]
 fn different_samples_sharing_cell_gene_umi_are_never_merged() {
     let cell = Dna::pack("AACCGGTTAACCGGTT").unwrap();
@@ -157,6 +166,14 @@ fn intern_sample_assigns_stable_ids_per_distinct_pb() {
     assert_eq!(samples.len(), 2);
 }
 
+/// A record with valid CB+UMI+GX but a missing or empty PB must be
+/// dropped entirely, not folded into a shared placeholder bucket --
+/// see RawKey::sample's doc comment (99.8% of real CAT06 cell barcodes
+/// are shared by more than one sample, so a bucket that doesn't
+/// discriminate by sample risks merging two different samples' real
+/// molecules). probe-demux independently requires the same non-empty
+/// PB and discards anything without it, so such reads could never
+/// have become a real counted molecule downstream anyway.
 #[test]
 fn records_without_a_confident_sample_barcode_are_dropped_not_bucketed() {
     use rust_htslib::bam::{header::HeaderRecord, record::Cigar, record::CigarString};
@@ -171,6 +188,8 @@ fn records_without_a_confident_sample_barcode_are_dropped_not_bucketed() {
     );
     let mut writer = bam::Writer::from_path(&path, &header, bam::Format::Bam).unwrap();
     let cigar = CigarString(vec![Cigar::Match(20)]);
+    // (name, cb, umi, pb) -- pb: None = no tag at all, Some("") = tag
+    // present but empty (a located-but-unresolved probe barcode).
     for (name, cb, umi, pb) in [
         ("no_pb_tag", "AAAACCCCGGGGTTTT", "AAAAAAAAAAAA", None),
         ("empty_pb", "AAAACCCCGGGGTTTT", "CCCCCCCCCCCC", Some("")),
@@ -222,6 +241,8 @@ fn records_without_a_confident_sample_barcode_are_dropped_not_bucketed() {
 fn saturation_is_nested_and_reports_run_and_cells() {
     let cell = Dna::pack("AACCGGTTAACCGGTT").unwrap();
     let mut curve = Saturation::new(10, 5);
+    // Hash 0 arrives in the first five-read sample; this molecule and its
+    // gene must remain counted at all later depths.
     curve.add_cell_gene(cell, 7, 0);
     curve.add_molecule(cell, 0);
     let dir = tempfile::tempdir().unwrap();
@@ -239,7 +260,7 @@ fn saturation_is_nested_and_reports_run_and_cells() {
     };
     assert!(contents.contains("run\t.\t5\t0.5\t1\t1\t1\t1"));
     assert!(contents.contains("run\t.\t10\t1\t1\t1\t0\t0"));
-    assert_eq!(contents.lines().count(), 5);
+    assert_eq!(contents.lines().count(), 5);  // header, two run, two cell rows
 }
 
 #[test]

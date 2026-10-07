@@ -50,6 +50,7 @@ fn merges_a_medium_insert_into_the_whole_fragment() {
 
 #[test]
 fn merges_a_short_insert_and_drops_read_through_adapter() {
+    // Fragment shorter than the reads: both mates run into adapter.
     let insert = &FRAGMENT[..30];
     let mut r1 = insert.to_vec();
     r1.extend_from_slice(ADAPTER);
@@ -66,6 +67,7 @@ fn merges_a_short_insert_and_drops_read_through_adapter() {
     )
     .expect("mates overlap across the whole insert");
 
+    // Adapter is gone from both ends, purely from the overlap geometry.
     assert_eq!(merged.seq, insert);
     assert_eq!(merged.class, InsertClass::Short);
     assert_eq!(merged.left_overhang, 0);
@@ -75,6 +77,7 @@ fn merges_a_short_insert_and_drops_read_through_adapter() {
 
 #[test]
 fn handles_a_mate_longer_than_r1() {
+    // R2 longer than R1. HTStream swaps here; we must not, and still align.
     let (r1, r2) = mates(&FRAGMENT[..40], &FRAGMENT[10..60]);
     let merged = overlap(
         &r1,
@@ -94,6 +97,9 @@ fn handles_a_mate_longer_than_r1() {
 
 #[test]
 fn extends_from_the_correct_offset_when_rc_r2_starts_first() {
+    // rc(R2) begins with adapter *and* runs past R1's 3' end. This is the
+    // case HTStream mis-indexes: it would append rc2[span..] instead of
+    // rc2[start2 + span..], duplicating 10 bp of the fragment.
     let mut rc2 = revcomp(ADAPTER);
     rc2.extend_from_slice(&FRAGMENT[..50]);
     let r1 = FRAGMENT[..30].to_vec();
@@ -127,6 +133,8 @@ fn agreeing_bases_sum_quality_up_to_the_cap() {
     )
     .unwrap();
 
+    // R1-only overhang keeps R1's quality, the overlap is capped at Q40,
+    // and the R2-only overhang keeps R2's.
     assert!(merged.qual[..20].iter().all(|&q| q == Q40));
     assert!(merged.qual[20..40].iter().all(|&q| q == Q40));
     assert!(merged.qual[40..].iter().all(|&q| q == Q20));
@@ -135,6 +143,7 @@ fn agreeing_bases_sum_quality_up_to_the_cap() {
 #[test]
 fn disagreeing_bases_take_the_better_call_and_the_quality_delta() {
     let mut rc2 = FRAGMENT[20..60].to_vec();
+    // Corrupt one overlap position, away from the seed window.
     rc2[10] = if rc2[10] == b'A' { b'C' } else { b'A' };
     let r1 = FRAGMENT[..40].to_vec();
     let r2 = revcomp(&rc2);
@@ -148,10 +157,13 @@ fn disagreeing_bases_take_the_better_call_and_the_quality_delta() {
     )
     .unwrap();
 
+    // R1 was the higher-quality call, so the fragment is still recovered...
     assert_eq!(merged.seq, FRAGMENT);
     assert_eq!(merged.discordant, 1);
+    // ...and that base carries Q40 - Q20 = Q20, not HTStream's flat Q1.
     assert_eq!(merged.qual[30], Q20);
     assert_eq!(merged.qual[29], Q40);
+    // The tag records what each strand actually read.
     assert_eq!(merged.yc.unwrap().count_discordant(), 1);
 }
 
@@ -171,6 +183,7 @@ fn unrelated_reads_do_not_merge() {
 
 #[test]
 fn overlap_below_min_overlap_is_refused() {
+    // Mates share only 10 bp.
     let (r1, r2) = mates(&FRAGMENT[..30], &FRAGMENT[20..50]);
     let r1q = quals(Q40, r1.len());
     let r2q = quals(Q40, r2.len());
@@ -189,6 +202,9 @@ fn overlap_below_min_overlap_is_refused() {
 #[test]
 fn overlap_over_the_mismatch_budget_is_refused() {
     let mut rc2 = FRAGMENT[20..60].to_vec();
+    // 20 bp overlap allows floor(20 * 0.25) = 5 mismatches; make 6. They sit
+    // outside the leading seed window, so a seed is still found and the
+    // rejection genuinely comes from the mismatch check.
     for base in &mut rc2[8..14] {
         *base = if *base == b'A' { b'C' } else { b'A' };
     }
@@ -220,6 +236,8 @@ fn mismatched_sequence_and_quality_lengths_are_refused() {
 
 #[test]
 fn short_mates_do_not_underflow() {
+    // rc(R2) shorter than check_lengths + kmer: the probe window arithmetic
+    // that underflows in HTStream.
     let cfg = OverlapCfg {
         min_overlap: 5,
         ..OverlapCfg::default()
@@ -229,6 +247,7 @@ fn short_mates_do_not_underflow() {
         let r1 = FRAGMENT[..40].to_vec();
         let _ = overlap(&r1, &quals(Q40, r1.len()), &r2, &quals(Q40, len), &cfg);
     }
+    // Also exercise a degenerate R1.
     for len in 0..12usize {
         let r1: Vec<u8> = FRAGMENT[..len].to_vec();
         let r2 = revcomp(&FRAGMENT[20..60]);
@@ -242,6 +261,7 @@ fn homopolymer_seeds_are_masked() {
     build_index(b"AAAAAAAAAAAAAAAAAAAA", 8, 1, &mut index);
     assert!(index.is_empty(), "a pure homopolymer must index nothing");
 
+    // The dT run abutting the R1 insert must not seed; the cDNA after it must.
     let mut index = Vec::new();
     build_index(b"TTTTTTTTTTTTACGTTGCAAGCTTAGC", 8, 1, &mut index);
     assert!(index.iter().all(|&(_, pos)| pos >= 5));
@@ -255,6 +275,7 @@ fn seeds_containing_non_acgt_are_masked() {
 
     let mut index = Vec::new();
     build_index(b"ACGTNGCAAGCTTAGC", 8, 1, &mut index);
+    // Every window covering the N is gone.
     assert_eq!(index.len(), clean - 5);
     assert!(index.iter().all(|&(_, pos)| pos > 4));
 }
@@ -311,6 +332,7 @@ fn the_tag_records_disagreements_losslessly() {
     .unwrap();
 
     let decoded = decode(merged.yc.as_ref().unwrap(), &merged.seq, &merged.qual).unwrap();
+    // Both original strands come back, disagreement and all.
     assert_eq!(decoded.r1_seq, r1);
     assert_eq!(decoded.r2_seq, rc2);
 }
@@ -322,6 +344,7 @@ fn n_bases_are_coerced_and_counted() {
     let r1 = FRAGMENT[..40].to_vec();
     let r2 = revcomp(&rc2);
     let mut r2q = quals(Q40, r2.len());
+    // needletail/Illumina give an N a low quality; R1 therefore wins.
     r2q[r2.len() - 1 - 5] = b'#';
 
     let merged = overlap(
@@ -335,6 +358,7 @@ fn n_bases_are_coerced_and_counted() {
 
     assert_eq!(merged.seq, FRAGMENT);
     assert_eq!(merged.yc_stats.n_columns_coerced, 1);
+    // Coerced to concordant, so the duplex segment stays one clean run.
     assert_eq!(merged.yc.unwrap().to_string(), "20+20-20");
 }
 
