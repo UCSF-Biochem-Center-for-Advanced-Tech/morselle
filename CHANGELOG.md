@@ -4,6 +4,13 @@ All notable changes to `sbxpress` are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.8] — 2026-10-06
+
+### Documentation
+- Updated `MANUAL.md` Section 7 with detailed technical documentation for fractional UMI collision resolution (`--fractional-collisions` in `sbxpress molecules --tagseq`) and real Matrix Market MTX / `f32` HDF5 count matrix materialization in `cr-bam-to-mtx`.
+- Updated `TECHNICAL_DESCRIPTION.md` IP metadata specification to v0.5.8 (~19,400 lines of Rust across 25 library modules and 12 binary engines).
+- Archived completed historic plan markdown files (`FLEX_SUPPORT_PLAN.md`, `GENE_COLLISION_RESOLUTION_PLAN.md`, `OVERLAP_PLAN.md`, `PRESENTATION_PLAN.md`, `mapping.md`) into `docs/archive/`.
+
 ## [0.5.7] — 2026-10-06
 
 ### Added

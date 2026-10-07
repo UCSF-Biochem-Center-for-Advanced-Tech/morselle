@@ -5,8 +5,8 @@
 | Item | Value |
 |---|---|
 | Software name | `sbxpress` (Cargo package `sbxpress`; library crate `sbx10x`) |
-| Version described | 0.5.7 |
-| Source revision | `v0.5.7` (2026-10-06) |
+| Version described | 0.5.8 |
+| Source revision | `v0.5.8` (2026-10-06) |
 | Implementation language | Rust (edition 2021), built with rustc 1.96.0 |
 | License of original code | BSD 3-Clause (see `LICENSE`) |
 | Copyright holder | UCSF Biochem — Center for Advanced Technology (2026) |
