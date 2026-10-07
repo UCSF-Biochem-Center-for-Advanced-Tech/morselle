@@ -20,6 +20,7 @@ pub fn run_sharded(
     shard_concurrency: usize,
     evidence_workers: usize,
     tagseq: bool,
+    fractional_collisions: bool,
     require_pb: bool,
     metrics: &mut Metrics,
 ) -> Result<()> {
@@ -56,6 +57,7 @@ pub fn run_sharded(
                     None,
                     evidence_workers,
                     tagseq,
+                    fractional_collisions,
                 )
             })
             .collect::<Result<Vec<_>>>()
@@ -140,11 +142,16 @@ pub fn write_shard_output(
                 (Outcome::Tie, _) => "tie",
                 (Outcome::Shared, true) => "shared",
                 (Outcome::Shared, false) => "lost",
+                (Outcome::Fractional, true) => "fractional",
+                (Outcome::Fractional, false) => "lost",
             };
             record.push_aux(b"ZG", Aux::String(tag_val))?;
             let corr_str = dec.corrected.unpack();
             record.push_aux(b"UB", Aux::String(&corr_str))?;
-            if is_rep && matches!(dec.outcome, Outcome::Won | Outcome::Unique | Outcome::Shared) {
+            if dec.outcome == Outcome::Fractional {
+                record.push_aux(b"ZW", Aux::Float(dec.weight))?;
+            }
+            if is_rep && matches!(dec.outcome, Outcome::Won | Outcome::Unique | Outcome::Shared | Outcome::Fractional) {
                 metrics.representatives_tagged += 1;
             }
         }

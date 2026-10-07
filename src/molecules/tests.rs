@@ -92,7 +92,7 @@ fn corrects_within_gene_then_resolves_cross_gene_collision() {
     input.insert(gene1_major, evidence(3, 2));
 
     let mut metrics = Metrics::default();
-    let (decisions, _) = build_decisions(&input, &mut metrics, None, 1, false);
+    let (decisions, _) = build_decisions(&input, &mut metrics, None, 1, false, false);
     assert_eq!(decisions[&gene0_error].corrected, major);
     assert_eq!(decisions[&gene0_major].outcome, Outcome::Won);
     assert_eq!(decisions[&gene0_error].outcome, Outcome::Won);
@@ -102,7 +102,7 @@ fn corrects_within_gene_then_resolves_cross_gene_collision() {
     assert_eq!(metrics.molecules_counted, 1);
 
     let mut parallel_metrics = Metrics::default();
-    let (parallel, _) = build_decisions(&input, &mut parallel_metrics, None, 2, false);
+    let (parallel, _) = build_decisions(&input, &mut parallel_metrics, None, 2, false, false);
     assert_eq!(parallel[&gene0_error].corrected, major);
     assert_eq!(parallel[&gene0_major].outcome, Outcome::Won);
     assert_eq!(parallel[&gene1_major].outcome, Outcome::Lost);
@@ -133,13 +133,13 @@ fn different_samples_sharing_cell_gene_umi_are_never_merged() {
     input.insert(sample_b, evidence(7, 1));
 
     let mut metrics = Metrics::default();
-    let (decisions, _) = build_decisions(&input, &mut metrics, None, 1, false);
+    let (decisions, _) = build_decisions(&input, &mut metrics, None, 1, false, false);
     assert_eq!(decisions[&sample_a].outcome, Outcome::Unique);
     assert_eq!(decisions[&sample_b].outcome, Outcome::Unique);
     assert_eq!(metrics.molecules_counted, 2);
 
     let mut parallel_metrics = Metrics::default();
-    let (parallel, _) = build_decisions(&input, &mut parallel_metrics, None, 2, false);
+    let (parallel, _) = build_decisions(&input, &mut parallel_metrics, None, 2, false, false);
     assert_eq!(parallel[&sample_a].outcome, Outcome::Unique);
     assert_eq!(parallel[&sample_b].outcome, Outcome::Unique);
     assert_eq!(parallel_metrics.molecules_counted, 2);
@@ -241,3 +241,44 @@ fn saturation_is_nested_and_reports_run_and_cells() {
     assert!(contents.contains("run\t.\t10\t1\t1\t1\t0\t0"));
     assert_eq!(contents.lines().count(), 5);
 }
+
+#[test]
+fn fractional_umi_collision_resolution_distributes_weights_proportionally() {
+    let cell = Dna::pack("AACCGGTTAACCGGTT").unwrap();
+    let umi = Dna::pack("AAAAAAAAAAAA").unwrap();
+    let mut input = HashMap::new();
+    let g0 = RawKey {
+        cell,
+        sample: 0,
+        gene: 0,
+        umi,
+    };
+    let g1 = RawKey {
+        cell,
+        sample: 0,
+        gene: 1,
+        umi,
+    };
+    let g2 = RawKey {
+        cell,
+        sample: 0,
+        gene: 2,
+        umi,
+    };
+    input.insert(g0, evidence(5, 0));
+    input.insert(g1, evidence(3, 1));
+    input.insert(g2, evidence(2, 2));
+
+    let mut metrics = Metrics::default();
+    let (decisions, _) = build_decisions(&input, &mut metrics, None, 1, false, true);
+    assert_eq!(decisions.len(), 3);
+    assert_eq!(decisions[&g0].outcome, Outcome::Fractional);
+    assert_eq!(decisions[&g1].outcome, Outcome::Fractional);
+    assert_eq!(decisions[&g2].outcome, Outcome::Fractional);
+    assert!((decisions[&g0].weight - 0.5).abs() < 1e-5);
+    assert!((decisions[&g1].weight - 0.3).abs() < 1e-5);
+    assert!((decisions[&g2].weight - 0.2).abs() < 1e-5);
+    assert_eq!(metrics.collision_groups, 1);
+    assert_eq!(metrics.collision_molecules_fractional, 3);
+}
+

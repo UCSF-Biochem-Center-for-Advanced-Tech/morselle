@@ -55,6 +55,7 @@ pub fn build_decisions(
     saturation_interval: Option<u64>,
     workers: usize,
     tagseq: bool,
+    fractional_collisions: bool,
 ) -> (HashMap<RawKey, Decision>, Option<Saturation>) {
     let mut groups = HashMap::<(Dna, u32, u32), Vec<RawKey>>::new();
     for &key in evidence.keys() {
@@ -113,18 +114,29 @@ pub fn build_decisions(
     let mut saturation =
         saturation_interval.map(|interval| Saturation::new(metrics.eligible_records, interval));
 
+    let use_fractional = fractional_collisions;
     let mut decisions = HashMap::<RawKey, Decision>::new();
     for group in collision_groups.values() {
         let degree = group.len() as u32;
         if degree > 1 {
             metrics.collision_groups += 1;
         }
-        if tagseq {
+        if use_fractional {
+            let total_reads: u64 = group
+                .iter()
+                .map(|&root| corrected_nodes[&root].1.reads as u64)
+                .sum();
             for &root in group {
                 let (_, winner_ev) = corrected_nodes[&root];
+                let root_reads = winner_ev.reads as u64;
+                let weight = if total_reads > 0 {
+                    root_reads as f32 / total_reads as f32
+                } else {
+                    1.0 / degree as f32
+                };
                 let outcome = if degree > 1 {
-                    metrics.collision_molecules_shared += 1;
-                    Outcome::Shared
+                    metrics.collision_molecules_fractional += 1;
+                    Outcome::Fractional
                 } else {
                     Outcome::Unique
                 };
@@ -137,6 +149,7 @@ pub fn build_decisions(
                                 representative: winner_ev.best_ordinal,
                                 collision_degree: degree,
                                 outcome,
+                                weight,
                             },
                         );
                     }
@@ -183,6 +196,12 @@ pub fn build_decisions(
                     Outcome::Lost
                 };
 
+                let weight = if matches!(outcome, Outcome::Won | Outcome::Unique) {
+                    1.0
+                } else {
+                    0.0
+                };
+
                 if matches!(outcome, Outcome::Won | Outcome::Unique) {
                     metrics.molecules_counted += 1;
                 }
@@ -196,6 +215,7 @@ pub fn build_decisions(
                                 representative: winner_ev.best_ordinal,
                                 collision_degree: degree,
                                 outcome,
+                                weight,
                             },
                         );
                     }
@@ -211,7 +231,6 @@ pub fn build_decisions(
         }
     }
 
-
     (decisions, saturation)
 }
 
@@ -221,8 +240,16 @@ pub fn deduplicate_evidence(
     saturation_interval: Option<u64>,
     workers: usize,
     tagseq: bool,
+    fractional_collisions: bool,
 ) -> (HashMap<RawKey, Decision>, Option<Saturation>) {
-    build_decisions(evidence, metrics, saturation_interval, workers, tagseq)
+    build_decisions(
+        evidence,
+        metrics,
+        saturation_interval,
+        workers,
+        tagseq,
+        fractional_collisions,
+    )
 }
 
 pub fn process_shard(
@@ -232,6 +259,7 @@ pub fn process_shard(
     saturation_interval: Option<u64>,
     workers: usize,
     tagseq: bool,
+    fractional_collisions: bool,
 ) -> Result<(
     Metrics,
     HashMap<RawKey, Decision>,
@@ -242,8 +270,14 @@ pub fn process_shard(
     let mut metrics = Metrics::default();
     let (evidence, genes, _gene_ids, samples, _sample_ids) =
         super::evidence::collect_evidence(path, threads, require_pb, &mut metrics)?;
-    let (decisions, saturation) =
-        deduplicate_evidence(&evidence, &mut metrics, saturation_interval, workers, tagseq);
+    let (decisions, saturation) = deduplicate_evidence(
+        &evidence,
+        &mut metrics,
+        saturation_interval,
+        workers,
+        tagseq,
+        fractional_collisions,
+    );
     Ok((metrics, decisions, genes, samples, saturation))
 }
 
@@ -255,12 +289,19 @@ pub fn process_and_write_shard(
     saturation_interval: Option<u64>,
     workers: usize,
     tagseq: bool,
+    fractional_collisions: bool,
 ) -> Result<(Metrics, Option<Saturation>)> {
     let mut metrics = Metrics::default();
     let (evidence, _genes, gene_ids, _samples, sample_ids) =
         super::evidence::collect_evidence(input_path, threads, require_pb, &mut metrics)?;
-    let (decisions, saturation) =
-        deduplicate_evidence(&evidence, &mut metrics, saturation_interval, workers, tagseq);
+    let (decisions, saturation) = deduplicate_evidence(
+        &evidence,
+        &mut metrics,
+        saturation_interval,
+        workers,
+        tagseq,
+        fractional_collisions,
+    );
 
     // Drop evidence map to free memory before writing output
     drop(evidence);

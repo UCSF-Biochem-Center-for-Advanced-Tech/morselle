@@ -50,6 +50,12 @@ pub struct Cli {
     /// Pooled-sample mode: a barcode is a whole sample.
     #[arg(long)]
     pub tagseq: bool,
+    /// Enable fractional / proportional UMI assignment for collision groups (default: true in --tagseq mode).
+    #[arg(long)]
+    pub fractional_collisions: bool,
+    /// Explicitly disable fractional UMI collisions (revert to winner-take-all).
+    #[arg(long, conflicts_with = "fractional_collisions")]
+    pub no_fractional_collisions: bool,
     /// 10x Flex mode. Require a non-empty probe/sample barcode (`PB`).
     #[arg(long, conflicts_with = "tagseq")]
     pub flex: bool,
@@ -67,6 +73,7 @@ fn main() -> Result<()> {
     if cli.bam.iter().any(|b| b == &cli.output) {
         bail!("input and output BAM must differ");
     }
+    let fractional = (cli.tagseq || cli.fractional_collisions) && !cli.no_fractional_collisions;
     let started = Instant::now();
     let mut metrics = Metrics {
         input_bam: cli
@@ -103,7 +110,7 @@ fn main() -> Result<()> {
         if cli.saturation.is_some() {
             bail!("--saturation is not yet supported together with --shards > 1");
         }
-        info!(shards = cli.shards, "running sharded (collate + quant)");
+        info!(shards = cli.shards, fractional = fractional, "running sharded (collate + quant)");
         run_sharded(
             &cli.bam,
             &cli.output,
@@ -112,6 +119,7 @@ fn main() -> Result<()> {
             cli.shard_concurrency,
             cli.evidence_workers,
             cli.tagseq,
+            fractional,
             cli.flex,
             &mut metrics,
         )?;
@@ -157,6 +165,7 @@ fn main() -> Result<()> {
         cli.saturation.as_ref().map(|_| cli.saturation_interval),
         cli.evidence_workers,
         cli.tagseq,
+        fractional,
     );
     if let (Some(curve), Some(path)) = (saturation, cli.saturation.as_deref()) {
         eprintln!(

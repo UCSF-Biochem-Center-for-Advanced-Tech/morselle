@@ -100,6 +100,7 @@ pub enum Outcome {
     Lost,
     Tie,
     Shared,
+    Fractional,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -108,6 +109,7 @@ pub struct Decision {
     pub representative: u64,
     pub collision_degree: u32,
     pub outcome: Outcome,
+    pub weight: f32,
 }
 
 #[derive(Default, Serialize)]
@@ -128,6 +130,7 @@ pub struct Metrics {
     pub collision_molecules_lost: u64,
     pub collision_ties: u64,
     pub collision_molecules_shared: u64,
+    pub collision_molecules_fractional: u64,
     pub representatives_tagged: u64,
     pub saturation: Option<SaturationMetrics>,
     pub elapsed_secs: f64,
@@ -147,6 +150,7 @@ pub fn merge_metrics(target: &mut Metrics, source: &Metrics) {
     target.collision_molecules_lost += source.collision_molecules_lost;
     target.collision_ties += source.collision_ties;
     target.collision_molecules_shared += source.collision_molecules_shared;
+    target.collision_molecules_fractional += source.collision_molecules_fractional;
     target.representatives_tagged += source.representatives_tagged;
 }
 

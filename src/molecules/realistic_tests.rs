@@ -120,8 +120,8 @@ mod tests {
         );
         let mut serial_decision_metrics = Metrics::default();
         let mut parallel_decision_metrics = Metrics::default();
-        let _ = build_decisions(&serial, &mut serial_decision_metrics, None, 2, false);
-        let _ = build_decisions(&parallel, &mut parallel_decision_metrics, None, 2, false);
+        let _ = build_decisions(&serial, &mut serial_decision_metrics, None, 2, false, false);
+        let _ = build_decisions(&parallel, &mut parallel_decision_metrics, None, 2, false, false);
         assert_eq!(
             serial_decision_metrics.molecules_counted,
             parallel_decision_metrics.molecules_counted
@@ -188,7 +188,7 @@ mod tests {
         }
 
         let mut global_metrics = Metrics::default();
-        let (global_decisions, _) = build_decisions(&evidence, &mut global_metrics, None, 1, false);
+        let (global_decisions, _) = build_decisions(&evidence, &mut global_metrics, None, 1, false, false);
 
         const SHARDS: u64 = 4;
         let mut shard_maps: Vec<HashMap<RawKey, Evidence>> =
@@ -204,7 +204,7 @@ mod tests {
             if shard.is_empty() {
                 continue;
             }
-            let (decisions, _) = build_decisions(shard, &mut sharded_metrics, None, 1, false);
+            let (decisions, _) = build_decisions(shard, &mut sharded_metrics, None, 1, false, false);
             sharded_decisions.extend(decisions);
         }
 
