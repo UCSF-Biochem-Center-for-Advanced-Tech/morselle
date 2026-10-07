@@ -216,6 +216,83 @@ fn bench_probeset_align_matcher(c: &mut Criterion) {
     });
 }
 
+use std::collections::HashMap;
+
+use sbx10x::molecules::{build_decisions, correct_group, Dna, Evidence, Metrics, RawKey, NO_SAMPLE};
+
+fn bench_molecules_dedup(c: &mut Criterion) {
+    let mut evidence = HashMap::new();
+    let cell_bases = ["AAACCCAAGAAACCCA", "GACTGACTGACTGACT", "TGCATGCATGCATGCA"];
+    let umi_bases = [
+        "ACGTACGTACGT",
+        "ACGTACGTACGA",
+        "ACGTACGTACGG",
+        "TGCATGCATGCA",
+        "GGGGCCCCAAAA",
+    ];
+
+    let mut key_ordinal = 0u64;
+    for (cell_idx, cb_str) in cell_bases.iter().enumerate() {
+        let cell = Dna::pack(cb_str).unwrap();
+        for gene_id in 0..10u32 {
+            for (umi_idx, umi_str) in umi_bases.iter().enumerate() {
+                let umi = Dna::pack(umi_str).unwrap();
+                key_ordinal += 1;
+                let key = RawKey {
+                    cell,
+                    sample: NO_SAMPLE,
+                    gene: gene_id,
+                    umi,
+                };
+                let reads = ((cell_idx + gene_id as usize + umi_idx) % 5 + 1) as u32;
+                evidence.insert(
+                    key,
+                    Evidence {
+                        reads,
+                        best_ordinal: key_ordinal,
+                        best_mapq: 60,
+                        best_aligned: 150,
+                        min_read_hash: (key_ordinal * 12345) as u32,
+                    },
+                );
+            }
+        }
+    }
+
+    c.bench_function("molecules_dedup/correct_group_50_umis", |b| {
+        let keys: Vec<RawKey> = evidence.keys().copied().take(50).collect();
+        b.iter(|| black_box(correct_group(keys.clone(), &evidence)))
+    });
+
+    c.bench_function("molecules_dedup/build_decisions_fractional", |b| {
+        b.iter(|| {
+            let mut metrics = Metrics::default();
+            black_box(build_decisions(
+                &evidence,
+                &mut metrics,
+                None,
+                2,
+                true,
+                true,
+            ))
+        })
+    });
+
+    c.bench_function("molecules_dedup/build_decisions_winner_take_all", |b| {
+        b.iter(|| {
+            let mut metrics = Metrics::default();
+            black_box(build_decisions(
+                &evidence,
+                &mut metrics,
+                None,
+                2,
+                false,
+                false,
+            ))
+        })
+    });
+}
+
 criterion_group!(
     benches,
     bench_orient_extract,
@@ -223,5 +300,7 @@ criterion_group!(
     bench_probe_barcode_locate,
     bench_cb_whitelist_classify,
     bench_probeset_align_matcher,
+    bench_molecules_dedup,
 );
 criterion_main!(benches);
+
