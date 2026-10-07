@@ -8,8 +8,8 @@ use anyhow::{Context, Result};
 use rust_htslib::bam::{self, Read};
 use tracing::info;
 
-use crate::probe_sample_sheet::ProbeSampleSheet;
 use super::types::{Assignment, Cli, DemuxCfg, Metrics, OverlapRow, SampleCount, Status};
+use crate::probe_sample_sheet::ProbeSampleSheet;
 
 /// Negative binomial NB(r, p) 99.9th-percentile quantile, via the standard
 /// PMF recurrence `P(k) = P(k-1) * p * (k-1+r) / k`, `P(0) = (1-p)^r` — exact

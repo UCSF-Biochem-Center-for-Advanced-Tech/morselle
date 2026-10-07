@@ -38,7 +38,9 @@ impl Rng {
         self.below(1000) < per_mille
     }
     pub fn dna(&mut self, len: usize) -> String {
-        (0..len).map(|_| b"ACGT"[self.below(4) as usize] as char).collect()
+        (0..len)
+            .map(|_| b"ACGT"[self.below(4) as usize] as char)
+            .collect()
     }
 }
 
@@ -105,8 +107,9 @@ pub fn write_fixture(dir: &Path, spec: FixtureSpec) -> Fixture {
             (format!("ENSG{g:011}"), format!("GENE{g}"), tid, pos)
         })
         .collect();
-    let probe_barcodes: Vec<String> =
-        (1..=spec.probe_barcodes.unwrap_or(0)).map(|i| format!("BC{i:03}")).collect();
+    let probe_barcodes: Vec<String> = (1..=spec.probe_barcodes.unwrap_or(0))
+        .map(|i| format!("BC{i:03}"))
+        .collect();
     // Each cell is assigned one probe barcode (two for every 5th cell, the
     // composite-GEM case probe-demux has to handle).
     let cell_pbs: Vec<Vec<String>> = (0..spec.cells)
@@ -116,7 +119,10 @@ pub fn write_fixture(dir: &Path, spec: FixtureSpec) -> Fixture {
             }
             let first = probe_barcodes[c % probe_barcodes.len()].clone();
             if c % 5 == 0 && probe_barcodes.len() > 1 {
-                vec![first, probe_barcodes[(c + 1) % probe_barcodes.len()].clone()]
+                vec![
+                    first,
+                    probe_barcodes[(c + 1) % probe_barcodes.len()].clone(),
+                ]
             } else {
                 vec![first]
             }
@@ -143,7 +149,10 @@ pub fn write_fixture(dir: &Path, spec: FixtureSpec) -> Fixture {
                 // 1-mismatch sequencing error on a duplicate
                 let p = rng.below(12) as usize;
                 let mut b = read_umi.into_bytes();
-                b[p] = b"ACGT"[((b"ACGT".iter().position(|&x| x == b[p]).unwrap() as u64 + 1 + rng.below(3)) % 4) as usize];
+                b[p] = b"ACGT"[((b"ACGT".iter().position(|&x| x == b[p]).unwrap() as u64
+                    + 1
+                    + rng.below(3))
+                    % 4) as usize];
                 read_umi = String::from_utf8(b).unwrap();
             }
             let (gx, gn, zg) = if multi_gene {
@@ -176,16 +185,27 @@ pub fn write_fixture(dir: &Path, spec: FixtureSpec) -> Fixture {
 
     let path = dir.join("annotated.bam");
     let mut header = bam::Header::new();
-    header.push_record(HeaderRecord::new(b"HD").push_tag(b"VN", "1.6").push_tag(b"SO", "coordinate"));
+    header.push_record(
+        HeaderRecord::new(b"HD")
+            .push_tag(b"VN", "1.6")
+            .push_tag(b"SO", "coordinate"),
+    );
     for name in ["chr1", "chr2"] {
-        header.push_record(HeaderRecord::new(b"SQ").push_tag(b"SN", name).push_tag(b"LN", 1_000_000));
+        header.push_record(
+            HeaderRecord::new(b"SQ")
+                .push_tag(b"SN", name)
+                .push_tag(b"LN", 1_000_000),
+        );
     }
     let mut writer = bam::Writer::from_path(&path, &header, bam::Format::Bam).unwrap();
     let seq = b"ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT";
     for r in &reads {
         let mut record = bam::Record::new();
         let cigar = CigarString(if r.clip > 0 {
-            vec![Cigar::Match(seq.len() as u32 - r.clip), Cigar::SoftClip(r.clip)]
+            vec![
+                Cigar::Match(seq.len() as u32 - r.clip),
+                Cigar::SoftClip(r.clip),
+            ]
         } else {
             vec![Cigar::Match(seq.len() as u32)]
         });
@@ -204,7 +224,9 @@ pub fn write_fixture(dir: &Path, spec: FixtureSpec) -> Fixture {
         if let Some(cb) = &r.cb {
             record.push_aux(b"CR", Aux::String(&cb[..16])).unwrap();
             record.push_aux(b"CB", Aux::String(cb)).unwrap();
-            record.push_aux(b"CY", Aux::String("IIIIIIIIIIIIIIII")).unwrap();
+            record
+                .push_aux(b"CY", Aux::String("IIIIIIIIIIIIIIII"))
+                .unwrap();
         }
         record.push_aux(b"UR", Aux::String(&r.umi)).unwrap();
         record.push_aux(b"UB", Aux::String(&r.umi)).unwrap();
@@ -226,7 +248,12 @@ pub fn write_fixture(dir: &Path, spec: FixtureSpec) -> Fixture {
 
     let whitelist = dir.join("whitelist.txt");
     std::fs::write(&whitelist, cells.join("\n") + "\n").unwrap();
-    Fixture { bam: path, whitelist, cells, probe_barcodes }
+    Fixture {
+        bam: path,
+        whitelist,
+        cells,
+        probe_barcodes,
+    }
 }
 
 /// Path of a crate binary. `SBXPRESS_TEST_BIN_DIR` points the tests at a
@@ -249,7 +276,11 @@ pub fn run(bin: &Path, args: &[&str]) {
 }
 
 pub fn read_bam(path: &Path) -> Vec<bam::Record> {
-    bam::Reader::from_path(path).unwrap().records().map(Result::unwrap).collect()
+    bam::Reader::from_path(path)
+        .unwrap()
+        .records()
+        .map(Result::unwrap)
+        .collect()
 }
 
 /// Stable textual form of one aux value (independent of rust-htslib's
@@ -281,7 +312,12 @@ pub fn record_text(record: &bam::Record) -> String {
         record.pos()
     );
     for (tag, value) in record.aux_iter().map(Result::unwrap) {
-        let _ = write!(line, "\t{}:{}", String::from_utf8_lossy(tag), aux_text(&value));
+        let _ = write!(
+            line,
+            "\t{}:{}",
+            String::from_utf8_lossy(tag),
+            aux_text(&value)
+        );
     }
     line
 }
@@ -297,7 +333,10 @@ pub fn digest(text: &str) -> String {
 }
 
 pub fn bam_digest(path: &Path) -> String {
-    let text: String = read_bam(path).iter().map(|r| record_text(r) + "\n").collect();
+    let text: String = read_bam(path)
+        .iter()
+        .map(|r| record_text(r) + "\n")
+        .collect();
     digest(&text)
 }
 
@@ -318,9 +357,12 @@ pub fn read_text(path: &Path) -> String {
 /// Raw MEX matrix as (barcode, feature id) -> value, read from a
 /// `raw_feature_bc_matrix` / `filtered_feature_bc_matrix` dir (plain or gzip).
 pub fn read_mex(dir: &Path) -> (BTreeMap<(String, String), f64>, bool) {
-    let lines = |f: &str| -> Vec<String> { read_text(&dir.join(f)).lines().map(str::to_owned).collect() };
-    let features: Vec<String> =
-        lines("features.tsv").iter().map(|l| l.split('\t').next().unwrap().to_owned()).collect();
+    let lines =
+        |f: &str| -> Vec<String> { read_text(&dir.join(f)).lines().map(str::to_owned).collect() };
+    let features: Vec<String> = lines("features.tsv")
+        .iter()
+        .map(|l| l.split('\t').next().unwrap().to_owned())
+        .collect();
     let barcodes = lines("barcodes.tsv");
     let mtx = lines("matrix.mtx");
     let is_real = mtx[0].contains(" real ");

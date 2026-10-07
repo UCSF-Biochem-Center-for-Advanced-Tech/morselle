@@ -1,6 +1,6 @@
-use std::path::{Path, PathBuf};
 use clap::Parser;
 use serde::Serialize;
+use std::path::{Path, PathBuf};
 
 use crate::cell_calling::RawMatrix;
 

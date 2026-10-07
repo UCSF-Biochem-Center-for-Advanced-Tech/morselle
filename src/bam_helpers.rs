@@ -57,7 +57,6 @@ pub fn aux_f64(record: &bam::Record, tag: &[u8]) -> Result<Option<f64>> {
     }
 }
 
-
 /// The record's variable-length data block (qname, cigar, seq, qual, aux).
 /// rust-htslib keeps `Record::data` private; this is the same slice.
 pub fn raw_data(record: &bam::Record) -> &[u8] {
@@ -209,8 +208,14 @@ mod tests {
         record.push_aux(b"ZW", Aux::Float(0.25)).unwrap();
         let [cb, xf, gx, zw, missing] = aux_values(&record, [b"CB", b"xf", b"GX", b"ZW", b"PB"]);
         assert_eq!(aux_slot_string(&cb, b"CB").unwrap(), Some("AAAC-1"));
-        assert_eq!(aux_slot_i64(&xf, b"xf").unwrap(), aux_i64(&record, b"xf").unwrap());
-        assert_eq!(aux_slot_f64(&zw, b"ZW").unwrap(), aux_f64(&record, b"ZW").unwrap());
+        assert_eq!(
+            aux_slot_i64(&xf, b"xf").unwrap(),
+            aux_i64(&record, b"xf").unwrap()
+        );
+        assert_eq!(
+            aux_slot_f64(&zw, b"ZW").unwrap(),
+            aux_f64(&record, b"ZW").unwrap()
+        );
         assert_eq!(aux_slot_string(&missing, b"PB").unwrap(), None);
         assert_eq!(
             aux_slot_string(&gx, b"GX").unwrap_err().to_string(),
@@ -268,9 +273,17 @@ mod tests {
                     "case {case}"
                 );
                 let e = |r: Result<Option<i64>>| r.map_err(|e| e.to_string());
-                assert_eq!(e(aux_slot_i64(slot, *tag)), e(aux_i64(&record, *tag)), "case {case}");
+                assert_eq!(
+                    e(aux_slot_i64(slot, *tag)),
+                    e(aux_i64(&record, *tag)),
+                    "case {case}"
+                );
                 let f = |r: Result<Option<f64>>| r.map_err(|e| e.to_string());
-                assert_eq!(f(aux_slot_f64(slot, *tag)), f(aux_f64(&record, *tag)), "case {case}");
+                assert_eq!(
+                    f(aux_slot_f64(slot, *tag)),
+                    f(aux_f64(&record, *tag)),
+                    "case {case}"
+                );
             }
         }
     }

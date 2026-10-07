@@ -6,11 +6,9 @@ use std::time::Instant;
 use anyhow::{ensure, Context, Result};
 use tracing::info;
 
-use crate::cell_calling::read_raw;
 use super::gmm::fit_threshold;
-use super::types::{
-    feature_counts, median, resolve_filtered_h5, stddev, Cli, SummaryRow,
-};
+use super::types::{feature_counts, median, resolve_filtered_h5, stddev, Cli, SummaryRow};
+use crate::cell_calling::read_raw;
 
 pub fn run(cli: &Cli) -> Result<()> {
     let started = Instant::now();

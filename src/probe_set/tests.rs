@@ -1,6 +1,6 @@
+use rust_htslib::bam::{self, record::Aux, Read as _};
 use std::fs::{self, File};
 use std::io::Write as _;
-use rust_htslib::bam::{self, record::Aux, Read as _};
 
 use super::aligner::ProbeMatcher;
 use super::pipeline::{establish_genes_manifest, run};
@@ -27,7 +27,7 @@ ENSG2,TTTTGGGGCCCCAAAATGCATGCAT,ENSG2|GENE2|ghi,TRUE,unspliced,GENE2
 fn loads_only_included_true_rows() {
     let f = write_csv(REAL_SHAPE);
     let r = ProbeSetReference::load(f.path()).unwrap();
-    assert_eq!(r.probes.len(), 2);  // the FALSE row is excluded
+    assert_eq!(r.probes.len(), 2); // the FALSE row is excluded
     assert_eq!(r.probes[0].gene_id, "ENSG1");
     assert_eq!(r.probes[0].region, "spliced");
     assert_eq!(r.probes[1].gene_id, "ENSG2");
@@ -66,7 +66,7 @@ fn tolerates_a_mismatch_within_budget() {
     let r = ProbeSetReference::load(f.path()).unwrap();
     let matcher = ProbeMatcher::build(&r.probes, 1, 15);
     let mut probe = b"AAAACCCCGGGGTTTTACGTACGTA".to_vec();
-    probe[3] = b'G';  // 1 mismatch, within max_mm=1
+    probe[3] = b'G'; // 1 mismatch, within max_mm=1
     let read = read_with_probe_at(DEFAULT_PROBE_SEQ_OFFSET, &probe);
     assert_eq!(matcher.locate(&read), Some(0));
 }
@@ -89,7 +89,7 @@ fn distinguishes_two_genes_probes() {
     let r = ProbeSetReference::load(f.path()).unwrap();
     let matcher = ProbeMatcher::build(&r.probes, 1, 15);
     let read = read_with_probe_at(DEFAULT_PROBE_SEQ_OFFSET, b"TTTTGGGGCCCCAAAATGCATGCAT");
-    assert_eq!(matcher.locate(&read), Some(1));  // GENE2's probe
+    assert_eq!(matcher.locate(&read), Some(1)); // GENE2's probe
 }
 
 #[test]
@@ -102,7 +102,7 @@ fn recovers_a_single_deletion_in_the_probe_span() {
     let matcher = ProbeMatcher::build(&r.probes, 1, 15);
     let probe = b"AAAACCCCGGGGTTTTACGTACGTA";
     let mut deleted = probe[..10].to_vec();
-    deleted.extend_from_slice(&probe[11..]);  // drop the base at position 10
+    deleted.extend_from_slice(&probe[11..]); // drop the base at position 10
     assert_eq!(deleted.len(), probe.len() - 1);
     let read = read_with_probe_at(DEFAULT_PROBE_SEQ_OFFSET, &deleted);
     assert_eq!(matcher.locate(&read), Some(0));
@@ -118,7 +118,7 @@ fn recovers_a_single_insertion_in_the_probe_span() {
     let matcher = ProbeMatcher::build(&r.probes, 1, 15);
     let probe = b"AAAACCCCGGGGTTTTACGTACGTA";
     let mut inserted = probe[..10].to_vec();
-    inserted.push(b'T');  // extra base not present in the real probe
+    inserted.push(b'T'); // extra base not present in the real probe
     inserted.extend_from_slice(&probe[10..]);
     assert_eq!(inserted.len(), probe.len() + 1);
     let read = read_with_probe_at(DEFAULT_PROBE_SEQ_OFFSET, &inserted);
@@ -135,7 +135,7 @@ fn indel_recovery_still_distinguishes_two_genes() {
     let mut deleted = probe2[..5].to_vec();
     deleted.extend_from_slice(&probe2[6..]);
     let read = read_with_probe_at(DEFAULT_PROBE_SEQ_OFFSET, &deleted);
-    assert_eq!(matcher.locate(&read), Some(1));  // GENE2's probe, not GENE1's
+    assert_eq!(matcher.locate(&read), Some(1)); // GENE2's probe, not GENE1's
 }
 
 #[test]
@@ -158,7 +158,7 @@ fn genes_manifest_create_then_verify_round_trips() {
         text,
         "ENSG1\tGENE1\tGene Expression\nENSG2\tGENE2\tGene Expression\n"
     );
-    establish_genes_manifest(&out, &genes).unwrap();  // idempotent
+    establish_genes_manifest(&out, &genes).unwrap(); // idempotent
 }
 
 #[test]
@@ -174,8 +174,7 @@ fn run_end_to_end_writes_mapped_and_unmapped_records_with_carried_tags() {
     let probe_csv = write_csv(REAL_SHAPE);
     let dir = tempfile::tempdir().unwrap();
     let fastq_path = dir.path().join("r2.fastq");
-    let matched_seq =
-        read_with_probe_at(DEFAULT_PROBE_SEQ_OFFSET, b"AAAACCCCGGGGTTTTACGTACGTA");
+    let matched_seq = read_with_probe_at(DEFAULT_PROBE_SEQ_OFFSET, b"AAAACCCCGGGGTTTTACGTACGTA");
     let unmatched_seq = vec![b'A'; 120];
     let mut fastq = File::create(&fastq_path).unwrap();
     writeln!(
@@ -231,7 +230,7 @@ fn run_end_to_end_writes_mapped_and_unmapped_records_with_carried_tags() {
     let unmapped = &records[1];
     assert!(unmapped.is_unmapped());
     assert!(unmapped.aux(b"GX").is_err());
-    assert!(unmapped.aux(b"PB").is_err());  // PB optional, absent here
+    assert!(unmapped.aux(b"PB").is_err()); // PB optional, absent here
 }
 
 /// Multi-threaded runs must write records in input order (the 0.5.3
@@ -247,9 +246,19 @@ fn multithreaded_run_preserves_input_order() {
     // More than one 10,000-read batch, alternating matched / unmatched.
     let n = 25_000;
     for i in 0..n {
-        let seq = if i % 3 == 0 { &matched_seq } else { &unmatched_seq };
+        let seq = if i % 3 == 0 {
+            &matched_seq
+        } else {
+            &unmatched_seq
+        };
         writeln!(fastq, "@r{i}\tCB:Z:ACGTACGTACGTACGT-1\tUR:Z:AAAACCCCGGGG").unwrap();
-        writeln!(fastq, "{}\n+\n{}", String::from_utf8_lossy(seq), "I".repeat(seq.len())).unwrap();
+        writeln!(
+            fastq,
+            "{}\n+\n{}",
+            String::from_utf8_lossy(seq),
+            "I".repeat(seq.len())
+        )
+        .unwrap();
     }
     drop(fastq);
     let out_bam = dir.path().join("probeset.bam");

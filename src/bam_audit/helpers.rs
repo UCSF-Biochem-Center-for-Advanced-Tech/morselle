@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use anyhow::Result;
 use rustc_hash::FxHashSet;
 
-pub use crate::anchors::revcomp;
 use super::types::{ClipClasses, HOMO, K};
+pub use crate::anchors::revcomp;
 
 /// All k-mers of `m` and its reverse complement — indel-robust motif detection.
 pub fn kmers(m: &[u8]) -> Vec<[u8; K]> {

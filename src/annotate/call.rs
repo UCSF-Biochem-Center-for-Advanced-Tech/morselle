@@ -1,5 +1,5 @@
-use std::collections::HashSet;
 use rust_htslib::bam::{self, record::Cigar};
+use std::collections::HashSet;
 
 use super::index::collect_bins;
 use super::types::{Annotation, Call, Interval, Strand, Transcript};

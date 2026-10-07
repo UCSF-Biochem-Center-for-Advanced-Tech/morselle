@@ -1,6 +1,6 @@
+use rust_htslib::bam::{self, record::Aux, Read as _};
 use std::fs::{self, File};
 use std::io::Write as _;
-use rust_htslib::bam::{self, record::Aux, Read as _};
 
 use super::matcher::FeatureMatcher;
 use super::pipeline::{establish_features_tsv, parse_tag, run};
@@ -70,9 +70,9 @@ fn tolerates_mismatches_within_budget() {
     let r = FeatureReference::load(f.path()).unwrap();
     let matcher = FeatureMatcher::build(&r.features, 2, 1, 30);
     let mut anchor = b"TTCCAGCTTAGCTCTTAAAC".to_vec();
-    anchor[3] = b'G';  // 1 mismatch, within anchor_max_mm=2
+    anchor[3] = b'G'; // 1 mismatch, within anchor_max_mm=2
     let mut capture = b"CTGTTACCCTAAGAACAAAC".to_vec();
-    capture[0] = b'A';  // 1 mismatch, within capture_max_mm=1
+    capture[0] = b'A'; // 1 mismatch, within capture_max_mm=1
     let read = read_with_anchor_capture(10, &anchor, &capture);
     assert_eq!(matcher.locate(&read), Some(0));
 }
@@ -92,7 +92,7 @@ fn distinguishes_two_guides_sharing_one_anchor() {
     let r = FeatureReference::load(f.path()).unwrap();
     let matcher = FeatureMatcher::build(&r.features, 2, 1, 30);
     let read = read_with_anchor_capture(10, b"TTTCTGGACTTCAGTGGACG", b"GGTGCACTCTGGAGAAGTCC");
-    assert_eq!(matcher.locate(&read), Some(1));  // "inactive"
+    assert_eq!(matcher.locate(&read), Some(1)); // "inactive"
 }
 
 #[test]
@@ -106,7 +106,7 @@ fn recovers_a_single_deletion_in_the_anchor_span() {
     let matcher = FeatureMatcher::build(&r.features, 2, 1, 30);
     let anchor = b"TTCCAGCTTAGCTCTTAAAC";
     let mut deleted = anchor[..10].to_vec();
-    deleted.extend_from_slice(&anchor[11..]);  // drop the base at position 10
+    deleted.extend_from_slice(&anchor[11..]); // drop the base at position 10
     assert_eq!(deleted.len(), anchor.len() - 1);
     let read = read_with_anchor_capture(10, &deleted, b"CTGTTACCCTAAGAACAAAC");
     assert_eq!(matcher.locate(&read), Some(0));
@@ -120,7 +120,7 @@ fn recovers_a_single_insertion_in_the_anchor_span() {
     let matcher = FeatureMatcher::build(&r.features, 2, 1, 30);
     let anchor = b"TTCCAGCTTAGCTCTTAAAC";
     let mut inserted = anchor[..10].to_vec();
-    inserted.push(b'T');  // extra base not present in the real anchor
+    inserted.push(b'T'); // extra base not present in the real anchor
     inserted.extend_from_slice(&anchor[10..]);
     assert_eq!(inserted.len(), anchor.len() + 1);
     let read = read_with_anchor_capture(10, &inserted, b"CTGTTACCCTAAGAACAAAC");
@@ -138,7 +138,7 @@ fn indel_recovery_still_distinguishes_two_guides() {
     let mut deleted = anchor[..8].to_vec();
     deleted.extend_from_slice(&anchor[9..]);
     let read = read_with_anchor_capture(10, &deleted, b"GGTGCACTCTGGAGAAGTCC");
-    assert_eq!(matcher.locate(&read), Some(1));  // "inactive", not "CD45"
+    assert_eq!(matcher.locate(&read), Some(1)); // "inactive", not "CD45"
 }
 
 /// Proves the generalization: a mixed panel (a CRISPR-flavored feature
@@ -160,8 +160,7 @@ CD3,CD3-APC,R2,AAAAAAAAAAAAAAAAAAAA(BC),TCGATCGATCGATCGATCGA,Antibody Capture
         read_with_anchor_capture(10, b"TTCCAGCTTAGCTCTTAAAC", b"CTGTTACCCTAAGAACAAAC");
     assert_eq!(matcher.locate(&crispr_read), Some(0));
 
-    let ab_read =
-        read_with_anchor_capture(10, b"AAAAAAAAAAAAAAAAAAAA", b"TCGATCGATCGATCGATCGA");
+    let ab_read = read_with_anchor_capture(10, b"AAAAAAAAAAAAAAAAAAAA", b"TCGATCGATCGATCGATCGA");
     assert_eq!(matcher.locate(&ab_read), Some(1));
 }
 
@@ -265,5 +264,5 @@ fn run_end_to_end_writes_mapped_and_unmapped_records_with_carried_tags() {
     assert_eq!(unmapped.qname(), b"read2");
     assert!(unmapped.aux(b"GX").is_err());
     assert_eq!(unmapped.aux(b"CB").unwrap(), Aux::String("TTTTGGGGCCCC-1"));
-    assert!(unmapped.aux(b"PB").is_err());  // PB optional, absent here
+    assert!(unmapped.aux(b"PB").is_err()); // PB optional, absent here
 }

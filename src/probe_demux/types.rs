@@ -1,6 +1,6 @@
-use std::path::PathBuf;
 use clap::Parser;
 use serde::Serialize;
+use std::path::PathBuf;
 
 /// Assign cell barcodes to samples by probe barcode (10x Flex).
 #[derive(Debug, Parser)]

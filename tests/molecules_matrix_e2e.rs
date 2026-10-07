@@ -101,7 +101,12 @@ fn molecules_then_matrix(dir: &Path, name: &str, extra: &[&str]) -> Run {
     run(env!("CARGO_BIN_EXE_sbx10x-molecules"), &args);
     run(
         env!("CARGO_BIN_EXE_cr-bam-to-mtx"),
-        &[molecules.to_str().unwrap(), "-o", outs.to_str().unwrap(), "--no-gzip"],
+        &[
+            molecules.to_str().unwrap(),
+            "-o",
+            outs.to_str().unwrap(),
+            "--no-gzip",
+        ],
     );
     assert!(
         !PathBuf::from(format!("{}.shards", molecules.display())).exists(),
@@ -109,7 +114,11 @@ fn molecules_then_matrix(dir: &Path, name: &str, extra: &[&str]) -> Run {
     );
     let mex = outs.join("raw_feature_bc_matrix");
     let lines = |f: &str| -> Vec<String> {
-        std::fs::read_to_string(mex.join(f)).unwrap().lines().map(str::to_owned).collect()
+        std::fs::read_to_string(mex.join(f))
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect()
     };
     let features: Vec<String> = lines("features.tsv")
         .iter()
@@ -130,7 +139,11 @@ fn molecules_then_matrix(dir: &Path, name: &str, extra: &[&str]) -> Run {
         .records()
         .map(Result::unwrap)
         .collect();
-    Run { counts, is_real, records }
+    Run {
+        counts,
+        is_real,
+        records,
+    }
 }
 
 fn expect(run: &Run, expected: &[(&str, &str, f64)]) {
@@ -138,10 +151,19 @@ fn expect(run: &Run, expected: &[(&str, &str, f64)]) {
         .iter()
         .map(|&(bc, gene, n)| ((bc.to_owned(), gene.to_owned()), n))
         .collect();
-    assert_eq!(run.counts.len(), want.len(), "got {:?}, want {want:?}", run.counts);
+    assert_eq!(
+        run.counts.len(),
+        want.len(),
+        "got {:?}, want {want:?}",
+        run.counts
+    );
     for (k, &v) in &want {
         let got = run.counts.get(k).copied().unwrap_or(f64::NAN);
-        assert!((got - v).abs() < 1e-3, "{k:?}: got {got}, want {v} (all: {:?})", run.counts);
+        assert!(
+            (got - v).abs() < 1e-3,
+            "{k:?}: got {got}, want {v} (all: {:?})",
+            run.counts
+        );
     }
 }
 
@@ -153,12 +175,19 @@ fn tag_str(record: &bam::Record, tag: &[u8]) -> Option<String> {
 }
 
 fn find<'a>(run: &'a Run, name: &str) -> &'a bam::Record {
-    run.records.iter().find(|r| r.qname() == name.as_bytes()).unwrap()
+    run.records
+        .iter()
+        .find(|r| r.qname() == name.as_bytes())
+        .unwrap()
 }
 
 /// Invariants every mode must satisfy on the output BAM.
 fn check_output_invariants(run: &Run) {
-    assert_eq!(run.records.len(), READS.len(), "every input record is written");
+    assert_eq!(
+        run.records.len(),
+        READS.len(),
+        "every input record is written"
+    );
     for record in &run.records {
         assert!(matches!(record.aux(b"xf"), Ok(Aux::I32(17 | 25))));
         assert!(tag_str(record, b"UB").is_some());
@@ -184,15 +213,28 @@ fn single_cell_default_is_winner_take_all_with_umi_correction() {
         check_output_invariants(&run);
         // G1: U1 (+U1_ERR corrected in, support 4) beats G3's 1 read; plus U3 via ZG.
         expect(&run, &[(C1, "G1", 2.0), (C1, "G2", 1.0), (C2, "G2", 1.0)]);
-        assert!(!run.is_real, "{name}: winner-take-all must stay an integer matrix");
-        assert_eq!(tag_str(find(&run, "r4"), b"UB").as_deref(), Some(U1), "{name}");
-        assert!(matches!(find(&run, "r8").aux(b"XW"), Ok(Aux::Char(b'L'))), "{name}");
+        assert!(
+            !run.is_real,
+            "{name}: winner-take-all must stay an integer matrix"
+        );
+        assert_eq!(
+            tag_str(find(&run, "r4"), b"UB").as_deref(),
+            Some(U1),
+            "{name}"
+        );
+        assert!(
+            matches!(find(&run, "r8").aux(b"XW"), Ok(Aux::Char(b'L'))),
+            "{name}"
+        );
         let representatives = run
             .records
             .iter()
             .filter(|r| matches!(r.aux(b"xf"), Ok(Aux::I32(25))))
             .count();
-        assert_eq!(representatives, 4, "{name}: one representative per counted molecule");
+        assert_eq!(
+            representatives, 4,
+            "{name}: one representative per counted molecule"
+        );
     }
 }
 
@@ -216,7 +258,10 @@ fn tagseq_defaults_to_fractional_split_without_umi_correction() {
                 (C2, "G2", 1.0),
             ],
         );
-        assert!(run.is_real, "{name}: fractional counts need a real-valued matrix");
+        assert!(
+            run.is_real,
+            "{name}: fractional counts need a real-valued matrix"
+        );
         let r8 = find(&run, "r8");
         assert!(matches!(r8.aux(b"XW"), Ok(Aux::Char(b'F'))));
         assert!(matches!(r8.aux(b"ZW"), Ok(Aux::Float(w)) if (w - 0.25).abs() < 1e-6));
@@ -227,15 +272,27 @@ fn tagseq_defaults_to_fractional_split_without_umi_correction() {
 #[test]
 fn tagseq_without_fractional_counts_every_claimant_in_full() {
     let dir = tempfile::tempdir().unwrap();
-    let run = molecules_then_matrix(dir.path(), "shared", &["--tagseq", "--no-fractional-collisions"]);
+    let run = molecules_then_matrix(
+        dir.path(),
+        "shared",
+        &["--tagseq", "--no-fractional-collisions"],
+    );
     check_output_invariants(&run);
     expect(
         &run,
-        &[(C1, "G1", 3.0), (C1, "G2", 1.0), (C1, "G3", 1.0), (C2, "G2", 1.0)],
+        &[
+            (C1, "G1", 3.0),
+            (C1, "G2", 1.0),
+            (C1, "G3", 1.0),
+            (C2, "G2", 1.0),
+        ],
     );
     assert!(!run.is_real);
     assert!(matches!(find(&run, "r8").aux(b"XW"), Ok(Aux::Char(b'S'))));
-    assert!(find(&run, "r8").aux(b"ZW").is_err(), "ZW is only written for fractional molecules");
+    assert!(
+        find(&run, "r8").aux(b"ZW").is_err(),
+        "ZW is only written for fractional molecules"
+    );
 }
 
 #[test]
@@ -246,7 +303,12 @@ fn fractional_single_cell_corrects_umis_then_splits() {
     // U1 group after correction: G1 support 4, G3 support 1 -> 0.8 / 0.2.
     expect(
         &run,
-        &[(C1, "G1", 0.8 + 1.0), (C1, "G2", 1.0), (C1, "G3", 0.2), (C2, "G2", 1.0)],
+        &[
+            (C1, "G1", 0.8 + 1.0),
+            (C1, "G2", 1.0),
+            (C1, "G3", 0.2),
+            (C2, "G2", 1.0),
+        ],
     );
     assert!(run.is_real);
 }

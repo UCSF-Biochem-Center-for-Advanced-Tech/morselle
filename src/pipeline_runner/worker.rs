@@ -149,7 +149,7 @@ fn reader_loop(
             if batch.len() >= BATCH_READS {
                 let full = std::mem::replace(&mut batch, Batch::with_orientation(expected));
                 if tx.send(full).is_err() {
-                    return Ok(());  // all workers gone
+                    return Ok(()); // all workers gone
                 }
             }
         }
@@ -221,7 +221,7 @@ pub(crate) fn run_pipelined(
                 scope.spawn(|| reader_loop(inputs, &next, sh, tx))
             })
             .collect();
-        drop(tx);  // workers see the channel close once every reader clone is dropped
+        drop(tx); // workers see the channel close once every reader clone is dropped
 
         let worker_handles: Vec<_> = (0..n_workers)
             .map(|w| {

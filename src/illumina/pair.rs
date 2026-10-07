@@ -1,5 +1,5 @@
-use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
+use std::path::{Path, PathBuf};
 
 use crate::anchors::revcomp;
 use crate::barcode::{encode16, Whitelist};
@@ -173,7 +173,7 @@ pub fn convert_pair(
                         Some((0, CB_LEN + UMI_LEN)),
                         Some(CB_LEN + UMI_LEN),
                         extract_cfg,
-                        false,  // no Flex support in this binary; see the extract_cfg literal above
+                        false, // no Flex support in this binary; see the extract_cfg literal above
                     );
                     let (cdna_start, cdna_end) = match e.r2 {
                         Some(range) => range,
@@ -223,8 +223,7 @@ pub fn convert_pair(
                     // both mates; this is the same check for reads that never
                     // get that treatment.
                     if let Some(min_run) = r2_polya_min_run {
-                        if let Some(run) = homopolymer::first_run_at_least(&r2_seq, b'A', min_run)
-                        {
+                        if let Some(run) = homopolymer::first_run_at_least(&r2_seq, b'A', min_run) {
                             metrics.r2_polya_bases_trimmed += (r2_seq.len() - run.start) as u64;
                             r2_trim_end = run.start;
                             if r2_trim_end < extract_cfg.min_cdna_len {

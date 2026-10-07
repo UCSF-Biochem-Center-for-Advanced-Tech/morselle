@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 use std::fs;
 
-use crate::cr_bam_to_mtx::{write_h5, Feature, Matrix};
 use super::gmm::{decision_boundary, fit_threshold};
 use super::pipeline::run;
 use super::types::{Cli, Component};
+use crate::cr_bam_to_mtx::{write_h5, Feature, Matrix};
 
 /// Real per-cell CD45 UMI-count histogram for CAT06 sample `Pos`
 /// (n=74,581 real called cells, from `sample_raw_feature_bc_matrix.h5`),
@@ -262,10 +262,8 @@ fn decision_boundary_is_symmetric_for_equal_variance_equal_weight_components() {
 
 fn tiny_matrix(barcodes: Vec<&str>, raw_counts: BTreeMap<(usize, usize), u64>) -> Matrix {
     let molecules = raw_counts.values().sum();
-    let counts: BTreeMap<(usize, usize), f64> = raw_counts
-        .into_iter()
-        .map(|(k, v)| (k, v as f64))
-        .collect();
+    let counts: BTreeMap<(usize, usize), f64> =
+        raw_counts.into_iter().map(|(k, v)| (k, v as f64)).collect();
     Matrix {
         features: vec![
             Feature {
@@ -292,8 +290,8 @@ fn run_end_to_end_matches_expected_csv_and_json_shape() {
     // CD45=1 (below floor), CB3 gets neither -- "inactive" never
     // appears at all, matching real RZ211 behavior for an absent guide.
     let mut counts = BTreeMap::new();
-    counts.insert((0, 0), 5);  // CB1, CD45
-    counts.insert((1, 0), 1);  // CB2, CD45
+    counts.insert((0, 0), 5); // CB1, CD45
+    counts.insert((1, 0), 1); // CB2, CD45
     let matrix = tiny_matrix(vec!["CB1-1", "CB2-1", "CB3-1"], counts);
 
     let dir = tempfile::tempdir().unwrap();
@@ -315,7 +313,7 @@ fn run_end_to_end_matches_expected_csv_and_json_shape() {
     );
 
     let thresholds = fs::read_to_string(out.join("protospacer_umi_thresholds.csv")).unwrap();
-    assert_eq!(thresholds, "Protospacer,UMI threshold\nCD45,3\n");  // "inactive" omitted: all-zero
+    assert_eq!(thresholds, "Protospacer,UMI threshold\nCD45,3\n"); // "inactive" omitted: all-zero
 
     let json: serde_json::Value = serde_json::from_str(
         &fs::read_to_string(out.join("protospacer_umi_thresholds.json")).unwrap(),
@@ -329,8 +327,8 @@ fn run_end_to_end_matches_expected_csv_and_json_shape() {
         lines[0],
         "feature_call,num_cells,pct_cells,median_umis,stddev_umis"
     );
-    assert!(lines.contains(&"No guide molecules,1,0.3333333333333333,None,None"));  // CB3 only
-    assert!(lines.contains(&"No confident call,2,0.6666666666666666,None,None"));  // CB2 + CB3
+    assert!(lines.contains(&"No guide molecules,1,0.3333333333333333,None,None")); // CB3 only
+    assert!(lines.contains(&"No confident call,2,0.6666666666666666,None,None")); // CB2 + CB3
     assert!(lines.contains(&"1 protospacer assigned,1,0.3333333333333333,None,None"));
     assert!(lines.contains(&"More than 1 protospacer assigned,0,0,None,None"));
     assert!(lines.contains(&"CD45,1,0.3333333333333333,5,0"));

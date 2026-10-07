@@ -1,8 +1,8 @@
-use std::fs;
-use std::path::{Path, PathBuf};
 use anyhow::{ensure, Context, Result};
 use clap::Parser;
 use serde::Serialize;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 /// Nominal length for each synthetic per-feature contig. Coordinates on
 /// this BAM are never real genomic positions — downstream (`molecules`,

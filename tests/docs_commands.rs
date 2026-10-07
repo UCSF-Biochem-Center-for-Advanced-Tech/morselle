@@ -66,8 +66,10 @@ fn help_text(tool: &[&str], cache: &mut BTreeMap<String, String>) -> String {
 }
 
 fn accepts(help: &str, flag: &str) -> bool {
-    help.split(|c: char| c.is_whitespace() || c == ',' || c == '[' || c == ']' || c == '/' || c == '=' || c == '<')
-        .any(|word| word == flag)
+    help.split(|c: char| {
+        c.is_whitespace() || c == ',' || c == '[' || c == ']' || c == '/' || c == '=' || c == '<'
+    })
+    .any(|word| word == flag)
 }
 
 #[test]
@@ -77,20 +79,27 @@ fn documented_commands_use_real_flags() {
     let mut problems = Vec::new();
     let mut checked = 0;
     for doc in DOCS {
-        let Ok(text) = std::fs::read_to_string(root.join(doc)) else { continue };
+        let Ok(text) = std::fs::read_to_string(root.join(doc)) else {
+            continue;
+        };
         for (line, command) in code_block_commands(&text) {
             for segment in command.split('|') {
                 let words: Vec<&str> = segment.split_whitespace().collect();
                 let Some(pos) = words.iter().position(|w| {
-                    *w == "sbxpress" || w.trim_matches('"').ends_with("scripts/sbxpress-pipeline.sh")
-                        || w.trim_matches('"').ends_with("scripts/sbxpress-gex-pipeline.sh")
+                    *w == "sbxpress"
+                        || w.trim_matches('"')
+                            .ends_with("scripts/sbxpress-pipeline.sh")
+                        || w.trim_matches('"')
+                            .ends_with("scripts/sbxpress-gex-pipeline.sh")
                 }) else {
                     continue;
                 };
                 let tool: Vec<&str> = if words[pos] == "sbxpress" {
                     match words.get(pos + 1) {
                         // minimap forwards flags to minimap2; bare --version/--help are global.
-                        Some(sub) if !sub.starts_with('-') && *sub != "minimap" => vec!["sbxpress", sub],
+                        Some(sub) if !sub.starts_with('-') && *sub != "minimap" => {
+                            vec!["sbxpress", sub]
+                        }
                         _ => continue,
                     }
                 } else {
@@ -102,12 +111,22 @@ fn documented_commands_use_real_flags() {
                 for word in &words[pos + 1..] {
                     let flag = word.split('=').next().unwrap();
                     if flag.starts_with("--") && flag.len() > 2 && !accepts(&help, flag) {
-                        problems.push(format!("{doc}:{line}: `{}` does not accept {flag}", tool.join(" ")));
+                        problems.push(format!(
+                            "{doc}:{line}: `{}` does not accept {flag}",
+                            tool.join(" ")
+                        ));
                     }
                 }
             }
         }
     }
-    assert!(checked > 10, "found only {checked} documented commands; is the parser broken?");
-    assert!(problems.is_empty(), "documented flags that do not exist:\n{}", problems.join("\n"));
+    assert!(
+        checked > 10,
+        "found only {checked} documented commands; is the parser broken?"
+    );
+    assert!(
+        problems.is_empty(),
+        "documented flags that do not exist:\n{}",
+        problems.join("\n")
+    );
 }

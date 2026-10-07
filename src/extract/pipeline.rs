@@ -1,9 +1,9 @@
-use crate::anchors::{hamming_leq, ILLUMINA_3P_ADAPTER};
 use super::types::{
     ExtractCfg, Extracted, FLEX_R2_END_ANCHOR, FLEX_R2_END_ANCHOR_MAX_MM,
     FLEX_R2_END_ANCHOR_MAX_SEARCH, FLEX_R2_END_ANCHOR_PREFIX_LEN, MIN_PARTIAL_ADAPTER,
     MIN_PARTIAL_TSO, TSO_RC,
 };
+use crate::anchors::{hamming_leq, ILLUMINA_3P_ADAPTER};
 
 /// Where the reverse-complemented TSO starts, if this read carries one at the cDNA's 3' end.
 fn find_tso(seq: &[u8], cdna_start: usize, cdna_end: usize) -> Option<usize> {
@@ -48,7 +48,7 @@ pub fn dt_run_end(seq: &[u8], approx_start: usize) -> usize {
         if seq[i] == b'T' {
             last = i;
         } else if seq[i - 1] != b'T' {
-            break;  // two consecutive non-T -> run ends
+            break; // two consecutive non-T -> run ends
         }
         i += 1;
     }

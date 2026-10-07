@@ -50,7 +50,10 @@ fn append(record: &mut bam::Record, tag: &[u8; 2], type_code: u8, bytes: &[u8]) 
 /// Append a `Z` tag the caller knows is absent (NUL-terminated, as htslib).
 pub fn append_str(record: &mut bam::Record, tag: &[u8; 2], value: &str) -> Result<()> {
     if value.as_bytes().contains(&0) {
-        bail!("aux string for {} contains NUL", String::from_utf8_lossy(tag));
+        bail!(
+            "aux string for {} contains NUL",
+            String::from_utf8_lossy(tag)
+        );
     }
     let mut bytes = Vec::with_capacity(value.len() + 1);
     bytes.extend_from_slice(value.as_bytes());

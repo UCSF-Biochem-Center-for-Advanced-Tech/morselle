@@ -1,8 +1,8 @@
-use crate::anchors::{comp, hamming_leq};
-use crate::yc::{self, EncodeStats};
 use super::types::{
     build_index, seed_positions, usable_kmer, InsertClass, Merged, OverlapCfg, Scratch, QUAL_OFFSET,
 };
+use crate::anchors::{comp, hamming_leq};
+use crate::yc::{self, EncodeStats};
 
 /// Merge `r1` with `rc(r2)` anchored so that `r1[loc1]` aligns to `rc2[loc2]`,
 /// or `None` if the implied overlap is too short or too divergent.

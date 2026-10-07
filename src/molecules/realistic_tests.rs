@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
+    use rust_htslib::bam::{self, record::Aux, Read};
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
-    use rust_htslib::bam::{self, record::Aux, Read};
 
     use crate::molecules::dedup::build_decisions;
     use crate::molecules::evidence::{
@@ -121,7 +121,14 @@ mod tests {
         let mut serial_decision_metrics = Metrics::default();
         let mut parallel_decision_metrics = Metrics::default();
         let _ = build_decisions(&serial, &mut serial_decision_metrics, None, 2, false, false);
-        let _ = build_decisions(&parallel, &mut parallel_decision_metrics, None, 2, false, false);
+        let _ = build_decisions(
+            &parallel,
+            &mut parallel_decision_metrics,
+            None,
+            2,
+            false,
+            false,
+        );
         assert_eq!(
             serial_decision_metrics.molecules_counted,
             parallel_decision_metrics.molecules_counted
@@ -200,19 +207,20 @@ mod tests {
             );
         };
         for (i, &cell) in cells.iter().enumerate() {
-            let sample = (i % 3) as u32;  // several cells reuse the same sample id, and vice versa
-            push(&mut evidence, cell, sample, 0, umis[0], 10);  // major
-            push(&mut evidence, cell, sample, 0, umis[1], 2);  // 1bp error of major -> corrects into it
-            push(&mut evidence, cell, sample, 1, umis[2], 4);  // gene 1, umi X
-            push(&mut evidence, cell, sample, 2, umis[2], 3);  // gene 2, same umi X, same (cell,sample) -> real cross-gene collision
+            let sample = (i % 3) as u32; // several cells reuse the same sample id, and vice versa
+            push(&mut evidence, cell, sample, 0, umis[0], 10); // major
+            push(&mut evidence, cell, sample, 0, umis[1], 2); // 1bp error of major -> corrects into it
+            push(&mut evidence, cell, sample, 1, umis[2], 4); // gene 1, umi X
+            push(&mut evidence, cell, sample, 2, umis[2], 3); // gene 2, same umi X, same (cell,sample) -> real cross-gene collision
                                                               // Same cell, a DIFFERENT sample, reusing the same UMI+a new gene:
                                                               // must NOT be pulled into the collision group above.
             push(&mut evidence, cell, (sample + 1) % 3, 3, umis[2], 5);
-            push(&mut evidence, cell, sample, 4, umis[3], 1);  // plain unique molecule
+            push(&mut evidence, cell, sample, 4, umis[3], 1); // plain unique molecule
         }
 
         let mut global_metrics = Metrics::default();
-        let (global_decisions, _) = build_decisions(&evidence, &mut global_metrics, None, 1, false, false);
+        let (global_decisions, _) =
+            build_decisions(&evidence, &mut global_metrics, None, 1, false, false);
 
         const SHARDS: u64 = 4;
         let mut shard_maps: Vec<HashMap<RawKey, Evidence>> =
@@ -231,7 +239,8 @@ mod tests {
             if shard.is_empty() {
                 continue;
             }
-            let (decisions, _) = build_decisions(shard, &mut sharded_metrics, None, 1, false, false);
+            let (decisions, _) =
+                build_decisions(shard, &mut sharded_metrics, None, 1, false, false);
             sharded_decisions.extend(decisions);
         }
 

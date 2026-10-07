@@ -1,5 +1,5 @@
-use std::borrow::Cow;
 use crate::pipeline::Orientation;
+use std::borrow::Cow;
 
 /// How orientation was determined, for accounting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

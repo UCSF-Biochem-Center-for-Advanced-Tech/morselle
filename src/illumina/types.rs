@@ -1,14 +1,14 @@
-use std::collections::BTreeMap;
-use std::fs::File;
-use std::io::{BufWriter, Write};
-use std::path::{Path, PathBuf};
-use std::thread::{self, JoinHandle};
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use crossbeam_channel::{bounded, Sender};
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use serde::Serialize;
+use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::{BufWriter, Write};
+use std::path::{Path, PathBuf};
+use std::thread::{self, JoinHandle};
 
 pub const CB_LEN: usize = 16;
 pub const UMI_LEN: usize = 12;

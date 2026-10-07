@@ -1,8 +1,8 @@
-use std::fs;
-use std::path::{Path, PathBuf};
 use anyhow::{ensure, Context, Result};
 use clap::Parser;
 use serde::Serialize;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 /// Nominal length for each synthetic per-gene contig — see
 /// `feature_capture.rs`'s identical constant for why the exact value

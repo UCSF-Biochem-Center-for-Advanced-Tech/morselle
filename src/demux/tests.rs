@@ -1,8 +1,8 @@
-use std::path::PathBuf;
-use crate::anchors::revcomp;
-use crate::sample_sheet::SampleSheet;
 use super::engine::*;
 use super::types::*;
+use crate::anchors::revcomp;
+use crate::sample_sheet::SampleSheet;
+use std::path::PathBuf;
 
 fn sheet() -> SampleSheet {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -56,8 +56,8 @@ fn single_index_i5_ignores_a_conflicting_i7() {
     )
     .unwrap();
     let m2 = sh.samples.iter().position(|s| s.id == "M2_GEX").unwrap();
-    let i5_read = revcomp(b"TACGATCAAG");  // M2_GEX's real i5
-    let wrong_i7 = b"AAAAAAAAAA";  // not any real sample's i7 -- must be ignored entirely
+    let i5_read = revcomp(b"TACGATCAAG"); // M2_GEX's real i5
+    let wrong_i7 = b"AAAAAAAAAA"; // not any real sample's i7 -- must be ignored entirely
     let o = d.assign(Some(&i5_read), Some(wrong_i7));
     assert_eq!(o.sample, Some(m2));
     assert_eq!(o.via, DemuxVia::I5Only);
@@ -86,7 +86,7 @@ fn one_mismatch_tolerated() {
     let d = Demuxer::new(&sh, cfg()).unwrap();
     let m2 = sh.samples.iter().position(|s| s.id == "M2_GEX").unwrap();
     let mut i5_read = revcomp(b"TACGATCAAG");
-    i5_read[3] = if i5_read[3] == b'A' { b'C' } else { b'A' };  // 1 mm
+    i5_read[3] = if i5_read[3] == b'A' { b'C' } else { b'A' }; // 1 mm
     let o = d.assign(Some(&i5_read), Some(b"TGTAGTCATT"));
     assert_eq!(o.sample, Some(m2));
 }
@@ -197,9 +197,9 @@ fn windowed_recovers_shifted_index() {
     seq[30..40].copy_from_slice(&i5_read);
     // Anchor is off by one (true index starts at 30, anchor says 29).
     let rigid = d.assign_windowed(&seq, Some(29), None, 0);
-    assert_eq!(rigid.sample, None);  // rigid frame misses it
+    assert_eq!(rigid.sample, None); // rigid frame misses it
     let windowed = d.assign_windowed(&seq, Some(29), None, 3);
-    assert_eq!(windowed.sample, Some(m2));  // offset search recovers it
+    assert_eq!(windowed.sample, Some(m2)); // offset search recovers it
     assert_eq!(windowed.via, DemuxVia::I5Only);
 }
 
@@ -208,9 +208,9 @@ fn index_regions_slicing() {
     // R1_PRIMER (33) + i5 (10) before cb_start; rc(R2_PRIMER) (34) before i7.
     let cb_start = 43;
     let mut seq = vec![b'N'; 200];
-    seq[0..10].copy_from_slice(b"AAAACCCCGG");  // i5 region [0,10)
+    seq[0..10].copy_from_slice(b"AAAACCCCGG"); // i5 region [0,10)
     let adapter_pos = 100;
-    seq[134..144].copy_from_slice(b"TTTTGGGGCC");  // i7 region [134,144)
+    seq[134..144].copy_from_slice(b"TTTTGGGGCC"); // i7 region [134,144)
     let (i5, i7) = index_regions(&seq, cb_start, Some(adapter_pos), 10);
     assert_eq!(i5, Some(&b"AAAACCCCGG"[..]));
     assert_eq!(i7, Some(&b"TTTTGGGGCC"[..]));

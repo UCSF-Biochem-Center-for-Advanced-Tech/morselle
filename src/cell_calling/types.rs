@@ -1,7 +1,7 @@
-use std::path::PathBuf;
+use crate::cr_bam_to_mtx::Feature;
 use clap::Parser;
 use serde::Serialize;
-use crate::cr_bam_to_mtx::Feature;
+use std::path::PathBuf;
 
 pub const ORDMAG_BOOTSTRAPS: usize = 100;
 pub const ORDMAG_QUANTILE: f64 = 0.99;

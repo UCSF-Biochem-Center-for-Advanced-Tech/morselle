@@ -1,6 +1,9 @@
 use super::codec::{decode, encode_overlap};
-use super::types::{code_bases, is_reserved, pair_code, BaseType, YcError, YcTag, DECODE_R1, DECODE_R2, COMPLEMENT, GAP};
 use super::types::complement_code;
+use super::types::{
+    code_bases, is_reserved, pair_code, BaseType, YcError, YcTag, COMPLEMENT, DECODE_R1, DECODE_R2,
+    GAP,
+};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
@@ -395,8 +398,7 @@ fn gapless_alignments_round_trip_losslessly() {
         let right_tail = random_bases(&mut rng, right as usize);
 
         let (tag, stats) =
-            encode_overlap(left, left_is_r1, &r1_duplex, &r2_duplex, right, right_is_r1)
-                .unwrap();
+            encode_overlap(left, left_is_r1, &r1_duplex, &r2_duplex, right, right_is_r1).unwrap();
         assert_eq!(stats.n_columns_coerced, 0);
 
         // Consensus takes R1 at disagreements; the tag is lossless either way.

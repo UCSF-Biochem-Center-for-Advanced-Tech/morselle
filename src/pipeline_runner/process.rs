@@ -1,5 +1,5 @@
-use std::path::Path;
 use anyhow::Result;
+use std::path::Path;
 
 use crate::demux::{index_anchor_starts, DemuxVia, Outcome};
 use crate::extract::{extract, ExtractCfg};
@@ -8,8 +8,8 @@ use crate::orient::{orient, OrientCfg};
 use crate::pipeline::{CbStatus, Orientation, ReadClass};
 
 use super::formatting::{
-    append_processing_tags, append_probe_tags, flush_failed_buf, push_fastq,
-    push_fastq_r2_rc, minimap2_header, FLUSH_BYTES, MIN_POLYT_FLANK,
+    append_probe_tags, append_processing_tags, flush_failed_buf, minimap2_header, push_fastq,
+    push_fastq_r2_rc, FLUSH_BYTES, MIN_POLYT_FLANK,
 };
 use super::types::{ProcessingTags, Stats};
 use super::worker::Shared;
@@ -281,7 +281,7 @@ pub(crate) fn process_one(
         // Reuses `early_outcome` (computed right after `extract()`, above) --
         // same inputs (`r1s`/`e.adapter_pos`/`o.seq` are unchanged since
         // then), so this is the identical result, not a fresh decision.
-        let mut index_route = 5;  // XI=5: demultiplexing was not requested.
+        let mut index_route = 5; // XI=5: demultiplexing was not requested.
         let mut sample_assigned = false;
         let target_idx = if sh.demuxer.is_some() {
             let outcome =
@@ -405,7 +405,7 @@ pub(crate) fn process_one(
         if e.adapter_trimmed {
             stats.adapter_trimmed += 1;
         }
-        let len = emitted_r2 as u64;  // emitted (post-cap) R2 length
+        let len = emitted_r2 as u64; // emitted (post-cap) R2 length
         stats.r2_len_sum += len;
         stats.r2_len_max = stats.r2_len_max.max(len);
     }
@@ -450,7 +450,7 @@ pub(crate) fn detect_orientation(
     }
     let total = p5 + p7;
     if total < 50 {
-        return Ok(None);  // too few confident reads to decide
+        return Ok(None); // too few confident reads to decide
     }
     let frac5 = p5 as f64 / total as f64;
     Ok(if frac5 >= 0.8 {

@@ -1,5 +1,10 @@
+use rust_htslib::bam::{
+    self,
+    header::HeaderRecord,
+    record::{Aux, Cigar, CigarString},
+    Read,
+};
 use std::fs;
-use rust_htslib::bam::{self, header::HeaderRecord, record::{Aux, Cigar, CigarString}, Read};
 
 use super::call::{compatible_position, transcript_cigar};
 use super::pipeline::run;

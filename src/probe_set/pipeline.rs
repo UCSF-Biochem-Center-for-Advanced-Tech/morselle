@@ -179,7 +179,15 @@ pub fn run(cli: &Cli) -> Result<()> {
             batch
                 .par_iter()
                 .map(|(header_line, seq, qual)| {
-                    build_record(header_line, seq, qual, &matcher, &reference, &gene_index, &gene_name)
+                    build_record(
+                        header_line,
+                        seq,
+                        qual,
+                        &matcher,
+                        &reference,
+                        &gene_index,
+                        &gene_name,
+                    )
                 })
                 .collect::<Result<Vec<_>>>()
         })?;

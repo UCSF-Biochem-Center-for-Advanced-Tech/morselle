@@ -27,7 +27,7 @@ fn synthetic_flex(cb: &[u8], umi: &[u8], pre_anchor: &[u8], dt: usize) -> Vec<u8
     v.extend(std::iter::repeat(b'T').take(dt));
     v.extend_from_slice(pre_anchor);
     v.extend_from_slice(FLEX_R2_END_ANCHOR);
-    v.extend_from_slice(b"ACGTACGTACACGTACGTAC");  // trailing i7/P7-ish junk
+    v.extend_from_slice(b"ACGTACGTACACGTACGTAC"); // trailing i7/P7-ish junk
     v
 }
 
@@ -88,7 +88,7 @@ fn flex_r2_boundary_recovers_a_single_deletion_in_the_anchor() {
     let umi = b"ACGTACGTACGT";
     let pre_anchor = b"GATTACAGATTACAGATTACAGATTACAGATTACAGAT";
     let mut anchor = FLEX_R2_END_ANCHOR.to_vec();
-    anchor.remove(7);  // delete one base from inside the 15bp prefix
+    anchor.remove(7); // delete one base from inside the 15bp prefix
     let mut seq = Vec::new();
     seq.extend_from_slice(b"AACAAT");
     seq.extend_from_slice(P5);
@@ -116,7 +116,7 @@ fn flex_r2_boundary_recovers_a_single_insertion_in_the_anchor() {
     let umi = b"ACGTACGTACGT";
     let pre_anchor = b"GATTACAGATTACAGATTACAGATTACAGATTACAGAT";
     let mut anchor = FLEX_R2_END_ANCHOR.to_vec();
-    anchor.insert(7, b'G');  // insert one extra base inside the 15bp prefix
+    anchor.insert(7, b'G'); // insert one extra base inside the 15bp prefix
     let mut seq = Vec::new();
     seq.extend_from_slice(b"AACAAT");
     seq.extend_from_slice(P5);
@@ -202,7 +202,7 @@ fn flex_r2_boundary_falls_back_to_a_length_floor_when_anchor_absent_but_payload_
 fn flex_min_cdna_len_no_anchor_is_configurable() {
     let cb = b"AAACCCAAGAAACCCA";
     let umi = b"ACGTACGTACGT";
-    let payload = b"GATTACAGATTACAGATTACA";  // 22bp -- below the real 65bp default
+    let payload = b"GATTACAGATTACAGATTACA"; // 22bp -- below the real 65bp default
     let mut seq = Vec::new();
     seq.extend_from_slice(b"AACAAT");
     seq.extend_from_slice(P5);

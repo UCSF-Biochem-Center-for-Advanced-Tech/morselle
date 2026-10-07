@@ -1,5 +1,5 @@
-use crate::hamming_index::HammingIndex;
 use super::types::{Probe, DEFAULT_PROBE_SEQ_OFFSET};
+use crate::hamming_index::HammingIndex;
 
 /// All single-position deletions of `seq` (`seq.len() - 1` variants, one per
 /// deleted position). Real CAT06 data (2026-09-18 diagnostic, real

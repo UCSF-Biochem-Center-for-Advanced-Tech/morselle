@@ -1,15 +1,12 @@
+use rust_htslib::bam::{self, record::Aux};
 use std::collections::HashMap;
 use std::fs::File;
-use rust_htslib::bam::{self, record::Aux};
-
 
 use super::dedup::build_decisions;
 use super::evidence::collect_evidence;
 use super::helpers::intern_sample;
 use super::saturation::Saturation;
-use super::types::{
-    Dna, Evidence, Metrics, Outcome, RawKey, NO_SAMPLE,
-};
+use super::types::{Dna, Evidence, Metrics, Outcome, RawKey, NO_SAMPLE};
 
 fn evidence(reads: u32, ordinal: u64) -> Evidence {
     Evidence {
@@ -42,8 +39,7 @@ fn one_mismatch_neighbors_match_brute_force_hamming() {
             .collect();
         let target = Dna::pack(&seq).unwrap();
 
-        let neighbors: std::collections::HashSet<Dna> =
-            target.one_mismatch_neighbors().collect();
+        let neighbors: std::collections::HashSet<Dna> = target.one_mismatch_neighbors().collect();
         assert_eq!(neighbors.len(), 36, "3*len distinct neighbors for {seq}");
         assert!(!neighbors.contains(&target));
         for &n in &neighbors {
@@ -260,7 +256,7 @@ fn saturation_is_nested_and_reports_run_and_cells() {
     };
     assert!(contents.contains("run\t.\t5\t0.5\t1\t1\t1\t1"));
     assert!(contents.contains("run\t.\t10\t1\t1\t1\t0\t0"));
-    assert_eq!(contents.lines().count(), 5);  // header, two run, two cell rows
+    assert_eq!(contents.lines().count(), 5); // header, two run, two cell rows
 }
 
 #[test]
@@ -302,4 +298,3 @@ fn fractional_umi_collision_resolution_distributes_weights_proportionally() {
     assert_eq!(metrics.collision_groups, 1);
     assert_eq!(metrics.collision_molecules_fractional, 3);
 }
-

@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use hdf5::types::VarLenAscii;
 
-use crate::cr_bam_to_mtx::{Feature, Matrix};
 use super::types::{round_count, RawMatrix};
+use crate::cr_bam_to_mtx::{Feature, Matrix};
 
 pub fn resolve_h5(path: &Path) -> PathBuf {
     if path.is_dir() {

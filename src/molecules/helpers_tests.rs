@@ -20,7 +20,10 @@ fn reference_choose_gene(gx: &str, gn: Option<&str>, zg: Option<&str>) -> Option
         return None;
     }
     let index = genes.iter().position(|gene| *gene == zg)?;
-    Some((zg, names.get(index).copied().unwrap_or(genes[index]).to_owned()))
+    Some((
+        zg,
+        names.get(index).copied().unwrap_or(genes[index]).to_owned(),
+    ))
 }
 
 #[test]
@@ -36,13 +39,20 @@ fn choose_gene_parts_matches_reference_on_random_inputs() {
     for _ in 0..20_000 {
         let mut field = || -> String {
             let len = next() % 6;
-            (0..len).map(|_| atoms[(next() % atoms.len() as u64) as usize]).collect::<Vec<_>>().join("")
+            (0..len)
+                .map(|_| atoms[(next() % atoms.len() as u64) as usize])
+                .collect::<Vec<_>>()
+                .join("")
         };
         let (a, b, c) = (field(), field(), field());
         let gn = (next() % 3 != 0).then_some(b.as_str());
         let zg = (next() % 3 != 0).then_some(c.as_str());
         let got = choose_gene_parts(&a, gn, zg).map(|(g, n)| (g.to_owned(), n.to_owned()));
-        assert_eq!(got, reference_choose_gene(&a, gn, zg), "gx={a:?} gn={gn:?} zg={zg:?}");
+        assert_eq!(
+            got,
+            reference_choose_gene(&a, gn, zg),
+            "gx={a:?} gn={gn:?} zg={zg:?}"
+        );
     }
 }
 
@@ -87,7 +97,9 @@ fn molecule_tags_match_per_tag_lookups() {
 fn raw_scan_matches_per_tag_aux_lookups() {
     use rust_htslib::bam::record::AuxArray;
     let wanted: [&[u8; 2]; 7] = [b"CB", b"UR", b"UB", b"GX", b"GN", b"ZG", b"PB"];
-    let pool: [&[u8; 2]; 11] = [b"CB", b"UR", b"UB", b"GX", b"GN", b"ZG", b"PB", b"NM", b"CY", b"xf", b"zz"];
+    let pool: [&[u8; 2]; 11] = [
+        b"CB", b"UR", b"UB", b"GX", b"GN", b"ZG", b"PB", b"NM", b"CY", b"xf", b"zz",
+    ];
     let mut state: u64 = 0xD1B5_4A32_D192_ED03;
     let mut next = move || {
         state ^= state << 13;
@@ -133,14 +145,25 @@ fn raw_scan_matches_per_tag_aux_lookups() {
             record.set_data(&data);
         }
         let tags = MoleculeTags::read(&record);
-        let got = [tags.cb, tags.ur, tags.ub, tags.gx, tags.gn, tags.zg, tags.pb];
+        let got = [
+            tags.cb, tags.ur, tags.ub, tags.gx, tags.gn, tags.zg, tags.pb,
+        ];
         for (tag, value) in wanted.iter().zip(got) {
             let expected = match record.aux(*tag) {
                 Ok(Aux::String(s)) => Some(s),
                 _ => None,
             };
-            assert_eq!(value, expected, "case {case}, tag {}", String::from_utf8_lossy(*tag));
+            assert_eq!(
+                value,
+                expected,
+                "case {case}, tag {}",
+                String::from_utf8_lossy(*tag)
+            );
         }
-        assert_eq!(tags.has_output_tags, record.aux(b"xf").is_ok(), "case {case}");
+        assert_eq!(
+            tags.has_output_tags,
+            record.aux(b"xf").is_ok(),
+            "case {case}"
+        );
     }
 }

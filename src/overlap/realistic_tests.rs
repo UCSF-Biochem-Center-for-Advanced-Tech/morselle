@@ -68,11 +68,11 @@ pub fn build(core: &[u8], r1_len: usize, r2_len: usize) -> Pair {
     molecule.extend_from_slice(&revcomp(core));
 
     let mut r1 = molecule.clone();
-    r1.extend_from_slice(ADAPTER);  // read-through past a short fragment
+    r1.extend_from_slice(ADAPTER); // read-through past a short fragment
     r1.truncate(r1_len);
 
-    let mut r2 = revcomp(&molecule);  // core | A(DT) | rc(UMI) | rc(CB)
-    r2.extend_from_slice(&revcomp(R1_PRIMER));  // read-through into the primer
+    let mut r2 = revcomp(&molecule); // core | A(DT) | rc(UMI) | rc(CB)
+    r2.extend_from_slice(&revcomp(R1_PRIMER)); // read-through into the primer
     r2.truncate(r2_len);
 
     // In molecule coordinates R1 covers [0, a) and rc(R2) covers [M - b, M).
@@ -390,7 +390,7 @@ fn indel_between_mates_is_characterised() {
     pair.r2q = vec![b'I'; pair.r2.len()];
 
     match merge(&pair, &OverlapCfg::default()) {
-        None => {}  // preferred outcome
+        None => {} // preferred outcome
         Some(m) => assert!(
             m.seq.starts_with(&pair.molecule[..40]),
             "a partial merge must not corrupt the R1 side"

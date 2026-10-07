@@ -14,8 +14,8 @@ use std::sync::Arc;
 use rayon::prelude::*;
 use tracing::info;
 
-use super::saturation::Saturation;
 use super::collisions::Resolved;
+use super::saturation::Saturation;
 use super::types::{Decision, Dna, Evidence, Metrics, RawKey};
 
 pub fn correct_group<S: BuildHasher>(
@@ -140,9 +140,7 @@ fn correct_umis<S: BuildHasher + Sync>(
         return evidence.keys().map(|&key| (key, key)).collect();
     }
     if workers <= 1 {
-        eprintln!(
-            "[sbxpress molecules] phase=umi_correct mode=serial start groups={total_groups}"
-        );
+        eprintln!("[sbxpress molecules] phase=umi_correct mode=serial start groups={total_groups}");
         let mut roots = HashMap::with_capacity_and_hasher(sorted_keys.len(), Default::default());
         for run in sorted_keys.chunk_by(same_umi_group) {
             correct_run(run, evidence, &mut roots);
@@ -153,7 +151,11 @@ fn correct_umis<S: BuildHasher + Sync>(
         .num_threads(workers)
         .build()
         .expect("creating UMI-correction worker pool");
-    info!(workers, groups = total_groups, "correcting UMI groups in parallel");
+    info!(
+        workers,
+        groups = total_groups,
+        "correcting UMI groups in parallel"
+    );
     eprintln!(
         "[sbxpress molecules] phase=umi_correct start workers={workers} groups={total_groups}"
     );
@@ -166,7 +168,9 @@ fn correct_umis<S: BuildHasher + Sync>(
                 correct_run(run, evidence, &mut roots);
                 let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
                 if done % checkpoint == 0 || done == total_groups {
-                    eprintln!("[sbxpress molecules] phase=umi_correct groups={done}/{total_groups}");
+                    eprintln!(
+                        "[sbxpress molecules] phase=umi_correct groups={done}/{total_groups}"
+                    );
                 }
                 roots
             })
@@ -250,11 +254,17 @@ pub fn build_decisions<S: BuildHasher + Sync>(
 
     let roots = correct_umis(evidence, &sorted_keys, total_groups, workers, tagseq);
     drop(sorted_keys);
-    eprintln!("[sbxpress molecules] phase=umi_correct complete roots={}", roots.len());
+    eprintln!(
+        "[sbxpress molecules] phase=umi_correct complete roots={}",
+        roots.len()
+    );
     // `+=`, not `=`: the sharded path calls build_decisions() once per shard
     // against the same accumulating Metrics.
     metrics.raw_cell_gene_umis += evidence.len() as u64;
-    metrics.umi_nodes_collapsed += roots.iter().filter(|(key, root)| key.umi != root.umi).count() as u64;
+    metrics.umi_nodes_collapsed += roots
+        .iter()
+        .filter(|(key, root)| key.umi != root.umi)
+        .count() as u64;
 
     eprintln!("[sbxpress molecules] phase=molecule_aggregate start");
     let mut molecules = aggregate_molecules(evidence, &roots);

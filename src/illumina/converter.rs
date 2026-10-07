@@ -11,9 +11,7 @@ use crate::gzin::backend_description;
 use crate::overlap::OverlapCfg;
 
 use super::pair::convert_pair;
-use super::types::{
-    failed_paths, metrics_path, shard_allocation, shard_path, Cli, Metrics,
-};
+use super::types::{failed_paths, metrics_path, shard_allocation, shard_path, Cli, Metrics};
 
 pub fn run(cli: Cli) -> Result<()> {
     if cli.r1.len() != cli.r2.len() {

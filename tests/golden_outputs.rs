@@ -36,15 +36,70 @@ struct Case {
 }
 
 const CASES: &[Case] = &[
-    Case { name: "gex_serial", flex_fixture: false, args: &[], legacy_args: Some(&[]) },
-    Case { name: "gex_indexed", flex_fixture: false, args: &["--evidence-workers", "2"], legacy_args: Some(&["--evidence-workers", "2"]) },
-    Case { name: "gex_sharded", flex_fixture: false, args: &["--shards", "3", "--shard-concurrency", "2"], legacy_args: Some(&["--shards", "3", "--shard-concurrency", "2"]) },
-    Case { name: "gex_saturation", flex_fixture: false, args: &["--saturation", "{dir}/sat.tsv.gz", "--saturation-interval", "500"], legacy_args: Some(&["--saturation", "{dir}/sat.tsv.gz", "--saturation-interval", "500"]) },
-    Case { name: "tagseq_shared", flex_fixture: false, args: &["--tagseq", "--no-fractional-collisions"], legacy_args: Some(&["--tagseq"]) },
-    Case { name: "tagseq_fractional", flex_fixture: false, args: &["--tagseq"], legacy_args: None },
-    Case { name: "fractional_single_cell", flex_fixture: false, args: &["--fractional-collisions"], legacy_args: None },
-    Case { name: "flex", flex_fixture: true, args: &["--flex"], legacy_args: Some(&["--flex"]) },
-    Case { name: "flex_sharded", flex_fixture: true, args: &["--flex", "--shards", "2"], legacy_args: Some(&["--flex", "--shards", "2"]) },
+    Case {
+        name: "gex_serial",
+        flex_fixture: false,
+        args: &[],
+        legacy_args: Some(&[]),
+    },
+    Case {
+        name: "gex_indexed",
+        flex_fixture: false,
+        args: &["--evidence-workers", "2"],
+        legacy_args: Some(&["--evidence-workers", "2"]),
+    },
+    Case {
+        name: "gex_sharded",
+        flex_fixture: false,
+        args: &["--shards", "3", "--shard-concurrency", "2"],
+        legacy_args: Some(&["--shards", "3", "--shard-concurrency", "2"]),
+    },
+    Case {
+        name: "gex_saturation",
+        flex_fixture: false,
+        args: &[
+            "--saturation",
+            "{dir}/sat.tsv.gz",
+            "--saturation-interval",
+            "500",
+        ],
+        legacy_args: Some(&[
+            "--saturation",
+            "{dir}/sat.tsv.gz",
+            "--saturation-interval",
+            "500",
+        ]),
+    },
+    Case {
+        name: "tagseq_shared",
+        flex_fixture: false,
+        args: &["--tagseq", "--no-fractional-collisions"],
+        legacy_args: Some(&["--tagseq"]),
+    },
+    Case {
+        name: "tagseq_fractional",
+        flex_fixture: false,
+        args: &["--tagseq"],
+        legacy_args: None,
+    },
+    Case {
+        name: "fractional_single_cell",
+        flex_fixture: false,
+        args: &["--fractional-collisions"],
+        legacy_args: None,
+    },
+    Case {
+        name: "flex",
+        flex_fixture: true,
+        args: &["--flex"],
+        legacy_args: Some(&["--flex"]),
+    },
+    Case {
+        name: "flex_sharded",
+        flex_fixture: true,
+        args: &["--flex", "--shards", "2"],
+        legacy_args: Some(&["--flex", "--shards", "2"]),
+    },
 ];
 
 fn golden_path() -> PathBuf {
@@ -53,15 +108,30 @@ fn golden_path() -> PathBuf {
 
 fn run_case(dir: &Path, fixture: &Path, case: &Case, args: &[&str]) -> Value {
     let out = dir.join(format!("{}.bam", case.name));
-    let args: Vec<String> = args.iter().map(|a| a.replace("{dir}", dir.to_str().unwrap())).collect();
-    let mut all = vec![fixture.to_str().unwrap().to_owned(), "-o".into(), out.to_str().unwrap().to_owned()];
+    let args: Vec<String> = args
+        .iter()
+        .map(|a| a.replace("{dir}", dir.to_str().unwrap()))
+        .collect();
+    let mut all = vec![
+        fixture.to_str().unwrap().to_owned(),
+        "-o".into(),
+        out.to_str().unwrap().to_owned(),
+    ];
     all.extend(args);
     let all: Vec<&str> = all.iter().map(String::as_str).collect();
-    run(&bin("sbx10x-molecules", env!("CARGO_BIN_EXE_sbx10x-molecules")), &all);
+    run(
+        &bin("sbx10x-molecules", env!("CARGO_BIN_EXE_sbx10x-molecules")),
+        &all,
+    );
     let outs = dir.join(format!("{}.outs", case.name));
     run(
         &bin("cr-bam-to-mtx", env!("CARGO_BIN_EXE_cr-bam-to-mtx")),
-        &[out.to_str().unwrap(), "-o", outs.to_str().unwrap(), "--no-gzip"],
+        &[
+            out.to_str().unwrap(),
+            "-o",
+            outs.to_str().unwrap(),
+            "--no-gzip",
+        ],
     );
     let counters = molecule_counters(&PathBuf::from(format!("{}.metrics.json", out.display())));
     let mut result = json!({
@@ -87,8 +157,21 @@ fn molecules_and_matrix_outputs_match_golden() {
     std::fs::create_dir_all(&gex_dir).unwrap();
     std::fs::create_dir_all(&flex_dir).unwrap();
     // Small UMI pool: plenty of collisions for every policy to act on.
-    let gex = write_fixture(&gex_dir, FixtureSpec { umi_pool: 300, ..FixtureSpec::default() });
-    let flex = write_fixture(&flex_dir, FixtureSpec { umi_pool: 300, probe_barcodes: Some(3), ..FixtureSpec::default() });
+    let gex = write_fixture(
+        &gex_dir,
+        FixtureSpec {
+            umi_pool: 300,
+            ..FixtureSpec::default()
+        },
+    );
+    let flex = write_fixture(
+        &flex_dir,
+        FixtureSpec {
+            umi_pool: 300,
+            probe_barcodes: Some(3),
+            ..FixtureSpec::default()
+        },
+    );
 
     let mut results = BTreeMap::new();
     for case in CASES {
@@ -100,20 +183,32 @@ fn molecules_and_matrix_outputs_match_golden() {
         } else {
             case.args
         };
-        let (dir, fixture) = if case.flex_fixture { (&flex_dir, &flex.bam) } else { (&gex_dir, &gex.bam) };
+        let (dir, fixture) = if case.flex_fixture {
+            (&flex_dir, &flex.bam)
+        } else {
+            (&gex_dir, &gex.bam)
+        };
         results.insert(case.name.to_owned(), run_case(dir, fixture, case, args));
     }
 
     if update {
-        assert!(!legacy, "update golden files from the current build, not a legacy one");
+        assert!(
+            !legacy,
+            "update golden files from the current build, not a legacy one"
+        );
         std::fs::create_dir_all(golden_path().parent().unwrap()).unwrap();
-        std::fs::write(golden_path(), serde_json::to_string_pretty(&results).unwrap() + "\n").unwrap();
+        std::fs::write(
+            golden_path(),
+            serde_json::to_string_pretty(&results).unwrap() + "\n",
+        )
+        .unwrap();
         eprintln!("updated {}", golden_path().display());
         return;
     }
-    let golden: BTreeMap<String, Value> =
-        serde_json::from_str(&std::fs::read_to_string(golden_path()).expect("tests/golden/outputs.json"))
-            .unwrap();
+    let golden: BTreeMap<String, Value> = serde_json::from_str(
+        &std::fs::read_to_string(golden_path()).expect("tests/golden/outputs.json"),
+    )
+    .unwrap();
     let mut failures = Vec::new();
     for (name, got) in &results {
         let Some(want) = golden.get(name) else {

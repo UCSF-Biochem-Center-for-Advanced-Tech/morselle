@@ -6,16 +6,16 @@ use crate::pipeline::Orientation;
 
 #[test]
 fn adapter_exact_and_substitution() {
-    let cdna = b"ACGTACGTACGTACGTACGT";  // 20bp, no adapter
+    let cdna = b"ACGTACGTACGTACGTACGT"; // 20bp, no adapter
     let mut s = cdna.to_vec();
     let astart = s.len();
-    s.extend_from_slice(ILLUMINA_3P_ADAPTER);  // exact adapter
+    s.extend_from_slice(ILLUMINA_3P_ADAPTER); // exact adapter
     s.extend_from_slice(b"CACGTCTGAACTCC");
     assert_eq!(find_adapter(&s, 0, 2), Some(astart));
 
     // one substitution in the adapter still found
     let mut s2 = cdna.to_vec();
-    s2.extend_from_slice(b"AGATCGGAAGTGC");  // A->T at pos 10
+    s2.extend_from_slice(b"AGATCGGAAGTGC"); // A->T at pos 10
     assert_eq!(find_adapter(&s2, 0, 2), Some(cdna.len()));
 }
 
@@ -25,7 +25,7 @@ fn adapter_homopolymer_insertion() {
     let cdna = b"ACGTACGTACGTACGTACGT";
     let mut s = cdna.to_vec();
     let astart = s.len();
-    s.extend_from_slice(b"AGATCGGAAAGAGCACACGTCTGAACTCC");  // indel adapter
+    s.extend_from_slice(b"AGATCGGAAAGAGCACACGTCTGAACTCC"); // indel adapter
                                                            // pure-Hamming (no indel handling) would miss this; find_adapter catches it
     assert_eq!(find_adapter(&s, 0, 2), Some(astart));
 }
@@ -35,12 +35,12 @@ fn adapter_partial_at_end() {
     let cdna = b"ACGTACGTACGTACGTACGT";
     let mut s = cdna.to_vec();
     let astart = s.len();
-    s.extend_from_slice(&ILLUMINA_3P_ADAPTER[..11]);  // 11bp partial (>= MIN_PARTIAL)
+    s.extend_from_slice(&ILLUMINA_3P_ADAPTER[..11]); // 11bp partial (>= MIN_PARTIAL)
     assert_eq!(find_adapter(&s, 0, 2), Some(astart));
 
     // a 7bp exact partial (the dominant real residual) IS called
     let mut s7 = cdna.to_vec();
-    s7.extend_from_slice(&ILLUMINA_3P_ADAPTER[..7]);  // "AGATCGG"
+    s7.extend_from_slice(&ILLUMINA_3P_ADAPTER[..7]); // "AGATCGG"
     assert_eq!(find_adapter(&s7, 0, 2), Some(cdna.len()));
 
     // a too-short tail (< MIN_PARTIAL) is not called
@@ -105,16 +105,16 @@ pub(crate) fn ocfg() -> OrientCfg {
 /// Canonical 3' read with a real 3' read-through adapter after the cDNA.
 pub(crate) fn synthetic(cb: &[u8], umi: &[u8], cdna: &[u8], dt: usize) -> Vec<u8> {
     let mut v = Vec::new();
-    v.extend_from_slice(b"AACAAT");  // leader
+    v.extend_from_slice(b"AACAAT"); // leader
     v.extend_from_slice(P5);
-    v.extend_from_slice(b"ACGTACGTAC");  // i5
+    v.extend_from_slice(b"ACGTACGTAC"); // i5
     v.extend_from_slice(R1_PRIMER);
     v.extend_from_slice(cb);
     v.extend_from_slice(umi);
-    v.extend(std::iter::repeat(b'T').take(dt));  // dT primer
+    v.extend(std::iter::repeat(b'T').take(dt)); // dT primer
     v.extend_from_slice(cdna);
     v.extend_from_slice(ILLUMINA_3P_ADAPTER);
-    v.extend_from_slice(b"CACGTCTGAACTCCAGTCACTGCATGCATG");  // rest of rc(R2)+i7
+    v.extend_from_slice(b"CACGTCTGAACTCCAGTCACTGCATGCATG"); // rest of rc(R2)+i7
     v
 }
 
@@ -149,7 +149,7 @@ fn leaves_the_tso_alone_by_default() {
 fn trims_a_partial_tso_running_off_the_read_end() {
     let cdna = b"GCTAGCTAGCATCGATCGTAGCTAGCATCGATCGATGCTAGCTAGCATCG";
     let mut seq = canonical(cdna, false, false);
-    seq.extend_from_slice(&TSO_RC[..18]);  // read stopped mid-TSO
+    seq.extend_from_slice(&TSO_RC[..18]); // read stopped mid-TSO
     let e = extract(&seq, Some((0, 28)), Some(28), &tso_cfg(), false);
     assert!(e.tso_trimmed);
     let (s, t) = e.r2.unwrap();
@@ -214,7 +214,7 @@ fn a_fragment_that_is_only_tso_yields_no_cdna() {
 fn extracts_r1_and_trimmed_r2() {
     let cb = b"AAACCCAAGAAACCCA";
     let umi = b"ACGTACGTACGT";
-    let cdna = b"GGCATTACTGGCATTACTGGCATTACTGGCATTACTG";  // 37 bp, no long T-run
+    let cdna = b"GGCATTACTGGCATTACTGGCATTACTGGCATTACTG"; // 37 bp, no long T-run
     let seq = synthetic(cb, umi, cdna, 30);
     let qual = vec![b'I'; seq.len()];
 
@@ -281,7 +281,7 @@ fn reversed_read_extracts_same() {
 fn short_cdna_dropped() {
     let cb = b"AAACCCAAGAAACCCA";
     let umi = b"ACGTACGTACGT";
-    let cdna = b"GGCATTAC";  // 8 bp < min_cdna_len
+    let cdna = b"GGCATTAC"; // 8 bp < min_cdna_len
     let seq = synthetic(cb, umi, cdna, 30);
     let qual = vec![b'I'; seq.len()];
 

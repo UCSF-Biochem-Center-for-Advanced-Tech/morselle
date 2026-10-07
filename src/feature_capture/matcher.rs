@@ -1,6 +1,6 @@
-use std::collections::HashMap;
-use crate::hamming_index::HammingIndex;
 use super::types::Feature;
+use crate::hamming_index::HammingIndex;
+use std::collections::HashMap;
 
 /// All features sharing one exact anchor sequence + capture-barcode length
 /// (the unit a single `HammingIndex` can serve, since Hamming needs a fixed
@@ -56,11 +56,13 @@ impl FeatureMatcher {
                     capture_index: HammingIndex::new(),
                 });
                 let id = groups.len() - 1;
-                let entry = anchor_by_len.entry(f.anchor.len()).or_insert_with(|| AnchorIndexSet {
-                    exact: HammingIndex::new(),
-                    del: HammingIndex::new(),
-                    ins: HammingIndex::new(),
-                });
+                let entry = anchor_by_len
+                    .entry(f.anchor.len())
+                    .or_insert_with(|| AnchorIndexSet {
+                        exact: HammingIndex::new(),
+                        del: HammingIndex::new(),
+                        ins: HammingIndex::new(),
+                    });
                 entry.exact.insert(&f.anchor, id, anchor_max_mm);
                 for v in crate::probe_set::single_deletion_variants(&f.anchor) {
                     entry.del.insert(&v, id, 0);
@@ -112,7 +114,9 @@ impl FeatureMatcher {
             }
             for offset in 0..=(hay_end - anchor_len) {
                 if let Some(group_id) = idx_set.exact.get(&read[offset..offset + anchor_len]) {
-                    if let Some(feature_idx) = self.match_capture(group_id, read, offset + anchor_len) {
+                    if let Some(feature_idx) =
+                        self.match_capture(group_id, read, offset + anchor_len)
+                    {
                         return Some(feature_idx);
                     }
                 }

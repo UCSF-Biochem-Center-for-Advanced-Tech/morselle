@@ -10,7 +10,6 @@ use sbx10x::molecules::{
 };
 use tracing::info;
 
-
 #[derive(Debug, Parser)]
 #[command(
     name = "sbx10x-molecules",
@@ -184,15 +183,29 @@ fn main() -> Result<()> {
         if cli.saturation.is_some() {
             bail!("--saturation is not yet supported together with --shards > 1");
         }
-        info!(shards = cli.shards, fractional = opts.fractional, "running sharded (collate + quant)");
-        run_sharded(&cli.bam, &cli.output, cli.shards, cli.shard_concurrency, &opts, &mut metrics)?;
+        info!(
+            shards = cli.shards,
+            fractional = opts.fractional,
+            "running sharded (collate + quant)"
+        );
+        run_sharded(
+            &cli.bam,
+            &cli.output,
+            cli.shards,
+            cli.shard_concurrency,
+            &opts,
+            &mut metrics,
+        )?;
         metrics.elapsed_secs = started.elapsed().as_secs_f64();
         return write_metrics(&cli, &metrics);
     }
     // Validated above: cli.shards <= 1 requires exactly one input file.
     let single_bam = &cli.bam[0];
     let (evidence, genes, gene_ids, _samples, sample_ids) = if cli.evidence_workers > 1 {
-        info!(workers = cli.evidence_workers, "collecting evidence from indexed BAM regions");
+        info!(
+            workers = cli.evidence_workers,
+            "collecting evidence from indexed BAM regions"
+        );
         collect_evidence_indexed(
             single_bam,
             cli.evidence_workers,
@@ -218,12 +231,26 @@ fn main() -> Result<()> {
     );
     drop(evidence);
     if let (Some(curve), Some(path)) = (saturation, cli.saturation.as_deref()) {
-        eprintln!("[sbxpress molecules] phase=saturation_write start output={}", path.display());
+        eprintln!(
+            "[sbxpress molecules] phase=saturation_write start output={}",
+            path.display()
+        );
         metrics.saturation = Some(curve.write(path)?);
         eprintln!("[sbxpress molecules] phase=saturation_write complete");
     }
-    let tables = KeyTables { genes: &genes, gene_ids: &gene_ids, sample_ids: &sample_ids };
-    write_output(single_bam, &cli.output, &opts, &decisions, &tables, &mut metrics)?;
+    let tables = KeyTables {
+        genes: &genes,
+        gene_ids: &gene_ids,
+        sample_ids: &sample_ids,
+    };
+    write_output(
+        single_bam,
+        &cli.output,
+        &opts,
+        &decisions,
+        &tables,
+        &mut metrics,
+    )?;
     metrics.elapsed_secs = started.elapsed().as_secs_f64();
     write_metrics(&cli, &metrics)
 }

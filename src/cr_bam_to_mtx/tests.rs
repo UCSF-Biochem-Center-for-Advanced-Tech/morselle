@@ -1,7 +1,7 @@
-use std::fs;
-use std::path::{Path, PathBuf};
 use hdf5::types::VarLenAscii;
 use rust_htslib::bam::{self, record::Aux};
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use super::io_helpers::read_cell_barcodes;
 use super::matrix_ops::{read_matrix, write_h5, write_matrix};
@@ -263,12 +263,16 @@ fn reads_fractional_zw_tags_and_emits_real_matrix_market_and_f32_h5() {
     let mut writer = bam::Writer::from_path(&path, &header, bam::Format::Bam).unwrap();
     let cigar = bam::record::CigarString(vec![bam::record::Cigar::Match(10)]);
 
-    for (i, (gene, weight)) in [("GENE1", 0.6_f32), ("GENE2", 0.4_f32)].into_iter().enumerate() {
+    for (i, (gene, weight)) in [("GENE1", 0.6_f32), ("GENE2", 0.4_f32)]
+        .into_iter()
+        .enumerate()
+    {
         let mut r = bam::Record::new();
         r.set(b"read", Some(&cigar), b"ACGTACGTAC", &[30; 10]);
         r.set_tid(0);
         r.set_pos(i as i64);
-        r.push_aux(b"CB", Aux::String("AAAAAAAAAAAAAAAA-1")).unwrap();
+        r.push_aux(b"CB", Aux::String("AAAAAAAAAAAAAAAA-1"))
+            .unwrap();
         r.push_aux(b"UB", Aux::String("UMI0000AAAA")).unwrap();
         r.push_aux(b"GX", Aux::String(gene)).unwrap();
         r.push_aux(b"ZG", Aux::String("fractional")).unwrap();
@@ -300,4 +304,3 @@ fn reads_fractional_zw_tags_and_emits_real_matrix_market_and_f32_h5() {
     assert!((data_vals[0] - 0.6).abs() < 1e-4);
     assert!((data_vals[1] - 0.4).abs() < 1e-4);
 }
-

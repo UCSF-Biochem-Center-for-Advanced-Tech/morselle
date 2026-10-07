@@ -91,7 +91,7 @@ fn converts_multiple_pairs_to_numbered_shards() {
 /// A long-R1 pair that merges: R1 100 bp, R2 150 bp reading past the CB into
 /// the R1 primer, over an 82 bp cDNA.
 fn write_overlapping_fixture(dir: &Path) -> (PathBuf, PathBuf, Vec<u8>) {
-    const CB: &[u8] = b"AAACCCAAGAAACACT";  // on the whitelist fixture
+    const CB: &[u8] = b"AAACCCAAGAAACACT"; // on the whitelist fixture
     const UMI: &[u8] = b"ACGTACGTACGT";
     let mut core: Vec<u8> =
         b"CTGATCGATCGTAGCTAGCATCGATCGTAGCTAGCATCGATCGATGCTAGCTAGCATCGATCGTAGCTAGCATCGATCGATCC"
@@ -208,8 +208,7 @@ fn failed_reads_are_emitted_verbatim() {
     cli.failed_output = Some(failed);
     run(cli).unwrap();
 
-    let source =
-        std::fs::read_to_string(root.join("tests/fixtures/illumina_R1.fastq")).unwrap();
+    let source = std::fs::read_to_string(root.join("tests/fixtures/illumina_R1.fastq")).unwrap();
     let rejected: Vec<&str> = source
         .lines()
         .skip_while(|l| !l.starts_with("@read_rejected"))
@@ -251,7 +250,7 @@ fn both_paths_emit_the_same_orientation() {
     cli.r1 = vec![r1];
     cli.r2 = vec![r2];
     cli.overlap = true;
-    cli.overlap_min_overlap = 200;  // longer than either read: cannot merge
+    cli.overlap_min_overlap = 200; // longer than either read: cannot merge
     run(cli).unwrap();
 
     let merged_seq = read_gz(&merged_out).lines().nth(1).unwrap().to_string();
@@ -345,7 +344,10 @@ fn trim_r2_polya_trims_readthrough_when_cdna_survives_min_len() {
     cli.r2 = vec![r2.clone()];
     run(cli).unwrap();
     let plain_seq = read_gz(&plain_out).lines().nth(1).unwrap().to_string();
-    assert!(plain_seq.len() > cdna.len(), "untrimmed R2 carries the tail");
+    assert!(
+        plain_seq.len() > cdna.len(),
+        "untrimmed R2 carries the tail"
+    );
 
     // With the flag: R2 is cut back to just the cDNA before the poly-A run.
     let trimmed_out = temp.path().join("trimmed.fastq.gz");

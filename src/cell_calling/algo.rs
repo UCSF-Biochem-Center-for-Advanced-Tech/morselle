@@ -1,26 +1,23 @@
+use anyhow::{bail, Result};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::io::Write;
 use std::time::Instant;
-use anyhow::{bail, Result};
-
 
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use statrs::function::gamma::ln_gamma;
 
-use crate::cr_bam_to_mtx::{write_h5, write_matrix};
 use super::h5::{filtered_matrix, read_raw, resolve_h5, totals};
 use super::types::round_count;
 use super::types::{
     Cli, Metrics, RawMatrix, MIN_RECOVERED_CELLS, ORDMAG_BOOTSTRAPS, ORDMAG_QUANTILE,
 };
+use crate::cr_bam_to_mtx::{write_h5, write_matrix};
 
 use super::helpers::{
     bootstrap_counts, estimate_recovered, resolve_tagseq_barcodes, within_ordmag,
 };
-
-
 
 fn ordmag(
     totals: &[u64],

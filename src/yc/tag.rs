@@ -1,7 +1,7 @@
-use std::fmt;
 use super::types::{
     code_bases, complement_code, parse_u64, BaseType, DuplexOp, YcError, YcTag, DELIM_R1, DELIM_R2,
 };
+use std::fmt;
 
 impl YcTag {
     /// Parse a tag from its wire form.

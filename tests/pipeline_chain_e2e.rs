@@ -26,7 +26,10 @@ fn cells() -> std::path::PathBuf {
     bin("sbxpress-cells", env!("CARGO_BIN_EXE_sbxpress-cells"))
 }
 fn probe_demux() -> std::path::PathBuf {
-    bin("sbxpress-probe-demux", env!("CARGO_BIN_EXE_sbxpress-probe-demux"))
+    bin(
+        "sbxpress-probe-demux",
+        env!("CARGO_BIN_EXE_sbxpress-probe-demux"),
+    )
 }
 
 fn s(record: &bam::Record, tag: &[u8]) -> Option<String> {
@@ -60,7 +63,11 @@ fn check_molecule_bam(input: &Path, output: &Path, metrics: &BTreeMap<String, u6
         assert_eq!(s(a, b"UR"), s(b, b"UR"), "UR is the raw UMI");
         if let Some(zg) = s(a, b"ZG") {
             if xf(b).is_some() {
-                assert_eq!(s(b, b"GX"), Some(zg), "multi-gene GX resolved to the ZG gene");
+                assert_eq!(
+                    s(b, b"GX"),
+                    Some(zg),
+                    "multi-gene GX resolved to the ZG gene"
+                );
             }
         }
     }
@@ -69,11 +76,18 @@ fn check_molecule_bam(input: &Path, output: &Path, metrics: &BTreeMap<String, u6
     assert_eq!(reps.len() as u64, metrics["representatives_tagged"]);
     for r in &reps {
         assert!(s(r, b"CB").is_some() && s(r, b"UB").is_some());
-        assert!(!s(r, b"GX").unwrap().contains(';'), "counted record has one gene");
+        assert!(
+            !s(r, b"GX").unwrap().contains(';'),
+            "counted record has one gene"
+        );
         assert!(matches!(xw(r), Some(b'U' | b'W' | b'S' | b'F')));
     }
     for r in &after {
-        assert_eq!(r.aux(b"ZW").is_ok(), xw(r) == Some(b'F'), "ZW only on fractional molecules");
+        assert_eq!(
+            r.aux(b"ZW").is_ok(),
+            xw(r) == Some(b'F'),
+            "ZW only on fractional molecules"
+        );
     }
 }
 
@@ -94,16 +108,32 @@ fn check_filtered(raw: &BTreeMap<(String, String), f64>, filtered_dir: &Path) {
     assert!(!called.is_empty(), "cells called something");
     for ((bc, feature), value) in &filtered {
         let raw_value = raw[&(bc.clone(), feature.clone())];
-        assert!((value - raw_value).abs() < 1e-4, "{bc}/{feature}: {value} vs raw {raw_value}");
+        assert!(
+            (value - raw_value).abs() < 1e-4,
+            "{bc}/{feature}: {value} vs raw {raw_value}"
+        );
     }
     for ((bc, feature), value) in raw {
         if called.contains(bc) {
-            assert!(filtered.contains_key(&(bc.clone(), feature.clone())), "lost {bc}/{feature}={value}");
+            assert!(
+                filtered.contains_key(&(bc.clone(), feature.clone())),
+                "lost {bc}/{feature}={value}"
+            );
         }
     }
 }
 
-fn molecules_matrix(dir: &Path, input: &Path, name: &str, args: &[&str]) -> (BTreeMap<String, u64>, BTreeMap<(String, String), f64>, bool, std::path::PathBuf) {
+fn molecules_matrix(
+    dir: &Path,
+    input: &Path,
+    name: &str,
+    args: &[&str],
+) -> (
+    BTreeMap<String, u64>,
+    BTreeMap<(String, String), f64>,
+    bool,
+    std::path::PathBuf,
+) {
     let out = dir.join(format!("{name}.molecules.bam"));
     let mut a = vec![input.to_str().unwrap(), "-o", out.to_str().unwrap()];
     a.extend_from_slice(args);
@@ -111,7 +141,15 @@ fn molecules_matrix(dir: &Path, input: &Path, name: &str, args: &[&str]) -> (BTr
     let metrics = molecule_counters(&dir.join(format!("{name}.molecules.bam.metrics.json")));
     check_molecule_bam(input, &out, &metrics);
     let outs = dir.join(format!("{name}.outs"));
-    run(&matrix(), &[out.to_str().unwrap(), "-o", outs.to_str().unwrap(), "--no-gzip"]);
+    run(
+        &matrix(),
+        &[
+            out.to_str().unwrap(),
+            "-o",
+            outs.to_str().unwrap(),
+            "--no-gzip",
+        ],
+    );
     let (counts, is_real) = read_mex(&outs.join("raw_feature_bc_matrix"));
     (metrics, counts, is_real, outs)
 }
@@ -123,19 +161,37 @@ fn gex_chain_counts_corrected_molecules_and_calls_cells() {
     let (metrics, counts, is_real, outs) = molecules_matrix(dir.path(), &fx.bam, "gex", &[]);
     assert!(!is_real);
     check_matrix_total(&counts, &metrics);
-    assert!(metrics["umi_nodes_collapsed"] > 0 && metrics["collision_groups"] > 0, "fixture exercises correction and collisions");
+    assert!(
+        metrics["umi_nodes_collapsed"] > 0 && metrics["collision_groups"] > 0,
+        "fixture exercises correction and collisions"
+    );
 
     // UMI correction is visible as UB != UR on corrected reads.
     let out = read_bam(&dir.path().join("gex.molecules.bam"));
     let corrected: BTreeSet<(String, String, String)> = out
         .iter()
         .filter(|r| xf(r).is_some() && s(r, b"UB") != s(r, b"UR"))
-        .map(|r| (s(r, b"CB").unwrap(), s(r, b"GX").unwrap(), s(r, b"UR").unwrap()))
+        .map(|r| {
+            (
+                s(r, b"CB").unwrap(),
+                s(r, b"GX").unwrap(),
+                s(r, b"UR").unwrap(),
+            )
+        })
         .collect();
     assert_eq!(corrected.len() as u64, metrics["umi_nodes_collapsed"]);
 
     let raw_h5 = outs.join("raw_feature_bc_matrix.h5");
-    run(&cells(), &[raw_h5.to_str().unwrap(), "-o", outs.to_str().unwrap(), "--force-cells", "12"]);
+    run(
+        &cells(),
+        &[
+            raw_h5.to_str().unwrap(),
+            "-o",
+            outs.to_str().unwrap(),
+            "--force-cells",
+            "12",
+        ],
+    );
     let filtered = outs.join("filtered_feature_bc_matrix");
     check_filtered(&counts, &filtered);
 }
@@ -143,20 +199,37 @@ fn gex_chain_counts_corrected_molecules_and_calls_cells() {
 #[test]
 fn tagseq_fractional_chain_keeps_fractions_through_cells() {
     let dir = tempfile::tempdir().unwrap();
-    let fx = write_fixture(dir.path(), FixtureSpec { umi_pool: 150, ..FixtureSpec::default() });
-    let (metrics, counts, is_real, outs) = molecules_matrix(dir.path(), &fx.bam, "tagseq", &["--tagseq"]);
+    let fx = write_fixture(
+        dir.path(),
+        FixtureSpec {
+            umi_pool: 150,
+            ..FixtureSpec::default()
+        },
+    );
+    let (metrics, counts, is_real, outs) =
+        molecules_matrix(dir.path(), &fx.bam, "tagseq", &["--tagseq"]);
     assert!(is_real, "fractional collisions give a real-valued matrix");
     assert!(metrics["collision_molecules_fractional"] > 0);
     check_matrix_total(&counts, &metrics);
 
     let out = read_bam(&dir.path().join("tagseq.molecules.bam"));
     // --tagseq never corrects UMIs.
-    assert!(out.iter().filter(|r| xf(r).is_some()).all(|r| s(r, b"UB") == s(r, b"UR")));
+    assert!(out
+        .iter()
+        .filter(|r| xf(r).is_some())
+        .all(|r| s(r, b"UB") == s(r, b"UR")));
     // Fractional weights of one (cell, UMI) collision sum to 1.
     let mut groups: BTreeMap<(String, String), f64> = BTreeMap::new();
-    for r in out.iter().filter(|r| xf(r) == Some(25) && xw(r) == Some(b'F')) {
-        let Ok(Aux::Float(w)) = r.aux(b"ZW") else { panic!("F without ZW") };
-        *groups.entry((s(r, b"CB").unwrap(), s(r, b"UB").unwrap())).or_default() += w as f64;
+    for r in out
+        .iter()
+        .filter(|r| xf(r) == Some(25) && xw(r) == Some(b'F'))
+    {
+        let Ok(Aux::Float(w)) = r.aux(b"ZW") else {
+            panic!("F without ZW")
+        };
+        *groups
+            .entry((s(r, b"CB").unwrap(), s(r, b"UB").unwrap()))
+            .or_default() += w as f64;
     }
     assert!(!groups.is_empty());
     for (key, sum) in &groups {
@@ -166,19 +239,41 @@ fn tagseq_fractional_chain_keeps_fractions_through_cells() {
     let known = dir.path().join("known_cells.txt");
     std::fs::write(&known, fx.cells[..12].join("\n") + "\n").unwrap();
     let raw_h5 = outs.join("raw_feature_bc_matrix.h5");
-    run(&cells(), &[raw_h5.to_str().unwrap(), "-o", outs.to_str().unwrap(), "--tagseq-barcodes", known.to_str().unwrap()]);
+    run(
+        &cells(),
+        &[
+            raw_h5.to_str().unwrap(),
+            "-o",
+            outs.to_str().unwrap(),
+            "--tagseq-barcodes",
+            known.to_str().unwrap(),
+        ],
+    );
     let filtered = outs.join("filtered_feature_bc_matrix");
     check_filtered(&counts, &filtered);
     let (f, _) = read_mex(&filtered);
-    assert!(f.values().any(|v| v.fract() != 0.0), "fractions survive cell calling");
+    assert!(
+        f.values().any(|v| v.fract() != 0.0),
+        "fractions survive cell calling"
+    );
 }
 
 #[test]
 fn tagseq_shared_chain_counts_every_claimant() {
     let dir = tempfile::tempdir().unwrap();
-    let fx = write_fixture(dir.path(), FixtureSpec { umi_pool: 150, ..FixtureSpec::default() });
-    let (metrics, counts, is_real, _) =
-        molecules_matrix(dir.path(), &fx.bam, "shared", &["--tagseq", "--no-fractional-collisions"]);
+    let fx = write_fixture(
+        dir.path(),
+        FixtureSpec {
+            umi_pool: 150,
+            ..FixtureSpec::default()
+        },
+    );
+    let (metrics, counts, is_real, _) = molecules_matrix(
+        dir.path(),
+        &fx.bam,
+        "shared",
+        &["--tagseq", "--no-fractional-collisions"],
+    );
     assert!(!is_real);
     assert!(metrics["collision_molecules_shared"] > 0);
     check_matrix_total(&counts, &metrics);
@@ -187,38 +282,86 @@ fn tagseq_shared_chain_counts_every_claimant() {
 #[test]
 fn flex_chain_demultiplexes_samples_by_probe_barcode() {
     let dir = tempfile::tempdir().unwrap();
-    let fx = write_fixture(dir.path(), FixtureSpec { probe_barcodes: Some(3), ..FixtureSpec::default() });
+    let fx = write_fixture(
+        dir.path(),
+        FixtureSpec {
+            probe_barcodes: Some(3),
+            ..FixtureSpec::default()
+        },
+    );
     let (metrics, _, _, _) = molecules_matrix(dir.path(), &fx.bam, "flex", &["--flex"]);
     let molecules_bam = dir.path().join("flex.molecules.bam");
-    let reps: Vec<bam::Record> = read_bam(&molecules_bam).into_iter().filter(|r| xf(r) == Some(25)).collect();
-    assert!(reps.iter().all(|r| s(r, b"PB").is_some()), "--flex counts only PB-tagged molecules");
+    let reps: Vec<bam::Record> = read_bam(&molecules_bam)
+        .into_iter()
+        .filter(|r| xf(r) == Some(25))
+        .collect();
+    assert!(
+        reps.iter().all(|r| s(r, b"PB").is_some()),
+        "--flex counts only PB-tagged molecules"
+    );
     assert_eq!(reps.len() as u64, metrics["molecules_counted"]);
 
     let sheet = dir.path().join("samples.csv");
-    std::fs::write(&sheet, "sample_id,probe_barcode_ids\nS1,BC001\nS2,BC002|BC003\n").unwrap();
+    std::fs::write(
+        &sheet,
+        "sample_id,probe_barcode_ids\nS1,BC001\nS2,BC002|BC003\n",
+    )
+    .unwrap();
     let demux = dir.path().join("demux");
-    run(&probe_demux(), &[
-        molecules_bam.to_str().unwrap(), "--probe-sample-sheet", sheet.to_str().unwrap(),
-        "-o", demux.to_str().unwrap(), "--min-molecules", "1",
-    ]);
+    run(
+        &probe_demux(),
+        &[
+            molecules_bam.to_str().unwrap(),
+            "--probe-sample-sheet",
+            sheet.to_str().unwrap(),
+            "-o",
+            demux.to_str().unwrap(),
+            "--min-molecules",
+            "1",
+        ],
+    );
     for sample in ["S1", "S2"] {
         let barcodes = demux.join(format!("{sample}.barcodes.txt"));
         let probes = demux.join(format!("{sample}.probe_barcodes.txt"));
         let outs = dir.path().join(format!("{sample}.outs"));
-        run(&matrix(), &[
-            molecules_bam.to_str().unwrap(), "-o", outs.to_str().unwrap(), "--no-gzip",
-            "--cell-barcodes", barcodes.to_str().unwrap(), "--probe-barcodes", probes.to_str().unwrap(),
-            "--skip-unlisted-barcodes",
-        ]);
+        run(
+            &matrix(),
+            &[
+                molecules_bam.to_str().unwrap(),
+                "-o",
+                outs.to_str().unwrap(),
+                "--no-gzip",
+                "--cell-barcodes",
+                barcodes.to_str().unwrap(),
+                "--probe-barcodes",
+                probes.to_str().unwrap(),
+                "--skip-unlisted-barcodes",
+            ],
+        );
         let (counts, _) = read_mex(&outs.join("raw_feature_bc_matrix"));
         // Independent recount straight from the molecules BAM.
-        let listed: BTreeSet<String> = std::fs::read_to_string(&barcodes).unwrap().lines()
-            .map(|l| l.split('-').next().unwrap().to_owned()).collect();
-        let pbs: BTreeSet<String> = std::fs::read_to_string(&probes).unwrap().lines().map(str::to_owned).collect();
-        let expected = reps.iter().filter(|r| {
-            pbs.contains(&s(r, b"PB").unwrap()) && listed.contains(s(r, b"CB").unwrap().split('-').next().unwrap())
-        }).count();
+        let listed: BTreeSet<String> = std::fs::read_to_string(&barcodes)
+            .unwrap()
+            .lines()
+            .map(|l| l.split('-').next().unwrap().to_owned())
+            .collect();
+        let pbs: BTreeSet<String> = std::fs::read_to_string(&probes)
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        let expected = reps
+            .iter()
+            .filter(|r| {
+                pbs.contains(&s(r, b"PB").unwrap())
+                    && listed.contains(s(r, b"CB").unwrap().split('-').next().unwrap())
+            })
+            .count();
         assert!(expected > 0, "{sample} has molecules");
-        assert_eq!(counts.values().sum::<f64>() as usize, expected, "{sample} matrix total");
+        assert_eq!(
+            counts.values().sum::<f64>() as usize,
+            expected,
+            "{sample} matrix total"
+        );
     }
 }

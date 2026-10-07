@@ -20,16 +20,28 @@ fn every_script_parses() {
         if path.extension().is_some_and(|e| e == "sh") {
             let out = Command::new("bash").arg("-n").arg(&path).output().unwrap();
             if !out.status.success() {
-                failures.push(format!("{}: {}", path.display(), String::from_utf8_lossy(&out.stderr)));
+                failures.push(format!(
+                    "{}: {}",
+                    path.display(),
+                    String::from_utf8_lossy(&out.stderr)
+                ));
             }
         }
     }
-    assert!(failures.is_empty(), "bash -n failed:\n{}", failures.join("\n"));
+    assert!(
+        failures.is_empty(),
+        "bash -n failed:\n{}",
+        failures.join("\n")
+    );
 }
 
 #[test]
 fn pipeline_scripts_pass_shellcheck_when_available() {
-    if Command::new("shellcheck").arg("--version").output().is_err() {
+    if Command::new("shellcheck")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
         eprintln!("shellcheck not installed; skipping");
         return;
     }
@@ -40,7 +52,11 @@ fn pipeline_scripts_pass_shellcheck_when_available() {
         .arg(repo().join("scripts/run_flex_multi.sh"))
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stdout));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
 }
 
 #[test]

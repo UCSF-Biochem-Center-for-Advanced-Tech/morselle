@@ -1,7 +1,7 @@
-use std::collections::HashMap;
-use rust_htslib::bam::{self, record::Aux};
 use super::types::Evidence;
 use crate::bam_helpers::for_each_aux;
+use rust_htslib::bam::{self, record::Aux};
+use std::collections::HashMap;
 
 /// Stable FNV-1a followed by SplitMix64.
 pub fn read_hash(name: &[u8]) -> u32 {
@@ -25,7 +25,8 @@ pub fn aux_string(record: &bam::Record, tag: &[u8; 2]) -> Option<String> {
 
 pub fn choose_gene(record: &bam::Record) -> Option<(String, String)> {
     let tags = MoleculeTags::read(record);
-    tags.gene().map(|(id, name)| (id.to_owned(), name.to_owned()))
+    tags.gene()
+        .map(|(id, name)| (id.to_owned(), name.to_owned()))
 }
 
 pub fn aligned_bases(record: &bam::Record) -> u32 {
@@ -199,8 +200,10 @@ pub fn choose_gene_parts<'a>(
     if zg.contains(';') || zg.is_empty() {
         return None;
     }
-    let index = gx.split(';').filter(|v| !v.is_empty()).position(|gene| gene == zg)?;
+    let index = gx
+        .split(';')
+        .filter(|v| !v.is_empty())
+        .position(|gene| gene == zg)?;
     let name = gn.split(';').nth(index).unwrap_or(zg);
     Some((zg, name))
 }
-

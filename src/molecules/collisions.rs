@@ -29,11 +29,19 @@ pub(crate) struct Resolved {
 impl Resolved {
     /// Placeholder before `resolve_collisions` runs; every molecule is
     /// overwritten there (each root is in exactly one collision group).
-    pub(crate) const UNRESOLVED: Self = Self { outcome: Outcome::Lost, degree: 0, weight: 0.0 };
+    pub(crate) const UNRESOLVED: Self = Self {
+        outcome: Outcome::Lost,
+        degree: 0,
+        weight: 0.0,
+    };
 
     fn new(outcome: Outcome, degree: u32) -> Self {
         let weight = if outcome.is_counted() { 1.0 } else { 0.0 };
-        Self { outcome, degree, weight }
+        Self {
+            outcome,
+            degree,
+            weight,
+        }
     }
 }
 
@@ -109,7 +117,11 @@ fn resolve_winner_take_all(
     out: &mut Vec<(RawKey, Resolved)>,
 ) {
     let degree = claimants.len() as u32;
-    let best = claimants.iter().map(|root| molecules[root].support).max().unwrap();
+    let best = claimants
+        .iter()
+        .map(|root| molecules[root].support)
+        .max()
+        .unwrap();
     let winners: Vec<RawKey> = claimants
         .iter()
         .copied()
@@ -148,7 +160,14 @@ fn resolve_fractional(
         } else {
             1.0 / degree as f32
         };
-        out.push((root, Resolved { outcome: Outcome::Fractional, degree, weight }));
+        out.push((
+            root,
+            Resolved {
+                outcome: Outcome::Fractional,
+                degree,
+                weight,
+            },
+        ));
         metrics.collision_molecules_fractional += 1;
     }
     // The group's weights sum to 1.0: it is one molecule split across genes.

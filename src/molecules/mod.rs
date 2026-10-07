@@ -1,6 +1,6 @@
+mod aux_write;
 #[cfg(test)]
 mod collision_tests;
-mod aux_write;
 pub mod collisions;
 pub mod dedup;
 pub mod evidence;

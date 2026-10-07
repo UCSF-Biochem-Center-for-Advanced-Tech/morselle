@@ -1,12 +1,12 @@
 // FxHash: these maps hold billions of fixed-size integer keys at real
 // scale; SipHash's DoS resistance buys nothing here and cost ~6% of runtime.
+use super::types::{Dna, SaturationMetrics};
+use anyhow::{Context, Result};
+use flate2::{write::GzEncoder, Compression};
 use rustc_hash::FxHashMap as HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
-use anyhow::{Context, Result};
-use flate2::{write::GzEncoder, Compression};
-use super::types::{Dna, SaturationMetrics};
 
 #[derive(Clone)]
 pub struct CellSaturation {

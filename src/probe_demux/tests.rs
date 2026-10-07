@@ -1,9 +1,9 @@
-use std::collections::BTreeMap;
 use rust_htslib::bam::{self, record::Aux};
+use std::collections::BTreeMap;
 
-use crate::probe_sample_sheet::{ProbeSample, ProbeSampleSheet};
 use super::engine::*;
 use super::types::*;
+use crate::probe_sample_sheet::{ProbeSample, ProbeSampleSheet};
 
 fn sheet() -> ProbeSampleSheet {
     ProbeSampleSheet {
@@ -92,7 +92,7 @@ fn a_little_bleed_from_a_second_sample_does_not_trigger_high_occupancy() {
 
 #[test]
 fn molecules_on_an_undeclared_probe_barcode_count_against_purity_but_not_toward_any_sample() {
-    let t = tally(&[("CB1", "D-A01", 20), ("CB1", "A-F04", 15)]);  // A-F04 not declared by anyone
+    let t = tally(&[("CB1", "D-A01", 20), ("CB1", "A-F04", 15)]); // A-F04 not declared by anyone
     let out = assign(&sheet(), &t, &DemuxCfg { min_molecules: 10 });
     assert_eq!(out[0].status, Status::Assigned);
     // molecules is this row's own sample sum (20), not the GEM total
@@ -179,7 +179,7 @@ fn gem_overlap_reports_only_pairs_with_shared_cells() {
     assert_eq!(r.barcode1_gems, 2);
     assert_eq!(r.barcode2_gems, 1);
     assert_eq!(r.common_gems, 1);
-    assert!((r.overlap - 1.0).abs() < 1e-9);  // common / min(2,1) = 1/1
+    assert!((r.overlap - 1.0).abs() < 1e-9); // common / min(2,1) = 1/1
 }
 
 #[test]
@@ -220,10 +220,10 @@ fn bam_tally_gates_on_xf_bit_8_and_skips_missing_or_empty_pb() {
         r.push_aux(b"xf", Aux::I32(xf)).unwrap();
         writer.write(&r).unwrap();
     };
-    push(Some("CB1-1"), Some("D-A01"), 25);  // representative (bit 8 set, 25 = 0b11001)
-    push(Some("CB1-1"), Some("D-A01"), 17);  // NOT representative (17 = 0b10001, no bit 8)
-    push(Some("CB1-1"), Some(""), 25);  // representative but empty PB -> skipped
-    push(Some("CB2-1"), None, 25);  // representative but no PB tag -> skipped
+    push(Some("CB1-1"), Some("D-A01"), 25); // representative (bit 8 set, 25 = 0b11001)
+    push(Some("CB1-1"), Some("D-A01"), 17); // NOT representative (17 = 0b10001, no bit 8)
+    push(Some("CB1-1"), Some(""), 25); // representative but empty PB -> skipped
+    push(Some("CB2-1"), None, 25); // representative but no PB tag -> skipped
     drop(writer);
 
     let tally = read_bam_tally(&bam_path).unwrap();
@@ -235,8 +235,8 @@ fn bam_tally_gates_on_xf_bit_8_and_skips_missing_or_empty_pb() {
 fn strip_gem_suffix_removes_trailing_digits_only() {
     assert_eq!(strip_gem_suffix("ACGTACGTACGTACGT-1"), "ACGTACGTACGTACGT");
     assert_eq!(strip_gem_suffix("ACGTACGTACGTACGT-12"), "ACGTACGTACGTACGT");
-    assert_eq!(strip_gem_suffix("ACGTACGTACGTACGT"), "ACGTACGTACGTACGT");  // no suffix
-    assert_eq!(strip_gem_suffix("D-A01"), "D-A01");  // trailing non-digit -> untouched
+    assert_eq!(strip_gem_suffix("ACGTACGTACGTACGT"), "ACGTACGTACGTACGT"); // no suffix
+    assert_eq!(strip_gem_suffix("D-A01"), "D-A01"); // trailing non-digit -> untouched
 }
 
 #[test]

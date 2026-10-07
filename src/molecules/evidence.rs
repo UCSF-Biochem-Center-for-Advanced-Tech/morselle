@@ -1,20 +1,20 @@
 // FxHash: these maps hold billions of fixed-size integer keys at real
 // scale; SipHash's DoS resistance buys nothing here and cost ~6% of runtime.
+use anyhow::{bail, Context, Result};
+use rayon::prelude::*;
+use rust_htslib::bam::{self, Read};
 use rustc_hash::FxHashMap as HashMap;
 use std::path::Path;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
 };
-use anyhow::{bail, Context, Result};
-use rayon::prelude::*;
-use rust_htslib::bam::{self, Read};
 use tracing::info;
 
 use super::helpers::{
     aligned_bases, better, intern_sample, read_hash, record_identity, shard_hash, MoleculeTags,
 };
-use super::types::{Evidence, Metrics, RawKey, Dna, NO_SAMPLE};
+use super::types::{Dna, Evidence, Metrics, RawKey, NO_SAMPLE};
 
 pub fn collate<P: AsRef<Path>>(inputs: &[P], threads: usize, shard_paths: &[P]) -> Result<()> {
     let first = inputs
@@ -57,9 +57,7 @@ pub fn collate<P: AsRef<Path>>(inputs: &[P], threads: usize, shard_paths: &[P]) 
                 .with_context(|| format!("reading BAM in collate pass ({})", input.display()))?;
             let tags = MoleculeTags::read(&record);
             let idx = match tags.cb {
-                Some(cb) => {
-                    shard_hash(cb.as_bytes(), tags.pb.map(str::as_bytes)) as usize % shards
-                }
+                Some(cb) => shard_hash(cb.as_bytes(), tags.pb.map(str::as_bytes)) as usize % shards,
                 None => 0,
             };
             writers[idx].write(&record)?;
@@ -421,7 +419,8 @@ pub fn collect_evidence_indexed(
             .zip(remaps.into_par_iter())
             .zip(sample_remaps.into_par_iter())
             .map(|((part, remap), sample_remap)| {
-                let mut map = HashMap::with_capacity_and_hasher(part.evidence.len(), Default::default());
+                let mut map =
+                    HashMap::with_capacity_and_hasher(part.evidence.len(), Default::default());
                 for (mut key, item) in part.evidence {
                     key.gene = remap[key.gene as usize];
                     if key.sample != NO_SAMPLE {

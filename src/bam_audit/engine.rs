@@ -288,7 +288,7 @@ pub fn run(cli: &Cli) -> Result<()> {
             // selected in every BAM (dumps join), and every read of a sampled molecule
             // is accumulated (so per-molecule evidence and reads/molecule are unbiased).
             if let Some((pcb, pub_)) = pack(cbs.as_bytes()).zip(pack(ubs.as_bytes())) {
-                let key = (pcb << 24) | pub_;  // lossless: CB in bits 24.., UMI in 0..23
+                let key = (pcb << 24) | pub_; // lossless: CB in bits 24.., UMI in 0..23
                 if cli.molecule_sample <= 1 || splitmix64(key) % cli.molecule_sample == 0 {
                     a.sampled_reads_with_cb_umi += 1;
                     let m = sampled.entry(key).or_default();

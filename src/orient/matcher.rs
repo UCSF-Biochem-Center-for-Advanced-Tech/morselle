@@ -1,9 +1,9 @@
 use std::borrow::Cow;
 
+use super::types::{FallbackMode, OrientCfg, OrientMethod, Oriented};
 use crate::anchors::{hamming, revcomp, R1_PRIMER, R1_PRIMER_TAIL, SBX_LEADER};
 use crate::homopolymer::longest_run;
 use crate::pipeline::Orientation;
-use super::types::{FallbackMode, OrientCfg, OrientMethod, Oriented};
 
 const BRACKET_LOCK_WINDOW: isize = 6;
 const TAIL_SEARCH_WINDOW: usize = 120;

@@ -18,9 +18,9 @@ use anyhow::{Context, Result};
 use rayon::prelude::*;
 use rust_htslib::bam::{self, Read};
 
+use super::aux_write::{append_char, append_f32, append_i32, append_u32, remove_tag, replace_str};
 use super::dedup::build_decisions;
 use super::evidence::{collate, collect_evidence};
-use super::aux_write::{append_char, append_f32, append_i32, append_u32, remove_tag, replace_str};
 use super::helpers::{record_identity, MoleculeTags};
 use super::types::{merge_metrics, Decision, Dna, Metrics, RawKey, NO_SAMPLE};
 
@@ -42,13 +42,20 @@ pub struct KeyTables<'a> {
     pub sample_ids: &'a HashMap<String, u32>,
 }
 
-fn record_key(record: &bam::Record, tags: &MoleculeTags, flex: bool, tables: &KeyTables) -> Option<RawKey> {
+fn record_key(
+    record: &bam::Record,
+    tags: &MoleculeTags,
+    flex: bool,
+    tables: &KeyTables,
+) -> Option<RawKey> {
     if record.is_unmapped() || record.is_secondary() || record.is_supplementary() {
         return None;
     }
     let cell = tags.cb.and_then(Dna::pack)?;
     let umi = tags.umi().and_then(Dna::pack)?;
-    let gene = tags.gene().and_then(|(g, _)| tables.gene_ids.get(g).copied())?;
+    let gene = tags
+        .gene()
+        .and_then(|(g, _)| tables.gene_ids.get(g).copied())?;
     let sample = if flex {
         tags.pb
             .filter(|v| !v.is_empty())
@@ -56,7 +63,12 @@ fn record_key(record: &bam::Record, tags: &MoleculeTags, flex: bool, tables: &Ke
     } else {
         NO_SAMPLE
     };
-    Some(RawKey { cell, sample, gene, umi })
+    Some(RawKey {
+        cell,
+        sample,
+        gene,
+        umi,
+    })
 }
 
 /// Rewrite one record's molecule tags in place. `identity` is the value the
@@ -131,7 +143,13 @@ pub fn write_output(
     let mut written = 0_u64;
     for (ordinal, result) in reader.records().enumerate() {
         let mut record = result?;
-        let identity = |r: &bam::Record| if indexed { record_identity(r) } else { ordinal as u64 };
+        let identity = |r: &bam::Record| {
+            if indexed {
+                record_identity(r)
+            } else {
+                ordinal as u64
+            }
+        };
         tag_record(&mut record, identity, opts.flex, decisions, tables, metrics)?;
         writer.write(&record)?;
         written += 1;
@@ -164,7 +182,14 @@ fn write_shard_output(
     reader.set_threads(opts.threads)?;
     for (ordinal, result) in reader.records().enumerate() {
         let mut record = result?;
-        tag_record(&mut record, |_| ordinal as u64, opts.flex, decisions, tables, metrics)?;
+        tag_record(
+            &mut record,
+            |_| ordinal as u64,
+            opts.flex,
+            decisions,
+            tables,
+            metrics,
+        )?;
         writer.write(&record)?;
     }
     Ok(())
@@ -225,13 +250,21 @@ pub fn run_sharded(
                     opts.fractional,
                 );
                 drop(evidence);
-                let tables = KeyTables { genes: &genes, gene_ids: &gene_ids, sample_ids: &sample_ids };
+                let tables = KeyTables {
+                    genes: &genes,
+                    gene_ids: &gene_ids,
+                    sample_ids: &sample_ids,
+                };
                 {
                     let mut guard = writer.lock().expect("output writer mutex poisoned");
-                    write_shard_output(shard_path, opts, &decisions, &tables, &mut guard, &mut local)?;
+                    write_shard_output(
+                        shard_path, opts, &decisions, &tables, &mut guard, &mut local,
+                    )?;
                 }
                 let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
-                eprintln!("[sbxpress molecules] phase=shard_quant complete shards={done}/{total_shards}");
+                eprintln!(
+                    "[sbxpress molecules] phase=shard_quant complete shards={done}/{total_shards}"
+                );
                 Ok(local)
             })
             .collect::<Result<Vec<_>>>()

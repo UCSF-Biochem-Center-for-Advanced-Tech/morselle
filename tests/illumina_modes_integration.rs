@@ -94,10 +94,7 @@ IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII
             panic!("GX tag is not a string");
         }
         if let bam::record::Aux::String(cb_str) = cb {
-            assert!(
-                cb_str.contains("-1"),
-                "CB tag must carry gem group suffix"
-            );
+            assert!(cb_str.contains("-1"), "CB tag must carry gem group suffix");
         } else {
             panic!("CB tag is not a string");
         }
@@ -121,8 +118,7 @@ fn test_illumina_cat_tagseq_cell_calling_integration() {
     ];
 
     // Resolve tagseq barcodes against the raw matrix barcodes
-    let resolved =
-        cell_calling::resolve_tagseq_barcodes(&barcodes_path, &raw_barcodes).unwrap();
+    let resolved = cell_calling::resolve_tagseq_barcodes(&barcodes_path, &raw_barcodes).unwrap();
 
     assert_eq!(resolved.len(), 2, "must resolve exactly 2 barcodes");
     assert_eq!(resolved[0], 0, "first barcode maps to index 0");

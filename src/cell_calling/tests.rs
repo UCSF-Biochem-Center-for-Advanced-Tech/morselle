@@ -1,7 +1,7 @@
-use std::fs;
-use crate::cr_bam_to_mtx::{write_h5, Feature, Matrix};
 use super::algo::{bh_adjust, run};
 use super::helpers::within_ordmag;
+use crate::cr_bam_to_mtx::{write_h5, Feature, Matrix};
+use std::fs;
 
 use super::types::Cli;
 
@@ -149,11 +149,19 @@ fn fractional_raw_matrix_is_read_and_filtered_without_truncation() {
     let raw_path = temp.path().join("raw.h5");
     let matrix = Matrix {
         features: vec![
-            Feature { id: "g1".into(), name: "G1".into() },
-            Feature { id: "g2".into(), name: "G2".into() },
+            Feature {
+                id: "g1".into(),
+                name: "G1".into(),
+            },
+            Feature {
+                id: "g2".into(),
+                name: "G2".into(),
+            },
         ],
         barcodes: vec!["bc1-1".into(), "bc2-1".into()],
-        counts: [((0, 0), 2.5), ((0, 1), 0.25), ((1, 0), 1.0)].into_iter().collect(),
+        counts: [((0, 0), 2.5), ((0, 1), 0.25), ((1, 0), 1.0)]
+            .into_iter()
+            .collect(),
         records: 0,
         molecules: 4,
         barcodes_skipped: 0,

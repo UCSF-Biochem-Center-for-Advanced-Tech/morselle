@@ -1,5 +1,5 @@
-use statrs::distribution::{Continuous, Normal};
 use super::types::{Component, BOUNDARY_SCAN_STEPS, INIT_PERCENTILES, MIN_STD};
+use statrs::distribution::{Continuous, Normal};
 
 /// Fit a 2-component 1D Gaussian mixture via EM from several initializations
 /// (see [`INIT_PERCENTILES`]), keeping the highest-log-likelihood result.
@@ -70,7 +70,11 @@ pub fn em_once(x: &[f64], low_pct: f64, high_pct: f64) -> (Component, Component,
 
 /// One EM run from explicit initial component means (equal weight, a
 /// data-wide std-dev starting spread for both).
-pub fn em_once_from(x: &[f64], init_low_mean: f64, init_high_mean: f64) -> (Component, Component, f64) {
+pub fn em_once_from(
+    x: &[f64],
+    init_low_mean: f64,
+    init_high_mean: f64,
+) -> (Component, Component, f64) {
     let n = x.len() as f64;
     let mean_all = x.iter().sum::<f64>() / n;
     let std_all = (x.iter().map(|v| (v - mean_all).powi(2)).sum::<f64>() / n)
@@ -118,7 +122,7 @@ pub fn em_once_from(x: &[f64], init_low_mean: f64, init_high_mean: f64) -> (Comp
         let sum_rh: f64 = r_high.iter().sum();
         let sum_rl: f64 = n - sum_rh;
         if sum_rh < 1e-6 || sum_rl < 1e-6 {
-            break;  // one component starved -- stop before it degenerates further
+            break; // one component starved -- stop before it degenerates further
         }
         let mean_h = x.iter().zip(&r_high).map(|(xi, r)| xi * r).sum::<f64>() / sum_rh;
         let mean_l = x

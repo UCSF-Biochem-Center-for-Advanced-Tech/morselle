@@ -1,7 +1,7 @@
-use crate::anchors::{revcomp, P5, P7, R1_PRIMER, R2_PRIMER, SBX_LEADER};
-use crate::pipeline::Orientation;
 use super::matcher::orient;
 use super::types::{FallbackMode, OrientCfg, OrientMethod};
+use crate::anchors::{revcomp, P5, P7, R1_PRIMER, R2_PRIMER, SBX_LEADER};
+use crate::pipeline::Orientation;
 
 fn cfg() -> OrientCfg {
     OrientCfg {
@@ -20,14 +20,14 @@ fn synthetic_canonical(cb: &[u8], umi: &[u8]) -> Vec<u8> {
     let mut v = Vec::new();
     v.extend_from_slice(SBX_LEADER);
     v.extend_from_slice(P5);
-    v.extend_from_slice(b"ACGTACGTAC");  // i5 (10)
+    v.extend_from_slice(b"ACGTACGTAC"); // i5 (10)
     v.extend_from_slice(R1_PRIMER);
-    v.extend_from_slice(cb);  // 16
-    v.extend_from_slice(umi);  // 12
-    v.extend_from_slice(&[b'T'; 30]);  // poly(dT)
-    v.extend_from_slice(b"GACTGACTGACTGACTGACTGACT");  // cDNA
+    v.extend_from_slice(cb); // 16
+    v.extend_from_slice(umi); // 12
+    v.extend_from_slice(&[b'T'; 30]); // poly(dT)
+    v.extend_from_slice(b"GACTGACTGACTGACTGACTGACT"); // cDNA
     v.extend_from_slice(R2_PRIMER);
-    v.extend_from_slice(b"TGCATGCATG");  // i7 (10)
+    v.extend_from_slice(b"TGCATGCATG"); // i7 (10)
     v.extend_from_slice(P7);
     v
 }
@@ -47,7 +47,7 @@ fn orients_canonical_no_flip() {
     let (s, e) = o.cb_umi.unwrap();
     assert_eq!(&o.seq[s..s + 16], cb);
     assert_eq!(&o.seq[s + 16..e], umi);
-    assert_eq!(o.seq.as_ref(), seq.as_slice());  // borrowed, unchanged
+    assert_eq!(o.seq.as_ref(), seq.as_slice()); // borrowed, unchanged
 }
 
 #[test]
@@ -90,9 +90,9 @@ fn no_homopolymer_read() -> Vec<u8> {
     seq.extend_from_slice(P5);
     seq.extend_from_slice(b"ACGTACGTAC");
     seq.extend_from_slice(R1_PRIMER);
-    seq.extend_from_slice(b"AAACCCAAGAAACCCA");  // CB
-    seq.extend_from_slice(b"ACGTACGTACGT");  // UMI
-    seq.extend_from_slice(b"GGGTT");  // short, non-T-ending spacer
+    seq.extend_from_slice(b"AAACCCAAGAAACCCA"); // CB
+    seq.extend_from_slice(b"ACGTACGTACGT"); // UMI
+    seq.extend_from_slice(b"GGGTT"); // short, non-T-ending spacer
     seq.extend_from_slice(b"GACGACGACGACGACGACGA");
     seq
 }
@@ -140,13 +140,13 @@ fn fixed_orientation_reanchors_past_false_homopolymer() {
     let umi = b"ACGTACGTACGT";
     let mut s = Vec::new();
     s.extend_from_slice(P5);
-    s.extend_from_slice(b"ACGTACGTAC");  // i5
+    s.extend_from_slice(b"ACGTACGTAC"); // i5
     s.extend_from_slice(R1_PRIMER);
     s.extend_from_slice(cb);
     s.extend_from_slice(umi);
-    s.extend(std::iter::repeat(b'T').take(20));  // true dT primer
-    s.extend_from_slice(b"GACGACGACGACGACGACGACGACGACGAC");  // cDNA
-    s.extend(std::iter::repeat(b'T').take(40));  // FALSE longer poly-T in cDNA
+    s.extend(std::iter::repeat(b'T').take(20)); // true dT primer
+    s.extend_from_slice(b"GACGACGACGACGACGACGACGACGACGAC"); // cDNA
+    s.extend(std::iter::repeat(b'T').take(40)); // FALSE longer poly-T in cDNA
     s.extend_from_slice(b"GACGACGACGAC");
     let qual = vec![b'I'; s.len()];
 

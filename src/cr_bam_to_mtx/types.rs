@@ -1,7 +1,7 @@
-use std::collections::BTreeMap;
-use std::path::PathBuf;
 use clap::Parser;
 use serde::Serialize;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 /// Reconstruct 10x reference's raw GEX matrix from a 10x reference BAM.
 #[derive(Debug, Parser)]

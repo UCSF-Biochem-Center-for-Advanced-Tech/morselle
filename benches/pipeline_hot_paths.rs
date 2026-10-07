@@ -218,7 +218,9 @@ fn bench_probeset_align_matcher(c: &mut Criterion) {
 
 use std::collections::HashMap;
 
-use sbx10x::molecules::{build_decisions, correct_group, Dna, Evidence, Metrics, RawKey, NO_SAMPLE};
+use sbx10x::molecules::{
+    build_decisions, correct_group, Dna, Evidence, Metrics, RawKey, NO_SAMPLE,
+};
 
 fn bench_molecules_dedup(c: &mut Criterion) {
     let mut evidence = HashMap::new();
@@ -303,4 +305,3 @@ criterion_group!(
     bench_molecules_dedup,
 );
 criterion_main!(benches);
-

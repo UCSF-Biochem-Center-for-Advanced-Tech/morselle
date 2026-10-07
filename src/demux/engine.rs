@@ -1,9 +1,9 @@
 use anyhow::{bail, Result};
 
+use super::types::{DemuxCfg, DemuxMode, DemuxVia, IndexSource, Outcome};
 use crate::anchors::{revcomp, R1_PRIMER, R2_PRIMER};
 use crate::hamming_index::HammingIndex;
 use crate::sample_sheet::SampleSheet;
-use super::types::{DemuxCfg, DemuxMode, DemuxVia, IndexSource, Outcome};
 
 /// Real minimum pairwise Hamming distance among the sheet's samples, for the
 /// given index alone.

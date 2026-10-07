@@ -1,14 +1,14 @@
-use std::path::PathBuf;
 use clap::Parser;
 use serde::Serialize;
+use std::path::PathBuf;
 
 /// Longest read-length bin edge; everything above lands in the final bin.
 pub const BIN: usize = 25;
-pub const N_BINS: usize = 29;  // 0..700+ in 25bp steps
+pub const N_BINS: usize = 29; // 0..700+ in 25bp steps
 
-pub const MIN_CLIP: usize = 5;  // a clip must be this long to be classified
-pub const K: usize = 8;  // k-mer seed for indel-robust motif matching
-pub const HOMO: f64 = 0.8;  // fraction of one base to call a homopolymer clip
+pub const MIN_CLIP: usize = 5; // a clip must be this long to be classified
+pub const K: usize = 8; // k-mer seed for indel-robust motif matching
+pub const HOMO: f64 = 0.8; // fraction of one base to call a homopolymer clip
 
 pub const ADAPTER: &[u8] = b"AGATCGGAAGAGC";
 pub const TSO: &[u8] = b"AAGCAGTGGTATCAACGCAGAGTACATGGG";
@@ -56,13 +56,13 @@ pub struct Cli {
 #[derive(Default)]
 pub struct MolAccum {
     pub n_reads: u32,
-    pub min_nh: u32,  // 1 = uniquely placed somewhere
+    pub min_nh: u32, // 1 = uniquely placed somewhere
     pub max_mapq: u8,
-    pub region: u8,  // bit2=exonic, bit1=intronic, bit0=intergenic (best kept)
+    pub region: u8, // bit2=exonic, bit1=intronic, bit0=intergenic (best kept)
     pub max_readlen: u32,
-    pub counted: bool,  // any read is a counted representative (xf bit 8)
-    pub eligible: bool,  // any read has 10x reference/sbxpress xf bit 16
-    pub rep_gene: String,  // gene of the counted representative
+    pub counted: bool,    // any read is a counted representative (xf bit 8)
+    pub eligible: bool,   // any read has 10x reference/sbxpress xf bit 16
+    pub rep_gene: String, // gene of the counted representative
 }
 
 #[derive(Default, Serialize)]
@@ -196,7 +196,7 @@ pub struct Audit {
     pub clip3: ClipClasses,
     // molecules
     pub reads_with_cb_umi: u64,
-    pub molecules: u64,  // xf bit-8 representatives (10x reference's counted molecules)
+    pub molecules: u64, // xf bit-8 representatives (10x reference's counted molecules)
     /// Exact 10x reference/sbxpress xf values most relevant to molecule counting.
     pub xf_17_eligible: u64,
     pub xf_25_representative: u64,

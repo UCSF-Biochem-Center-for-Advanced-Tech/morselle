@@ -1,7 +1,7 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
 use clap::Parser;
 use serde::Serialize;
+use std::collections::HashMap;
+use std::path::PathBuf;
 
 pub const BIN_SIZE: i64 = 16_384;
 

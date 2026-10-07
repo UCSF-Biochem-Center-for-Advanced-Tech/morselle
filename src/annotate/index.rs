@@ -1,13 +1,11 @@
+use anyhow::{bail, Context, Result};
 use std::collections::HashMap;
 use std::fs;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
-use anyhow::{bail, Context, Result};
 use tracing::info;
 
-use super::types::{
-    Annotation, ContigIndex, Gene, Interval, Strand, Transcript, BIN_SIZE,
-};
+use super::types::{Annotation, ContigIndex, Gene, Interval, Strand, Transcript, BIN_SIZE};
 
 pub fn add_to_bins(bins: &mut Vec<Vec<usize>>, interval: Interval, value: usize) {
     let first = (interval.start / BIN_SIZE) as usize;
@@ -20,7 +18,11 @@ pub fn add_to_bins(bins: &mut Vec<Vec<usize>>, interval: Interval, value: usize)
     }
 }
 
-pub fn collect_bins(bins: &[Vec<usize>], interval: Interval, output: &mut std::collections::HashSet<usize>) {
+pub fn collect_bins(
+    bins: &[Vec<usize>],
+    interval: Interval,
+    output: &mut std::collections::HashSet<usize>,
+) {
     let first = (interval.start / BIN_SIZE).max(0) as usize;
     let last = ((interval.end - 1) / BIN_SIZE).max(0) as usize;
     for bin in first..=last.min(bins.len().saturating_sub(1)) {
