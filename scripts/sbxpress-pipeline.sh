@@ -71,6 +71,9 @@ Options:
   --extract-no-gzip        Write extracted FASTQs uncompressed (SBX). Measured 7.3x
                            faster extraction and 2.2x faster extract+mapping
                            (PROFILING.md) at ~4x the intermediate disk space.
+  --molecule-compression-level N
+                           BGZF level 0-9 for the molecule BAM (default: htslib's 6;
+                           1 was ~24% faster overall for a ~12% larger file).
   --sort-mem SIZE          samtools memory per sort worker; default 1G.
   --tmp-dir DIR            Sort temporary directory; default OUT/tmp.
   --expect-cells N         Expected recovered cells; passed to sbxpress cells.
@@ -109,7 +112,7 @@ THREADS='' EXTRACT_THREADS='' MAP_THREADS='' ANNOTATE_THREADS='' ALIGN_THREADS='
 SORT_THREADS='' MOLECULE_THREADS=''
 SPLIT=16 SORT_MEM=1G TMP_DIR='' EXPECT_CELLS=''
 THREE_PRIME=1 MULTIMAP_TAGS=0 FRACTIONAL=1 EXTRACT_NO_GZIP=0
-AUDIT=0 AUDIT_LABEL='' MOLECULE_SAMPLE=64
+AUDIT=0 AUDIT_LABEL='' MOLECULE_SAMPLE=64 MOLECULE_COMPRESSION=''
 
 while (( $# > 0 )); do
     case "$1" in
@@ -150,6 +153,7 @@ while (( $# > 0 )); do
         --molecule-threads) MOLECULE_THREADS=${2:?missing value for $1}; shift 2 ;;
         --split) SPLIT=${2:?missing value for $1}; shift 2 ;;
         --extract-no-gzip) EXTRACT_NO_GZIP=1; shift ;;
+        --molecule-compression-level) MOLECULE_COMPRESSION=${2:?missing value for $1}; shift 2 ;;
         --sort-mem) SORT_MEM=${2:?missing value for $1}; shift 2 ;;
         --tmp-dir) TMP_DIR=${2:?missing value for $1}; shift 2 ;;
         --expect-cells) EXPECT_CELLS=${2:?missing value for $1}; shift 2 ;;
@@ -348,6 +352,7 @@ if [[ ! -s "$MOLECULE_BAM.bai" ]]; then
     echo "[3/5] correcting UMIs and resolving gene collisions"
     MOLECULE_ARGS=(--output "$MOLECULE_BAM" --metrics "$MOLECULES_DIR/$SAMPLE.molecules.metrics.json"
         --threads "$MOLECULE_THREADS")
+    [[ -z $MOLECULE_COMPRESSION ]] || MOLECULE_ARGS+=(--compression-level "$MOLECULE_COMPRESSION")
     case "$ANALYSIS_MODE" in
         tagseq)
             MOLECULE_ARGS+=(--tagseq)

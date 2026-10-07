@@ -102,6 +102,13 @@ struct Cli {
     /// writes a real-valued matrix. Default: on with --tagseq, off otherwise.
     #[arg(long)]
     fractional_collisions: bool,
+    /// BGZF compression level (0-9) for the output BAM. Default: htslib's
+    /// (6). Compression is a large share of a molecules run; on a 1M-read
+    /// benchmark level 1 made the whole run ~24% faster for a ~12% larger
+    /// file -- a good trade for an intermediate read once more by
+    /// `matrix`/`audit`. Records are identical at every level.
+    #[arg(long, value_parser = clap::value_parser!(u32).range(0..=9))]
+    compression_level: Option<u32>,
     /// Disable fractional collision resolution (overrides the --tagseq default).
     #[arg(long, conflicts_with = "fractional_collisions")]
     no_fractional_collisions: bool,
@@ -166,6 +173,7 @@ fn main() -> Result<()> {
         flex: cli.flex,
         tagseq: cli.tagseq,
         fractional: (cli.tagseq || cli.fractional_collisions) && !cli.no_fractional_collisions,
+        compression_level: cli.compression_level,
     };
     let started = Instant::now();
     let mut metrics = Metrics {

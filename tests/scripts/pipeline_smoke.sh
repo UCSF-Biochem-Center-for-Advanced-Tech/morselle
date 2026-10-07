@@ -41,6 +41,8 @@ expect_call sbx_gex "sbxpress extract .*--lenient --minimap2"
 expect_call sbx_gex "sbxpress annotate - .*--unordered.*--three-prime"
 expect_call sbx_gex "sbxpress cells .*--expect-cells 500"
 reject_call sbx_gex "molecules .*--tagseq"
+check sbx_gex_fastbam "$P" "${COMMON[@]}" "${SBX[@]}" "${GEX[@]}" --molecule-compression-level 1
+expect_call sbx_gex_fastbam "molecules .*--compression-level 1"
 check sbx_gex_multimap "$P" "${COMMON[@]}" "${SBX[@]}" "${GEX[@]}" --multimap-tags --no-three-prime
 expect_call sbx_gex_multimap "minimap .*-N 10"
 reject_call sbx_gex_multimap "--three-prime"

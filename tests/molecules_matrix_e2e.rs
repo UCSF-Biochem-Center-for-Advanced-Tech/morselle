@@ -7,6 +7,8 @@
 //! 0.5.7 refactor passed every unit test while crashing on `UB` ("tag is
 //! already present") and writing no `xf:25` representatives, so the matrix
 //! came out empty. Nothing short of running both binaries catches that.
+mod common;
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -98,9 +100,12 @@ fn molecules_then_matrix(dir: &Path, name: &str, extra: &[&str]) -> Run {
     let outs = dir.join(format!("{name}.outs"));
     let mut args = vec![input.to_str().unwrap(), "-o", molecules.to_str().unwrap()];
     args.extend_from_slice(extra);
-    run(env!("CARGO_BIN_EXE_sbx10x-molecules"), &args);
     run(
-        env!("CARGO_BIN_EXE_cr-bam-to-mtx"),
+        &common::bin("sbx10x-molecules", env!("CARGO_BIN_EXE_sbx10x-molecules")).to_string_lossy(),
+        &args,
+    );
+    run(
+        &common::bin("cr-bam-to-mtx", env!("CARGO_BIN_EXE_cr-bam-to-mtx")).to_string_lossy(),
         &[
             molecules.to_str().unwrap(),
             "-o",

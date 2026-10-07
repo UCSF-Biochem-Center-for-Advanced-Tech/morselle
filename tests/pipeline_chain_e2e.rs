@@ -365,3 +365,48 @@ fn flex_chain_demultiplexes_samples_by_probe_barcode() {
         );
     }
 }
+
+#[test]
+fn compression_level_changes_file_size_not_records() {
+    let dir = tempfile::tempdir().unwrap();
+    let fx = write_fixture(dir.path(), FixtureSpec::default());
+    let mut digests = Vec::new();
+    let mut sizes = Vec::new();
+    for (name, extra) in [
+        ("default", vec![]),
+        ("fast", vec!["--compression-level", "1"]),
+        ("none", vec!["--compression-level", "0"]),
+        // Sharded output is in shard order, so compare it with itself.
+        ("sharded", vec!["--shards", "2"]),
+        (
+            "sharded_fast",
+            vec!["--compression-level", "1", "--shards", "2"],
+        ),
+    ] {
+        let out = dir.path().join(format!("{name}.bam"));
+        let mut args = vec![fx.bam.to_str().unwrap(), "-o", out.to_str().unwrap()];
+        args.extend(extra);
+        run(&molecules(), &args);
+        digests.push(common::bam_digest(&out));
+        sizes.push(std::fs::metadata(&out).unwrap().len());
+    }
+    assert!(
+        digests[..3].iter().all(|d| d == &digests[0]) && digests[3] == digests[4],
+        "records identical at every level"
+    );
+    assert!(
+        sizes[2] > sizes[1] && sizes[1] >= sizes[0],
+        "sizes {sizes:?}"
+    );
+    let bad = std::process::Command::new(molecules())
+        .args([
+            fx.bam.to_str().unwrap(),
+            "-o",
+            "/dev/null",
+            "--compression-level",
+            "10",
+        ])
+        .output()
+        .unwrap();
+    assert!(!bad.status.success(), "levels above 9 are rejected");
+}

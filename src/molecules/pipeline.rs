@@ -32,6 +32,15 @@ pub struct MoleculeOptions {
     pub flex: bool,
     pub tagseq: bool,
     pub fractional: bool,
+    /// BGZF level (0-9) for the output BAM; `None` keeps htslib's default.
+    pub compression_level: Option<u32>,
+}
+
+fn apply_compression(writer: &mut bam::Writer, opts: &MoleculeOptions) -> Result<()> {
+    if let Some(level) = opts.compression_level {
+        writer.set_compression_level(bam::CompressionLevel::Level(level))?;
+    }
+    Ok(())
 }
 
 /// Lookup tables produced by evidence collection, needed to rebuild a
@@ -138,6 +147,7 @@ pub fn write_output(
     reader.set_threads(opts.threads)?;
     let header = bam::Header::from_template(reader.header());
     let mut writer = bam::Writer::from_path(output, &header, bam::Format::Bam)?;
+    apply_compression(&mut writer, opts)?;
     writer.set_threads(opts.threads)?;
     let indexed = opts.evidence_workers > 1;
     let mut written = 0_u64;
@@ -222,6 +232,7 @@ pub fn run_sharded(
         bam::Header::from_template(reader.header())
     };
     let mut writer = bam::Writer::from_path(output, &header, bam::Format::Bam)?;
+    apply_compression(&mut writer, opts)?;
     writer.set_threads(opts.threads)?;
     let writer = Mutex::new(writer);
 
