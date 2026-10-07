@@ -1,11 +1,12 @@
 //! FASTQ input discovery/reading and gzip-compressed output writers.
 
 use std::fs::{self, File};
-use std::io::{self, BufWriter, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, Read as IoRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use anyhow::{Context, Result};
+use flate2::read::MultiGzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 
@@ -284,6 +285,17 @@ impl PairShardWriter {
         }
         p.r2.finish()
     }
+}
+
+/// Open a text file for line-by-line reading, transparently decoding gzip when the extension is `.gz`.
+pub fn open_text_reader(path: &Path) -> Result<Box<dyn BufRead>> {
+    let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let input: Box<dyn IoRead> = if path.extension().is_some_and(|ext| ext == "gz") {
+        Box::new(MultiGzDecoder::new(file))
+    } else {
+        Box::new(file)
+    };
+    Ok(Box::new(BufReader::new(input)))
 }
 
 #[cfg(test)]

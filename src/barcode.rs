@@ -12,12 +12,10 @@
 //! than the slow default SipHash — with SipHash the set can lose to binary search
 //! on `u32` keys. We do NOT rewrite barcodes — downstream compatibility tools correct them.
 
-use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::BufRead;
 use std::path::Path;
 
-use anyhow::{Context, Result};
-use flate2::read::MultiGzDecoder;
+use anyhow::Result;
 use rustc_hash::FxHashSet;
 
 use crate::pipeline::CbStatus;
@@ -72,14 +70,7 @@ pub struct Whitelist {
 impl Whitelist {
     /// Load a single-column barcode list (`.txt` or `.txt.gz`).
     pub fn load(path: &Path) -> Result<Self> {
-        let file = File::open(path)
-            .with_context(|| format!("cannot open whitelist {}", path.display()))?;
-        let is_gz = path.extension().is_some_and(|e| e == "gz");
-        let reader: Box<dyn BufRead> = if is_gz {
-            Box::new(BufReader::new(MultiGzDecoder::new(file)))
-        } else {
-            Box::new(BufReader::new(file))
-        };
+        let reader = crate::io::open_text_reader(path)?;
 
         let mut codes = FxHashSet::with_capacity_and_hasher(1 << 20, rustc_hash::FxBuildHasher);
         for line in reader.lines() {
