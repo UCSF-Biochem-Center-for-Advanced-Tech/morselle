@@ -437,18 +437,105 @@ def slide_next_steps(prs):
     bullet_block(s, bullets, top=Inches(1.2), font_size=14)
 
 
+import json
+import os
+from pathlib import Path
+
+# ── Metrics Ingestion & Export Helpers ────────────────────────────────────────
+
+def load_json(path_str):
+    if not path_str or not os.path.exists(path_str):
+        return None
+    with open(path_str, "r") as f:
+        return json.load(f)
+
+def export_insert_sizes(illumina_metrics, tsv_path):
+    if not illumina_metrics or "insert_length_histogram" not in illumina_metrics:
+        print(f"Warning: No insert_length_histogram found in metrics for {tsv_path}")
+        return
+    histo = illumina_metrics["insert_length_histogram"]
+    with open(tsv_path, "w") as f:
+        f.write("insert_length\tcount\n")
+        for length in sorted(int(k) for k in histo.keys()):
+            f.write(f"{length}\t{histo[str(length)]}\n")
+    print(f"Exported insert-size distribution to {tsv_path} ({len(histo)} length bins)")
+
+def slide_insert_size_distribution(prs, illumina_metrics):
+    s = blank_slide(prs)
+    bg(s)
+    header_bar(s, "Insert-size distribution", "Illumina PE overlap geometry & cDNA fragment recovery")
+
+    if not illumina_metrics or not illumina_metrics.get("overlap_enabled"):
+        bullet_block(s, [
+            (0, "• PE overlap mode was not active or metrics JSON not supplied."),
+            (0, "• Enable --overlap on sbxpress illumina to reconstruct PE fragment inserts."),
+        ], font_size=16)
+        return
+
+    histo = illumina_metrics.get("insert_length_histogram", {})
+    sins = illumina_metrics.get("overlap_short_sins", 0)
+    mins = illumina_metrics.get("overlap_medium_mins", 0)
+    lins = illumina_metrics.get("overlap_long_lins", 0)
+    total_merged = sins + mins
+    total = total_merged + lins
+
+    headers = ["Category", "Insert class", "Read count", "Percentage"]
+    rows = [
+        ["Short insert", "sins (R1+R2 read-through)", f"{sins:,}", f"{100.0 * sins / max(1, total):.1f}%"],
+        ["Medium insert", "mins (R1+R2 overlap)", f"{mins:,}", f"{100.0 * mins / max(1, total):.1f}%"],
+        ["Long insert", "lins (unmerged mates)", f"{lins:,}", f"{100.0 * lins / max(1, total):.1f}%"],
+        ["Total merged", "sins + mins", f"{total_merged:,}", f"{100.0 * total_merged / max(1, total):.1f}%"],
+    ]
+    simple_table(s, headers, rows, top=Inches(1.4), col_widths=[Inches(2.2), Inches(3.8), Inches(2.5), Inches(2.2)], font_size=13)
+
+    if histo:
+        lengths = [int(k) for k in histo.keys()]
+        min_l, max_l = min(lengths), max(lengths)
+        mean_l = sum(int(k) * v for k, v in histo.items()) / max(1, sum(histo.values()))
+        box(s, Inches(0.4), Inches(3.8), Inches(12.5), Inches(0.4),
+            f"Observed cDNA insert length span: {min_l}–{max_l} bp (mean {mean_l:.1f} bp across {total_merged:,} merged fragments)",
+            font_size=14, bold=True, color=UCSF_TEAL)
+
+    bullets = [
+        (0, "Key Insights:"),
+        (1, "• Overlap geometry removes adapters without sequence-matching false positives."),
+        (1, "• Discordant base rate across overlap region: {:.4f}%.".format(
+            100.0 * illumina_metrics.get("discordant_bases", 0) / max(1, illumina_metrics.get("merged_bases", 1))
+        )),
+        (1, "• Merged reads carry YC duplex-consensus tags for downstream tracking."),
+    ]
+    bullet_block(s, bullets, top=Inches(4.4), font_size=14)
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="sbxpress_mapping_analysis.pptx")
+    ap = argparse.ArgumentParser(description="Build sbxpress presentation slide deck from pipeline metrics.")
+    ap.add_argument("--out", default="sbxpress_mapping_analysis.pptx", help="Output PPTX presentation file.")
+    ap.add_argument("--report-dir", help="Directory containing pipeline outputs and metrics JSON files.")
+    ap.add_argument("--illumina-metrics", help="Path to sbxpress illumina metrics JSON.")
+    ap.add_argument("--molecules-metrics", help="Path to sbxpress molecules metrics JSON.")
+    ap.add_argument("--cell-metrics", help="Path to sbxpress cells metrics JSON.")
+    ap.add_argument("--export-insert-sizes", help="Export insert-size distribution histogram as TSV to this path.")
     args = ap.parse_args()
+
+    ill_path = args.illumina_metrics
+    if not ill_path and args.report_dir:
+        candidate = os.path.join(args.report_dir, "illumina_metrics.json")
+        if os.path.exists(candidate):
+            ill_path = candidate
+
+    illumina_metrics = load_json(ill_path)
+
+    if args.export_insert_sizes:
+        export_insert_sizes(illumina_metrics, args.export_insert_sizes)
 
     prs = new_prs()
 
     slide_title(prs)
     slide_core_message(prs)
     slide_pipeline(prs)
+    slide_insert_size_distribution(prs, illumina_metrics)
     slide_m1_paradox(prs)
     slide_m2_orientation(prs)
     slide_m3_secondary(prs)
@@ -462,3 +549,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

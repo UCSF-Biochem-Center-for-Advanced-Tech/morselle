@@ -21,6 +21,7 @@
 | **Master Roadmap & Plan Consolidation** | `FUTURE_ROADMAP.md` & historic plan header consolidation | `v0.5.6` | 🟢 **Completed** |
 | **Sharded Peak Memory Bounding** | `sbx10x-molecules --shards K` | `v0.5.6` | 🟢 **Completed** |
 | **Fractional UMI Collision Resolution** | `molecules --fractional-collisions` & `cr_bam_to_mtx` `ZW:f` | `v0.5.6` | 🟢 **Completed** |
+| **Automated Presentation & Reporting** | `scripts/build_presentation.py` & insert-size export | `v0.5.6` | 🟢 **Completed** |
 
 ---
 
@@ -42,12 +43,12 @@ flowchart TD
         A1 --> A1_OUT["Assigns r_i / sum(r) credit across competing genes in bulk & tagseq mode"]
     end
 
-    subgraph Report ["Priority 1: Automated Presentation & Reporting"]
-        R1["Update build_presentation.py & insert-size distribution export"]
+    subgraph Report ["Completed: Automated Presentation & Reporting"]
+        R1["build_presentation.py & insert-size distribution export"]
         R1 --> R1_OUT["Generates comparative SBX vs Illumina slide decks"]
     end
 
-    subgraph Bench ["Priority 2: Cross-Platform Performance Benchmarks"]
+    subgraph Bench ["Priority 1: Cross-Platform Performance Benchmarks"]
         B1["Synthetic pipeline benchmarks & continuous profiling"]
         B1 --> B1_OUT["Detects performance regressions across macOS & Linux HPC"]
     end
@@ -77,14 +78,12 @@ flowchart TD
 
 ---
 
-### Priority 3: Automated Slide Deck & Insert-Size Reporting
+### Priority 3 (Completed v0.5.6): Automated Slide Deck & Insert-Size Reporting
 
-- **Context** ([`OVERLAP_PLAN.md`](OVERLAP_PLAN.md) & [`PRESENTATION_PLAN.md`](PRESENTATION_PLAN.md)):
-  `sbxpress illumina --overlap` merges Illumina mates and calculates insert size distributions, but these are not yet automatically ingested into presentation generators.
-- **Proposed Architecture**:
-  1. Add `--export-insert-sizes` to `sbxpress illumina --overlap` to output a TSV/JSON insert-length histogram.
-  2. Update [`scripts/build_presentation.py`](scripts/build_presentation.py) to ingest output metrics from [`scripts/sbxpress-pipeline.sh`](scripts/sbxpress-pipeline.sh).
-- **Expected Impact**: Automates comparative SBX vs. Illumina evaluation reports and slide deck generation.
+- **Status**: 🟢 **Completed in v0.5.6**.
+- **Implementation**:
+  1. Added `--export-insert-sizes` and `--report-dir` options to `scripts/build_presentation.py`.
+  2. Ingests Illumina, molecules, and cell calling metrics JSON files, exporting cDNA insert-length distribution TSVs and dynamically generating 10-slide PowerPoint presentations (`.pptx`).
 
 ---
 
