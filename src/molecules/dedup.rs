@@ -1,13 +1,17 @@
+//! UMI correction and cross-gene collision resolution.
+//!
+//! Restored from the pre-0.5.7 `sbx10x-molecules` implementation (commit
+//! `4d42a18`), with fractional collision resolution layered on top as an
+//! opt-in fourth policy. See `resolve_collisions` for the policy table.
 use std::collections::HashMap;
-use std::path::Path;
-use anyhow::Result;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
 use rayon::prelude::*;
+use tracing::info;
 
 use super::saturation::Saturation;
-use super::types::{
-    Decision, Evidence, Metrics, Outcome, RawKey, Dna,
-};
-
+use super::types::{Decision, Dna, Evidence, Metrics, RawKey};
 
 pub fn correct_group(
     mut keys: Vec<RawKey>,
@@ -49,13 +53,124 @@ pub fn merge_roots(
     left
 }
 
+/// One corrected UMI node (a molecule candidate) after aggregation.
+#[derive(Clone, Copy)]
+pub(crate) struct Molecule {
+    pub(crate) support: u64,
+    pub(crate) representative: u64,
+    /// MAPQ (high 8 bits) followed by aligned bases (low 24 bits). Preserves
+    /// the representative ordering without growing this large, temporary
+    /// hash-map value.
+    pub(crate) best_rank: u32,
+    pub(crate) min_read_hash: u32,
+}
+
+fn rank(item: &Evidence) -> u32 {
+    (u32::from(item.best_mapq) << 24) | item.best_aligned.min(0x00ff_ffff)
+}
+
+/// Directional UMI correction within each (cell, sample, gene) group.
+///
+/// Grouped by (cell, sample, gene), not just (cell, gene): the same CB
+/// whitelist is shared across every sample in a pooled Flex run, so omitting
+/// `sample` would let `correct_group()`'s by-UMI map silently overwrite one
+/// sample's evidence with another's whenever two samples share a UMI value.
+///
+/// Under `--tagseq` correction is skipped entirely: at pooled-sample UMI
+/// diversity two genuinely distinct molecules land 1 Hamming-distance apart
+/// in a 12bp space by chance often enough that "low-count neighbour =
+/// sequencing error" no longer holds. Trade-off: true 1bp UMI errors are not
+/// corrected either, so counts trend slightly high rather than low.
+fn correct_umis(
+    evidence: &HashMap<RawKey, Evidence>,
+    groups: HashMap<(Dna, u32, u32), Vec<RawKey>>,
+    workers: usize,
+    tagseq: bool,
+) -> HashMap<RawKey, RawKey> {
+    if tagseq {
+        eprintln!(
+            "[sbxpress molecules] phase=umi_correct skipped (--tagseq) raw_nodes={}",
+            evidence.len()
+        );
+        return evidence.keys().map(|&key| (key, key)).collect();
+    }
+    if workers <= 1 {
+        eprintln!(
+            "[sbxpress molecules] phase=umi_correct mode=serial start groups={}",
+            groups.len()
+        );
+        return groups
+            .into_values()
+            .map(|keys| correct_group(keys, evidence))
+            .fold(HashMap::new(), merge_roots);
+    }
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .expect("creating UMI-correction worker pool");
+    info!(workers, groups = groups.len(), "correcting UMI groups in parallel");
+    eprintln!(
+        "[sbxpress molecules] phase=umi_correct start workers={} groups={}",
+        workers,
+        groups.len()
+    );
+    let total_groups = groups.len();
+    let completed = Arc::new(AtomicUsize::new(0));
+    let checkpoint = (total_groups / 100).max(1_000);
+    pool.install(|| {
+        groups
+            .into_par_iter()
+            .map(|(_, keys)| {
+                let roots = correct_group(keys, evidence);
+                let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                if done % checkpoint == 0 || done == total_groups {
+                    eprintln!("[sbxpress molecules] phase=umi_correct groups={done}/{total_groups}");
+                }
+                roots
+            })
+            .reduce(HashMap::new, merge_roots)
+    })
+}
+
+/// Sum each corrected root's read support and pick its representative read.
+fn aggregate_molecules(
+    evidence: &HashMap<RawKey, Evidence>,
+    roots: &HashMap<RawKey, RawKey>,
+) -> HashMap<RawKey, Molecule> {
+    let mut molecules = HashMap::<RawKey, Molecule>::new();
+    for (&key, item) in evidence {
+        let root = roots[&key];
+        molecules
+            .entry(root)
+            .and_modify(|m| {
+                m.support += item.reads as u64;
+                m.min_read_hash = m.min_read_hash.min(item.min_read_hash);
+                let r = rank(item);
+                // On an exact rank tie (common for true PCR/optical
+                // duplicates), fall back to `best_ordinal` as an explicit,
+                // deterministic tiebreak instead of HashMap iteration order.
+                if r > m.best_rank || (r == m.best_rank && item.best_ordinal < m.representative) {
+                    m.representative = item.best_ordinal;
+                    m.best_rank = r;
+                }
+            })
+            .or_insert(Molecule {
+                support: item.reads as u64,
+                representative: item.best_ordinal,
+                best_rank: rank(item),
+                min_read_hash: item.min_read_hash,
+            });
+    }
+    molecules
+}
+
 pub fn build_decisions(
     evidence: &HashMap<RawKey, Evidence>,
     metrics: &mut Metrics,
     saturation_interval: Option<u64>,
     workers: usize,
-    _tagseq: bool,
-    fractional_collisions: bool,
+    tagseq: bool,
+    fractional: bool,
 ) -> (HashMap<RawKey, Decision>, Option<Saturation>) {
     let mut groups = HashMap::<(Dna, u32, u32), Vec<RawKey>>::new();
     for &key in evidence.keys() {
@@ -64,259 +179,70 @@ pub fn build_decisions(
             .or_default()
             .push(key);
     }
-    metrics.raw_cell_gene_umis += evidence.len() as u64;
-
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(workers.max(1))
-        .build()
-        .expect("building rayon threadpool");
-    let group_vec: Vec<Vec<RawKey>> = groups.into_values().collect();
-    let roots = pool.install(|| {
-        group_vec
-            .into_par_iter()
-            .map(|group| correct_group(group, evidence))
-            .reduce_with(merge_roots)
-            .unwrap_or_default()
-    });
-
-    let mut corrected_nodes = HashMap::<RawKey, (RawKey, Evidence)>::new();
-    for (&child, &root) in &roots {
-        let child_ev = evidence[&child];
-        if child.umi != root.umi {
-            metrics.umi_nodes_collapsed += 1;
-        }
-        corrected_nodes
-            .entry(root)
-            .and_modify(|(winner_key, winner_ev)| {
-                winner_ev.reads += child_ev.reads;
-                if (child_ev.best_mapq, child_ev.best_aligned, std::cmp::Reverse(child_ev.best_ordinal))
-                    > (winner_ev.best_mapq, winner_ev.best_aligned, std::cmp::Reverse(winner_ev.best_ordinal))
-                {
-                    *winner_key = child;
-                    winner_ev.best_ordinal = child_ev.best_ordinal;
-                    winner_ev.best_mapq = child_ev.best_mapq;
-                    winner_ev.best_aligned = child_ev.best_aligned;
-                }
-            })
-            .or_insert((child, child_ev));
-    }
-    metrics.corrected_umi_nodes += corrected_nodes.len() as u64;
-
-    let mut collision_groups = HashMap::<(Dna, u32, Dna), Vec<RawKey>>::new();
-    for &root in corrected_nodes.keys() {
-        collision_groups
-            .entry((root.cell, root.sample, root.umi))
-            .or_default()
-            .push(root);
-    }
-    metrics.molecules_before_gene_resolution += collision_groups.len() as u64;
-
+    eprintln!(
+        "[sbxpress molecules] phase=umi_group_index complete groups={} raw_nodes={}",
+        groups.len(),
+        evidence.len()
+    );
     let mut saturation =
         saturation_interval.map(|interval| Saturation::new(metrics.eligible_records, interval));
-
-    let use_fractional = fractional_collisions;
-    let mut decisions = HashMap::<RawKey, Decision>::new();
-    for group in collision_groups.values() {
-        let degree = group.len() as u32;
-        if degree > 1 {
-            metrics.collision_groups += 1;
-        }
-        if use_fractional {
-            let total_reads: u64 = group
+    if let Some(curve) = saturation.as_mut() {
+        for (&(cell, _sample, gene), keys) in &groups {
+            let min_hash = keys
                 .iter()
-                .map(|&root| corrected_nodes[&root].1.reads as u64)
-                .sum();
-            for &root in group {
-                let (_, winner_ev) = corrected_nodes[&root];
-                let root_reads = winner_ev.reads as u64;
-                let weight = if total_reads > 0 {
-                    root_reads as f32 / total_reads as f32
-                } else {
-                    1.0 / degree as f32
-                };
-                let outcome = if degree > 1 {
-                    metrics.collision_molecules_fractional += 1;
-                    Outcome::Fractional
-                } else {
-                    Outcome::Unique
-                };
-                for (&child, &child_root) in &roots {
-                    if child_root == root {
-                        decisions.insert(
-                            child,
-                            Decision {
-                                corrected: root.umi,
-                                representative: winner_ev.best_ordinal,
-                                collision_degree: degree,
-                                outcome,
-                                weight,
-                            },
-                        );
-                    }
-                }
-                metrics.molecules_counted += 1;
-            }
-        } else {
-            let mut gene_support = HashMap::<u32, (u64, RawKey, Evidence)>::new();
-            for &root in group {
-                let (winner_key, winner_ev) = corrected_nodes[&root];
-                gene_support
-                    .entry(root.gene)
-                    .and_modify(|(sum, win_k, win_ev)| {
-                        *sum += winner_ev.reads as u64;
-                        if (winner_ev.best_mapq, winner_ev.best_aligned, std::cmp::Reverse(winner_ev.best_ordinal))
-                            > (win_ev.best_mapq, win_ev.best_aligned, std::cmp::Reverse(win_ev.best_ordinal))
-                        {
-                            *win_k = winner_key;
-                            *win_ev = winner_ev;
-                        }
-                    })
-                    .or_insert((winner_ev.reads as u64, winner_key, winner_ev));
-            }
-
-            let max_support = gene_support.values().map(|(sum, ..)| *sum).max().unwrap_or(0);
-            let winners_count = gene_support.values().filter(|(sum, ..)| *sum == max_support).count();
-
-            for &root in group {
-                let (support, _, winner_ev) = gene_support[&root.gene];
-                let outcome = if winners_count > 1 && support == max_support {
-                    metrics.collision_ties += 1;
-                    Outcome::Tie
-                } else if support == max_support {
-                    if degree > 1 {
-                        metrics.collision_molecules_won += 1;
-                        Outcome::Won
-                    } else {
-                        Outcome::Unique
-                    }
-                } else {
-                    if degree > 1 {
-                        metrics.collision_molecules_lost += 1;
-                    }
-                    Outcome::Lost
-                };
-
-                let weight = if matches!(outcome, Outcome::Won | Outcome::Unique) {
-                    1.0
-                } else {
-                    0.0
-                };
-
-                if matches!(outcome, Outcome::Won | Outcome::Unique) {
-                    metrics.molecules_counted += 1;
-                }
-
-                for (&child, &child_root) in &roots {
-                    if child_root == root {
-                        decisions.insert(
-                            child,
-                            Decision {
-                                corrected: root.umi,
-                                representative: winner_ev.best_ordinal,
-                                collision_degree: degree,
-                                outcome,
-                                weight,
-                            },
-                        );
-                    }
-                }
-            }
+                .map(|key| evidence[key].min_read_hash)
+                .min()
+                .expect("non-empty UMI group");
+            curve.add_cell_gene(cell, gene, min_hash);
         }
     }
 
-    if let Some(sat) = &mut saturation {
-        for (&key, ev) in evidence {
-            sat.add_cell_gene(key.cell, key.gene, ev.min_read_hash);
-            sat.add_molecule(key.cell, ev.min_read_hash);
+    let roots = correct_umis(evidence, groups, workers, tagseq);
+    eprintln!("[sbxpress molecules] phase=umi_correct complete roots={}", roots.len());
+    // `+=`, not `=`: the sharded path calls build_decisions() once per shard
+    // against the same accumulating Metrics.
+    metrics.raw_cell_gene_umis += evidence.len() as u64;
+    metrics.umi_nodes_collapsed += roots.iter().filter(|(key, root)| key.umi != root.umi).count() as u64;
+
+    eprintln!("[sbxpress molecules] phase=molecule_aggregate start");
+    let molecules = aggregate_molecules(evidence, &roots);
+    metrics.corrected_umi_nodes += molecules.len() as u64;
+    metrics.molecules_before_gene_resolution += molecules.len() as u64;
+    eprintln!(
+        "[sbxpress molecules] phase=molecule_aggregate complete corrected_nodes={}",
+        molecules.len()
+    );
+
+    let root_outcomes = super::collisions::resolve_collisions(&molecules, metrics, tagseq, fractional);
+
+    if let Some(curve) = saturation.as_mut() {
+        for (&root, molecule) in &molecules {
+            if root_outcomes[&root].outcome.is_counted() {
+                curve.add_molecule(root.cell, molecule.min_read_hash);
+            }
         }
     }
-
+    eprintln!("[sbxpress molecules] phase=decision_materialize start");
+    let decisions: HashMap<RawKey, Decision> = evidence
+        .keys()
+        .map(|&key| {
+            let root = roots[&key];
+            let resolved = root_outcomes[&root];
+            (
+                key,
+                Decision {
+                    corrected: root.umi,
+                    representative: molecules[&root].representative,
+                    collision_degree: resolved.degree,
+                    outcome: resolved.outcome,
+                    weight: resolved.weight,
+                },
+            )
+        })
+        .collect();
+    eprintln!(
+        "[sbxpress molecules] phase=decision_materialize complete decisions={}",
+        decisions.len()
+    );
     (decisions, saturation)
-}
-
-pub fn deduplicate_evidence(
-    evidence: &HashMap<RawKey, Evidence>,
-    metrics: &mut Metrics,
-    saturation_interval: Option<u64>,
-    workers: usize,
-    tagseq: bool,
-    fractional_collisions: bool,
-) -> (HashMap<RawKey, Decision>, Option<Saturation>) {
-    build_decisions(
-        evidence,
-        metrics,
-        saturation_interval,
-        workers,
-        tagseq,
-        fractional_collisions,
-    )
-}
-
-pub fn process_shard(
-    path: &Path,
-    threads: usize,
-    require_pb: bool,
-    saturation_interval: Option<u64>,
-    workers: usize,
-    tagseq: bool,
-    fractional_collisions: bool,
-) -> Result<(
-    Metrics,
-    HashMap<RawKey, Decision>,
-    Vec<String>,
-    Vec<String>,
-    Option<Saturation>,
-)> {
-    let mut metrics = Metrics::default();
-    let (evidence, genes, _gene_ids, samples, _sample_ids) =
-        super::evidence::collect_evidence(path, threads, require_pb, &mut metrics)?;
-    let (decisions, saturation) = deduplicate_evidence(
-        &evidence,
-        &mut metrics,
-        saturation_interval,
-        workers,
-        tagseq,
-        fractional_collisions,
-    );
-    Ok((metrics, decisions, genes, samples, saturation))
-}
-
-pub fn process_and_write_shard(
-    input_path: &Path,
-    output_path: &Path,
-    threads: usize,
-    require_pb: bool,
-    saturation_interval: Option<u64>,
-    workers: usize,
-    tagseq: bool,
-    fractional_collisions: bool,
-) -> Result<(Metrics, Option<Saturation>)> {
-    let mut metrics = Metrics::default();
-    let (evidence, _genes, gene_ids, _samples, sample_ids) =
-        super::evidence::collect_evidence(input_path, threads, require_pb, &mut metrics)?;
-    let (decisions, saturation) = deduplicate_evidence(
-        &evidence,
-        &mut metrics,
-        saturation_interval,
-        workers,
-        tagseq,
-        fractional_collisions,
-    );
-
-    // Drop evidence map to free memory before writing output
-    drop(evidence);
-
-    super::pipeline::write_shard_output(
-        input_path,
-        output_path,
-        threads,
-        require_pb,
-        &decisions,
-        &gene_ids,
-        &sample_ids,
-        &mut metrics,
-    )?;
-
-    // `decisions` dropped at end of scope
-    Ok((metrics, saturation))
 }

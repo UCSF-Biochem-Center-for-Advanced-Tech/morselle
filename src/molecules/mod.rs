@@ -1,3 +1,6 @@
+#[cfg(test)]
+mod collision_tests;
+pub mod collisions;
 pub mod dedup;
 pub mod evidence;
 pub mod helpers;

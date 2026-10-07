@@ -99,8 +99,35 @@ pub enum Outcome {
     Won,
     Lost,
     Tie,
+    /// --tagseq with --no-fractional-collisions: this (cell, UMI) was
+    /// independently claimed by more than one gene and every claimant was
+    /// counted in full, rather than picking a single winner.
     Shared,
+    /// --fractional-collisions (default under --tagseq): every claimant is
+    /// counted with weight `support / total support`; written as `ZW:f`.
     Fractional,
+}
+
+impl Outcome {
+    /// Whether this molecule's representative read is counted (`xf:25`).
+    pub fn is_counted(self) -> bool {
+        matches!(
+            self,
+            Outcome::Unique | Outcome::Won | Outcome::Shared | Outcome::Fractional
+        )
+    }
+
+    /// Single-character `XW:A` tag value.
+    pub fn xw_code(self) -> u8 {
+        match self {
+            Outcome::Unique => b'U',
+            Outcome::Won => b'W',
+            Outcome::Lost => b'L',
+            Outcome::Tie => b'T',
+            Outcome::Shared => b'S',
+            Outcome::Fractional => b'F',
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -109,6 +136,8 @@ pub struct Decision {
     pub representative: u64,
     pub collision_degree: u32,
     pub outcome: Outcome,
+    /// Matrix weight of this molecule: 1.0 for counted non-fractional
+    /// outcomes, 0.0 for Lost/Tie, `support / total` for Fractional.
     pub weight: f32,
 }
 
@@ -119,6 +148,11 @@ pub struct Metrics {
     pub tagseq: bool,
     pub records: u64,
     pub eligible_records: u64,
+    /// Otherwise-eligible (mapped, valid CB+UMI+gene) records dropped for
+    /// missing/empty `PB` under --flex. Never counted as a molecule:
+    /// `probe-demux` requires the same non-empty `PB`, and letting them share
+    /// one `NO_SAMPLE` bucket risks exactly the cross-sample UMI collision
+    /// `RawKey::sample` exists to prevent.
     pub no_sample_records: u64,
     pub raw_cell_gene_umis: u64,
     pub corrected_umi_nodes: u64,
@@ -129,7 +163,11 @@ pub struct Metrics {
     pub collision_molecules_won: u64,
     pub collision_molecules_lost: u64,
     pub collision_ties: u64,
+    /// --tagseq --no-fractional-collisions only: collision-group members
+    /// counted independently instead of adjudicated.
     pub collision_molecules_shared: u64,
+    /// --fractional-collisions only: collision-group members counted with a
+    /// fractional weight. Each group adds exactly 1 to `molecules_counted`.
     pub collision_molecules_fractional: u64,
     pub representatives_tagged: u64,
     pub saturation: Option<SaturationMetrics>,
