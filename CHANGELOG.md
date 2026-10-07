@@ -4,11 +4,11 @@ All notable changes to `sbxpress` are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
 ## [0.5.6] — 2026-10-06
 
 ### Added
+- Fractional / proportional UMI collision resolution (`--fractional-collisions`) in `sbx10x-molecules` (`molecules` stage). Designed for high-depth bulk/pooled samples (e.g. DZEC03, 2–25M reads/sample) where 12bp UMI space is oversubscribed (~2.1x, ~81% collision rate). Instead of deterministic winner-take-all discards, fractional resolution distributes proportional molecule weights $w_i = r_i / \sum r$ across competing genes based on read support, tagging records with `ZG:Z:fractional` and emitting `ZW:f:<weight>` tags.
+- Default fractional collision resolution in `--tagseq` mode (`sbx10x-molecules --tagseq`), with explicit control via `--fractional-collisions` and `--no-fractional-collisions`.
 - Consolidated master tracking roadmap `FUTURE_ROADMAP.md` organizing completed v0.3.3–v0.5.5 milestones and open future priorities (sharded RAM bounding for `molecules`, fractional UMI assignment, automated slide deck reporting).
 - Updated status headers across `FLEX_SUPPORT_PLAN.md`, `GENE_COLLISION_RESOLUTION_PLAN.md`, `OVERLAP_PLAN.md`, and `PIPELINE_NOTES.md` linking to `FUTURE_ROADMAP.md`.
 
