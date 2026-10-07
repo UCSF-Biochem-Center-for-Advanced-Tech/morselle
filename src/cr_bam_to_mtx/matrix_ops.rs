@@ -10,9 +10,8 @@ use hdf5::types::VarLenAscii;
 use rust_htslib::bam::{self, Read};
 use tracing::info;
 
-use super::io_helpers::{
-    aux_f64, aux_i64, aux_string, read_barcodes, read_cell_barcodes, read_features, read_probe_barcodes,
-};
+use super::io_helpers::{read_barcodes, read_cell_barcodes, read_features, read_probe_barcodes};
+use crate::bam_helpers::{aux_slot_f64, aux_slot_i64, aux_slot_string, aux_values};
 use super::types::{Cli, Feature, Matrix, Metrics};
 
 #[allow(clippy::too_many_arguments)]
@@ -37,55 +36,74 @@ pub(crate) fn read_matrix(
         .enumerate()
         .map(|(index, feature)| (feature.id.clone(), index))
         .collect();
-    let mut molecule_keys: Vec<(usize, String, f64)> = Vec::new();
+    // (feature index, interned CB id, weight). Interning keeps one String
+    // per distinct barcode instead of one per counted molecule.
+    let mut molecule_keys: Vec<(usize, u32, f64)> = Vec::new();
+    let mut cb_names: Vec<String> = Vec::new();
+    let mut cb_ids: HashMap<String, u32> = HashMap::new();
     let mut records = 0_u64;
     let mut probe_barcodes_skipped = 0_u64;
 
     for result in reader.records() {
         let record = result.context("reading BAM record")?;
         records += 1;
-        if aux_i64(&record, b"xf")?.unwrap_or(0) & 8 == 0 {
+        // One aux scan per record; typing/errors identical to the old
+        // per-tag aux_i64/aux_string/aux_f64 calls, and applied in the same
+        // order (only xf is checked on non-representative records).
+        let [xf, pb, cb, ub, gx, gn, zw] =
+            aux_values(&record, [b"xf", b"PB", b"CB", b"UB", b"GX", b"GN", b"ZW"]);
+        if aux_slot_i64(&xf, b"xf")?.unwrap_or(0) & 8 == 0 {
             continue;
         }
         if let Some(allowlist) = probe_barcode_allowlist {
-            match aux_string(&record, b"PB")? {
-                Some(pb) if allowlist.contains(&pb) => {}
+            match aux_slot_string(&pb, b"PB")? {
+                Some(pb) if allowlist.contains(pb) => {}
                 _ => {
                     probe_barcodes_skipped += 1;
                     continue;
                 }
             }
         }
-        let cb = aux_string(&record, b"CB")?
+        let cb = aux_slot_string(&cb, b"CB")?
             .context("xf bit 8 record is missing corrected barcode tag CB")?;
-        let _ub = aux_string(&record, b"UB")?
+        let _ub = aux_slot_string(&ub, b"UB")?
             .context("xf bit 8 record is missing corrected UMI tag UB")?;
         let gx =
-            aux_string(&record, b"GX")?.context("xf bit 8 record is missing gene ID tag GX")?;
-        let gn = aux_string(&record, b"GN")?.unwrap_or_else(|| gx.clone());
+            aux_slot_string(&gx, b"GX")?.context("xf bit 8 record is missing gene ID tag GX")?;
+        let gn = aux_slot_string(&gn, b"GN")?.unwrap_or(gx);
         if gx.contains(';') {
             bail!("xf bit 8 record has multiple genes in GX: {gx}");
         }
-        let feature_index = if let Some(&index) = feature_indexes.get(&gx) {
+        let feature_index = if let Some(&index) = feature_indexes.get(gx) {
             index
         } else if strict_features {
             bail!("counted gene {gx} is absent from the canonical feature template")
         } else {
             let index = feature_order.len();
-            feature_indexes.insert(gx.clone(), index);
-            feature_order.push(Feature { id: gx, name: gn });
+            feature_indexes.insert(gx.to_owned(), index);
+            feature_order.push(Feature { id: gx.to_owned(), name: gn.to_owned() });
             index
         };
-        let weight = aux_f64(&record, b"ZW")?.unwrap_or(1.0);
-        molecule_keys.push((feature_index, cb, weight));
+        let weight = aux_slot_f64(&zw, b"ZW")?.unwrap_or(1.0);
+        let cb_id = match cb_ids.get(cb) {
+            Some(&id) => id,
+            None => {
+                let id = cb_names.len() as u32;
+                cb_names.push(cb.to_owned());
+                cb_ids.insert(cb.to_owned(), id);
+                id
+            }
+        };
+        molecule_keys.push((feature_index, cb_id, weight));
     }
+    drop(cb_ids);
 
     let barcodes = if let Some(path) = barcode_template {
         read_barcodes(path)?
     } else if let Some(path) = cell_barcode_whitelist {
         read_cell_barcodes(path, gem_group)?
     } else {
-        let mut values: Vec<String> = molecule_keys.iter().map(|(_, cb, _)| cb.clone()).collect();
+        let mut values = cb_names.clone();
         values.sort_unstable();
         values.dedup();
         values
@@ -95,17 +113,25 @@ pub(crate) fn read_matrix(
         .enumerate()
         .map(|(index, barcode)| (barcode.as_str(), index))
         .collect();
+    // Resolve each distinct CB once instead of once per molecule.
+    let cb_to_column: Vec<Option<usize>> = cb_names
+        .iter()
+        .map(|cb| barcode_indexes.get(cb.as_str()).copied())
+        .collect();
     let mut counts = BTreeMap::new();
     let mut barcodes_skipped = 0u64;
-    for (feature, barcode, weight) in &molecule_keys {
-        let Some(&barcode) = barcode_indexes.get(barcode.as_str()) else {
+    for &(feature, cb_id, weight) in &molecule_keys {
+        let Some(barcode) = cb_to_column[cb_id as usize] else {
             if skip_unlisted_barcodes {
                 barcodes_skipped += 1;
                 continue;
             }
-            bail!("counted barcode {barcode} is absent from barcode template");
+            bail!(
+                "counted barcode {} is absent from barcode template",
+                cb_names[cb_id as usize]
+            );
         };
-        *counts.entry((barcode, *feature)).or_insert(0.0) += weight;
+        *counts.entry((barcode, feature)).or_insert(0.0) += weight;
     }
 
     Ok(Matrix {
