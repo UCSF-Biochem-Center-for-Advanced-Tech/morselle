@@ -68,6 +68,9 @@ Options:
   --sort-threads N         samtools sort/index workers; default 8.
   --molecule-threads N     Molecule-calling BAM threads; default 8.
   --split N                Extracted FASTQ shards per sample (SBX); default 16.
+  --extract-no-gzip        Write extracted FASTQs uncompressed (SBX). Measured 7.3x
+                           faster extraction and 2.2x faster extract+mapping
+                           (PROFILING.md) at ~4x the intermediate disk space.
   --sort-mem SIZE          samtools memory per sort worker; default 1G.
   --tmp-dir DIR            Sort temporary directory; default OUT/tmp.
   --expect-cells N         Expected recovered cells; passed to sbxpress cells.
@@ -105,7 +108,7 @@ PROBE_SET='' PROBE_BARCODE_WL='' PROBE_SAMPLE_SHEET='' TAGSEQ_BARCODES=''
 THREADS='' EXTRACT_THREADS='' MAP_THREADS='' ANNOTATE_THREADS='' ALIGN_THREADS=''
 SORT_THREADS='' MOLECULE_THREADS=''
 SPLIT=16 SORT_MEM=1G TMP_DIR='' EXPECT_CELLS=''
-THREE_PRIME=1 MULTIMAP_TAGS=0 FRACTIONAL=1
+THREE_PRIME=1 MULTIMAP_TAGS=0 FRACTIONAL=1 EXTRACT_NO_GZIP=0
 AUDIT=0 AUDIT_LABEL='' MOLECULE_SAMPLE=64
 
 while (( $# > 0 )); do
@@ -146,6 +149,7 @@ while (( $# > 0 )); do
         --sort-threads) SORT_THREADS=${2:?missing value for $1}; shift 2 ;;
         --molecule-threads) MOLECULE_THREADS=${2:?missing value for $1}; shift 2 ;;
         --split) SPLIT=${2:?missing value for $1}; shift 2 ;;
+        --extract-no-gzip) EXTRACT_NO_GZIP=1; shift ;;
         --sort-mem) SORT_MEM=${2:?missing value for $1}; shift 2 ;;
         --tmp-dir) TMP_DIR=${2:?missing value for $1}; shift 2 ;;
         --expect-cells) EXPECT_CELLS=${2:?missing value for $1}; shift 2 ;;
@@ -249,12 +253,14 @@ if [[ $INPUT_MODE == sbx ]]; then
             --whitelist "$WHITELIST" --out-dir "$EXTRACT_DIR" --threads "$EXTRACT_THREADS"
             --split "$SPLIT" --lenient --minimap2)
         [[ $ANALYSIS_MODE != flex ]] || EXTRACT_ARGS+=(--flex --probe-barcode-whitelist "$PROBE_BARCODE_WL")
+        (( EXTRACT_NO_GZIP == 0 )) || EXTRACT_ARGS+=(--no-gzip)
         run "$LOG_DIR/extract.log" sbxpress extract "${EXTRACT_ARGS[@]}"
     else
         echo "[1/5] extraction already complete; reusing $EXTRACT_DIR"
     fi
     shopt -s nullglob
-    CDNA_FASTQS=("$EXTRACT_DIR/${SAMPLE}_S"*_R2_*.fastq.gz)
+    # .fastq.gz normally; plain .fastq with --extract-no-gzip.
+    CDNA_FASTQS=("$EXTRACT_DIR/${SAMPLE}_S"*_R2_*.fastq.gz "$EXTRACT_DIR/${SAMPLE}_S"*_R2_*.fastq)
     shopt -u nullglob
 else
     TAGGED_FASTQ="$EXTRACT_DIR/$SAMPLE.tagged.R2.fastq.gz"
@@ -285,12 +291,13 @@ if [[ ! -s "$ANNOTATED_BAM.bai" ]]; then
         mkdir -p "$ALIGN_DIR"
         CHUNK_BAMS=()
         for fq in "${CDNA_FASTQS[@]}"; do
-            chunk="$ALIGN_DIR/$(basename "$fq" .fastq.gz).bam"
+            chunk_name=$(basename "$fq"); chunk_name=${chunk_name%.gz}; chunk_name=${chunk_name%.fastq}
+            chunk="$ALIGN_DIR/$chunk_name.bam"
             CHUNK_BAMS+=("$chunk")
             [[ -s "$chunk" ]] && continue
             # probeset-align writes the BAM directly; build under a partial
             # name so a killed chunk is redone rather than reused.
-            run "$LOG_DIR/probeset_align.$(basename "$fq" .fastq.gz).log" \
+            run "$LOG_DIR/probeset_align.$chunk_name.log" \
                 sbxpress probeset-align "$fq" --probe-set "$PROBE_SET" \
                 --genes-out "$GENES_MTX" --threads "$ALIGN_THREADS" \
                 --metrics "$chunk.metrics.json" --output "$chunk.partial.bam"

@@ -22,7 +22,8 @@ ARGS=("$@")
 case "$sub" in
     extract)
         out=$(value --out-dir -o); mkdir -p "$out"; echo '{}' > "$out/metrics_summary.json"
-        for chunk in 001 002; do echo stub > "$out/${STUB_SAMPLE}_S1_L001_R2_${chunk}.fastq.gz"; done ;;
+        ext=fastq.gz; for a in "${ARGS[@]}"; do [[ $a == --no-gzip ]] && ext=fastq; done
+        for chunk in 001 002; do echo stub > "$out/${STUB_SAMPLE}_S1_L001_R2_${chunk}.$ext"; done ;;
     illumina) echo stub > "$(value --output -o)" ;;
     minimap) echo "@HD	VN:1.6" ;;
     annotate) cat > /dev/null; echo "annotated" ;;

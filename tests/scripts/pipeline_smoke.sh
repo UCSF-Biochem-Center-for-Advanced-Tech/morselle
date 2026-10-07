@@ -44,6 +44,11 @@ reject_call sbx_gex "molecules .*--tagseq"
 check sbx_gex_multimap "$P" "${COMMON[@]}" "${SBX[@]}" "${GEX[@]}" --multimap-tags --no-three-prime
 expect_call sbx_gex_multimap "minimap .*-N 10"
 reject_call sbx_gex_multimap "--three-prime"
+check sbx_gex_nogzip "$P" "${COMMON[@]}" "${SBX[@]}" "${GEX[@]}" --extract-no-gzip
+expect_call sbx_gex_nogzip "extract .*--no-gzip"
+expect_call sbx_gex_nogzip "minimap .*S1_S1_L001_R2_001.fastq .*S1_S1_L001_R2_002.fastq$"
+check sbx_flex_nogzip "$P" --analysis-mode flex "${COMMON[@]}" "${SBX[@]}" "${FLEX[@]}" --probe-barcode-whitelist "$R/pbwl.txt" --extract-no-gzip
+expect_call sbx_flex_nogzip "probeset-align .*R2_002.fastq .*--output .*/R2_002.bam.partial.bam|probeset-align .*S1_S1_L001_R2_002.fastq "
 check sbx_tagseq "$P" --analysis-mode tagseq "${COMMON[@]}" "${SBX[@]}" "${GEX[@]}" --tagseq-barcodes "$R/cells.txt"
 expect_call sbx_tagseq "sbxpress molecules .*--tagseq"
 expect_call sbx_tagseq "sbxpress cells .*--tagseq-barcodes"
