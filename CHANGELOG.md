@@ -4,6 +4,50 @@ All notable changes to `sbxpress` are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Review of the 0.5.2–0.5.8 changes made on 2026-10-06. 0.5.7 and 0.5.8 should
+not be used for GEX or tagseq counting: `sbxpress molecules` aborts on any BAM
+carrying `UB` (every extracted library), and otherwise writes no `xf:25`
+representatives, so `matrix` produces empty matrices.
+
+### Fixed
+- `sbxpress molecules`: restored the 0.5.6 UMI-correction, collision and BAM
+  tagging logic that the 0.5.7 modularization rewrote (crash on existing `UB`;
+  missing `xf`/`XV`/`XW`; serial-mode representatives never matched; `ZG`
+  overwritten with won/lost; `--tagseq` ignored; O(n²) decision step;
+  uncompressed output; shard scratch in the system temp dir). Output is
+  record-for-record identical to 0.5.6 in every non-fractional mode.
+- Fractional collisions re-implemented on top: `XW:A:F` plus `ZW:f` weight,
+  `xf:25` on the representative, `ZG` untouched. Under `--tagseq` UMI
+  correction is skipped again (as in 0.5.6). A fractional collision group adds
+  1 to `molecules_counted`.
+- `sbxpress cells` (and `protospacer-call`) read `f32` fractional matrices
+  without truncating (2.5 was read as 2, 0.25 as 0); filtered matrices keep
+  fractional values.
+- `scripts/sbxpress-pipeline.sh` never parsed (syntax error since 0.5.4) and
+  passed flags no subcommand accepts; rewritten so the GEX path matches the
+  production GEX script and Flex follows `run_full_cat06.sh`.
+  `scripts/sbxpress-gex-pipeline.sh` is restored to the standalone 0.5.6 script.
+- `probeset-align --threads`: output BAM is in input order again (was
+  scheduling order); record-construction errors are no longer ignored; BAM
+  compression uses the worker pool.
+- Restored ~1,650 comment lines (including `--help` texts) and two test
+  assertions dropped by the 0.5.7 modularization; code unchanged.
+- MANUAL Flex section used non-existent `probe-demux` flags; fractional
+  section described the old `ZG:Z:fractional` tagging.
+- References to plan documents moved to `docs/archive/`; binary count in
+  TECHNICAL_DESCRIPTION.md (11, not 12). The `codebase_gap_analysis.md`
+  mentioned under 0.5.7 was never committed.
+
+### Added
+- `tests/molecules_matrix_e2e.rs`: runs the real `sbx10x-molecules` and
+  `cr-bam-to-mtx` binaries on a fixture with `UB`/`UR`/`ZG` and multi-gene
+  `GX`, in serial, indexed and sharded modes and every collision policy.
+- `tests/pipeline_scripts.rs`: `bash -n` on every script, shellcheck when
+  installed, and both pipeline scripts run end to end in all input × analysis
+  modes against stubs that reject any flag the real binary does not accept.
+
 ## [0.5.8] — 2026-10-06
 
 ### Documentation

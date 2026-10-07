@@ -40,7 +40,7 @@ pub(crate) struct Stats {
     // `per_sample`/`undetermined` above (only reachable for reads that also
     // cleared both gates). This is the closest SBX-side analog to Illumina's
     // own post-BCL-Convert index-only demultiplex count -- see
-    // FLEX_SUPPORT_PLAN.md's read-metrics comparison.
+    // docs/archive/FLEX_SUPPORT_PLAN.md's read-metrics comparison.
     pub per_sample_early: Vec<u64>,
     /// Of `per_sample_early`, how many also located a real R2/cDNA 3' boundary
     /// (`Extracted::adapter_trimmed`) -- excludes reads that are structurally

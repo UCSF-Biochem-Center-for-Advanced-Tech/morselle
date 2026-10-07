@@ -1,7 +1,7 @@
 //! Assign cell barcodes to samples by their declared probe-barcode set
-//! (FLEX_SUPPORT_PLAN.md Phase 2).
+//! (docs/archive/FLEX_SUPPORT_PLAN.md Phase 2).
 //!
-//! Published-algorithm parity notes (see FLEX_SUPPORT_PLAN.md "Where this
+//! Published-algorithm parity notes (see docs/archive/FLEX_SUPPORT_PLAN.md "Where this
 //! plan corrects the initial design"): assignment sums molecule counts across
 //! a sample's *whole declared set* (which can be >1 probe barcode — real
 //! `config.csv` example: `Pos,D-A01|D-A02`) before comparing samples, not a

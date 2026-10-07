@@ -1,5 +1,5 @@
 //! Real-data exercise of the actual `probe_demux::assign`/`gem_overlap` logic
-//! (FLEX_SUPPORT_PLAN.md Phase 2), without needing a full alignment pipeline.
+//! (docs/archive/FLEX_SUPPORT_PLAN.md Phase 2), without needing a full alignment pipeline.
 //!
 //! `probe_demux::read_bam_tally` (already unit-tested against a synthetic BAM)
 //! just turns a BAM into a `(CB, PB) -> molecule count` tally; this builds

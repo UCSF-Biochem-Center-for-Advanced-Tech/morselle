@@ -193,55 +193,88 @@ cross-platform molecule comparisons.
 
 10x Flex assays use fixed synthetic probe pairs rather than polyA-primed cDNA. Reads are assigned directly to probe sequences in the probe-set reference (`.csv`) rather than aligned to the genome.
 
-### Workflow overview
-
-1. **Probe Demultiplexing**: Assign cell barcodes to samples using `sbxpress probe-demux` with a probe barcode whitelist (e.g., `flex-v2-384.txt`) and sample configuration.
-2. **Probe-Set Alignment**: Align R2 reads against the probe-set reference using `sbxpress probeset-align` (which emits synthetic per-gene contig BAMs with `GX`/`GN` tags).
-3. **Molecules, Matrix & Cells**: Run standard downstream `sbxpress molecules`, `sbxpress matrix`, and `sbxpress cells`.
-
-### Example Command Sequence
+The simplest route is the unified runner (single sample, or add
+`--probe-sample-sheet config.csv` for multiplexed samples):
 
 ```bash
-# 1. Demultiplex probe barcodes across samples
-sbxpress probe-demux \
-  --r2-fastq "$OUT/extract/sample_R2.fastq.gz" \
-  --probe-barcode-wl "$REF/flex-v2-384.txt" \
-  --config "$REF/config.csv" \
-  --output "$OUT/demux"
-
-# 2. Align against probe-set reference (creates synthetic per-gene BAM)
-sbxpress probeset-align \
-  "$OUT/extract/sample_R2.fastq.gz" \
+"$REPO/scripts/sbxpress-pipeline.sh" --analysis-mode flex \
+  --fastqs /data/device_*/out --bclconvert-samplesheet /data/samples.csv \
+  --sample TSeq100_L1_GEX \
+  --whitelist "$REF/737K-flex-v2.txt.gz" \
+  --probe-barcode-whitelist "$REF/flex-v2-384.txt" \
   --probe-set "$REF/Chromium_Human_Transcriptome_Probe_Set_v2.0.0_GRCh38-2024-A.csv" \
-  --genes-out "$OUT/genes.mtx" \
-  --output "$OUT/annotation/sample.probeset.bam"
-
-# 3. Downstream molecules, matrix, and cell calling
-sbxpress molecules "$OUT/annotation/sample.probeset.bam" --output "$OUT/molecules/sample.molecules.bam"
-sbxpress matrix "$OUT/molecules/sample.molecules.bam" --features "$OUT/genes.mtx" --output "$OUT/outs"
-sbxpress cells "$OUT/outs/raw_feature_bc_matrix.h5" --output "$OUT/outs"
+  --probe-sample-sheet "$REF/config.csv" \
+  --out-dir "$OUT"
 ```
 
-For automated multi-sample SBX Flex pipelines, refer to `scripts/run_flex_multi.sh` and `scripts/run_full_cat06.sh`.
+### Workflow overview
+
+1. **Extraction**: `sbxpress extract --flex --probe-barcode-whitelist` locates the probe barcode and writes it as `PR`/`PB` alongside `CB`/`UB`.
+2. **Probe-set alignment**: `sbxpress probeset-align` assigns each extracted R2 chunk to the probe set, emitting a BAM on synthetic per-gene contigs with `GX`/`GN` tags (`--threads` parallelises matching; output order follows the FASTQ).
+3. **Molecules**: `sbxpress molecules --flex` requires a non-empty `PB` so identical GEM barcodes from different samples are never merged.
+4. **Counting**: a single sample goes straight to `matrix` + `cells`; multiplexed samples first run `sbxpress probe-demux` on the molecule BAM, then `scripts/run_flex_multi.sh` counts each sample.
+
+### Example command sequence
+
+```bash
+# 1. Extract (probe-barcode aware)
+sbxpress extract --fastqs /data/device_*/out \
+  --bclconvert-samplesheet /data/samples.csv \
+  --whitelist "$REF/737K-flex-v2.txt.gz" \
+  --probe-barcode-whitelist "$REF/flex-v2-384.txt" --flex \
+  --minimap2 --lenient --out-dir "$OUT/extract" --threads 128 --split 16
+
+# 2. Probe-set alignment per extracted chunk, then one sorted BAM
+mkdir -p "$OUT/aligned"
+for fq in "$OUT"/extract/TSeq100_L1_GEX_S*_R2_*.fastq.gz; do
+  sbxpress probeset-align "$fq" \
+    --probe-set "$REF/Chromium_Human_Transcriptome_Probe_Set_v2.0.0_GRCh38-2024-A.csv" \
+    --genes-out "$OUT/reference/probe_set_genes.tsv" --threads 16 \
+    --output "$OUT/aligned/$(basename "$fq" .fastq.gz).bam"
+done
+samtools cat -o - "$OUT"/aligned/*.bam | samtools sort -@ 16 -o "$OUT/L1_GEX.probeset.bam" -
+samtools index "$OUT/L1_GEX.probeset.bam"
+
+# 3. Molecules (PB required)
+sbxpress molecules "$OUT/L1_GEX.probeset.bam" --flex --output "$OUT/L1_GEX.molecules.bam"
+samtools index "$OUT/L1_GEX.molecules.bam"
+
+# 4a. Single sample
+sbxpress matrix "$OUT/L1_GEX.molecules.bam" --output "$OUT/outs" \
+  --features "$OUT/reference/probe_set_genes.tsv" --cell-barcodes "$REF/737K-flex-v2.txt.gz"
+sbxpress cells "$OUT/outs/raw_feature_bc_matrix.h5" --output "$OUT/outs"
+
+# 4b. Multiplexed samples (config.csv [samples] section)
+sbxpress probe-demux "$OUT/L1_GEX.molecules.bam" \
+  --probe-sample-sheet "$REF/config.csv" --output "$OUT/demux"
+scripts/run_flex_multi.sh "$OUT/L1_GEX.molecules.bam" "$OUT/demux" "$OUT/results"
+```
+
+Illumina Flex input (`sbxpress illumina`) carries no probe barcode, so it supports
+single-sample counting only. For the full multi-library CAT06 run (GEX + CRISPR),
+see `scripts/run_full_cat06.sh`.
 
 ## 7. CAT Tagseq & Targeted Expression Mode
 
-Targeted assays, high-depth bulk/pooled samples, CRISPR guide capture, and CAT Tagseq datasets require specialized molecule deduplication and cell-calling rules due to oversubscribed UMI space and pre-determined cell lists.
+Targeted assays, high-depth bulk/pooled samples, and CAT Tagseq datasets require specialized molecule deduplication and cell-calling rules due to oversubscribed UMI space and pre-determined cell lists. (CRISPR guide capture at single-cell depth does *not* use `--tagseq`; see `scripts/run_flex_multi.sh`.)
 
-### Fractional UMI Collision Resolution (`sbxpress molecules --tagseq`)
+### UMI collision policies (`sbxpress molecules`)
 
-In high-depth bulk or targeted TagSeq samples (e.g., 2–25M reads/sample into a 12bp UMI space), UMI oversubscription can cause distinct molecules to share the same UMI sequence. Standard winner-take-all collision resolution discards minor colliding genes. 
+In high-depth bulk or targeted TagSeq samples (e.g., 2–25M reads/sample into a 12bp UMI space), distinct molecules from different genes often share a UMI by chance. `--tagseq` therefore (a) skips 1-mismatch UMI correction, since two real UMIs 1bp apart are common at this depth, and (b) does not discard the minor gene in a collision. Three collision policies exist:
 
-Pass `--tagseq` to `sbxpress molecules` to enable **fractional collision resolution** by default (or use `--fractional-collisions` explicitly). For colliding genes $g_1 \dots g_k$ with read counts $r_1 \dots r_k$, fractional resolution assigns proportional credit $w_i = r_i / \sum r$, tagging records with `ZG:Z:fractional` and emitting floating-point weight tags `ZW:f:<weight>`:
+| Flags | Collision outcome (`XW`) | Matrix contribution |
+|---|---|---|
+| default (single-cell) | `W` winner / `L` loser, `T` on exact tie | 1 for the winner, 0 otherwise |
+| `--tagseq` (fractional by default) or `--fractional-collisions` | `F` for every gene | `w_i = r_i / Σr` (read support), weights of one collision sum to 1 |
+| `--tagseq --no-fractional-collisions` | `S` for every gene | 1 for every gene |
+
+Fractional molecules carry the weight as `ZW:f` on their reads; the representative read is flagged `xf:25` like any counted molecule. `ZG` is never touched (it is `annotate`'s terminal gene call). In the metrics JSON, a fractional collision adds 1 to `molecules_counted` and one per gene to `collision_molecules_fractional`. `--fractional-collisions` also works without `--tagseq` (UMI correction stays on).
 
 ```bash
 sbxpress molecules "$OUT/annotation/sample.annotated.bam" \
   --tagseq \
-  --fractional-collisions \
   --output "$OUT/molecules/sample.molecules.bam"
 ```
-
-To explicitly enforce winner-take-all collision resolution in `--tagseq` mode, pass `--no-fractional-collisions`.
 
 ### Real & Float32 Expression Matrices (`sbxpress matrix`)
 
@@ -250,6 +283,8 @@ When `sbxpress matrix` (`cr-bam-to-mtx`) encounters `ZW:f` floating-point weight
 - **HDF5 Matrix**: Emits 32-bit floating-point datasets (`f32`) for `data` in `raw_feature_bc_matrix.h5`.
 
 Standard integer runs without fractional weights continue emitting exact integer MTX and 32-bit unsigned integer (`u32`) HDF5 datasets.
+
+`sbxpress cells` reads either type. Fractional values are kept in the filtered matrix; OrdMag and EmptyDrops, which need whole-UMI totals, use per-barcode and per-feature sums rounded to the nearest integer.
 
 ### Whitelist Cell Calling (`sbxpress cells --tagseq-barcodes`)
 

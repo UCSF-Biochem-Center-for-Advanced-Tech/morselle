@@ -30,7 +30,7 @@ pub(crate) struct Shared<'a> {
     /// when `demuxer` is `None`.
     pub gex_by_sample: &'a [bool],
     pub whitelist: Option<&'a Whitelist>,
-    /// 10x Flex probe-barcode whitelist (FLEX_SUPPORT_PLAN.md Phase 1). `None`
+    /// 10x Flex probe-barcode whitelist (docs/archive/FLEX_SUPPORT_PLAN.md Phase 1). `None`
     /// unless `--probe-barcode-whitelist` was given — zero cost otherwise.
     pub probe_wl: Option<&'a ProbeWhitelist>,
     pub cb_len: usize,

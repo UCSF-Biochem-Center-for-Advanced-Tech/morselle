@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Build sbxpress mapping-analysis presentation as a .pptx file.
-Covers slides from PRESENTATION_PLAN.md that are marked presentable now.
+Covers slides from docs/archive/PRESENTATION_PLAN.md that are marked presentable now.
 
 Usage: python3 scripts/build_presentation.py [--out FILE]
 """

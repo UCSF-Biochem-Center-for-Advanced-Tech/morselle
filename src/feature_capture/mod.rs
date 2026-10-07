@@ -1,4 +1,4 @@
-//! 10x Feature Barcoding read -> feature assignment (FLEX_SUPPORT_PLAN.md
+//! 10x Feature Barcoding read -> feature assignment (docs/archive/FLEX_SUPPORT_PLAN.md
 //! Phase 4, generalized per the plan's own amendment).
 //!
 //! Not CRISPR- or Flex-specific by design: 10x's `<anchor>(BC)` read

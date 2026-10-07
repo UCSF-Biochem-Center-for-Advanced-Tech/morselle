@@ -187,7 +187,7 @@ fn single_insertion_variants(seq: &[u8]) -> impl Iterator<Item = Vec<u8>> + '_ {
 /// the window starts -- real SBX errors are dominated by single-base
 /// indels, not substitutions (see `probe_set.rs`'s
 /// `single_deletion_variants`/`single_insertion_variants` doc comments and
-/// FLEX_SUPPORT_PLAN.md's real error-profile finding: 85.2% deletion, 9.2%
+/// docs/archive/FLEX_SUPPORT_PLAN.md's real error-profile finding: 85.2% deletion, 9.2%
 /// insertion of recoverable Hamming-miss shapes). Falls back to trying each
 /// single-deletion/-insertion variant of the anchor prefix at every offset
 /// too, mirroring that same fix. Real measured cost of the original,

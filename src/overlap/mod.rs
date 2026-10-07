@@ -1,4 +1,4 @@
-//! Paired-end overlap merging for Illumina reads (plan: OVERLAP_PLAN.md §Phase 1).
+//! Paired-end overlap merging for Illumina reads (plan: docs/archive/OVERLAP_PLAN.md §Phase 1).
 //!
 //! A port of HTStream's `hts_Overlapper` seed-and-extend algorithm, adapted for
 //! the long-R1 10x GEX geometry.

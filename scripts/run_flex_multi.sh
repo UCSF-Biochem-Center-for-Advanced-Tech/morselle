@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# FLEX_SUPPORT_PLAN.md Phase 3 (GEX) + Phase 5 (CRISPR) per-sample counting.
+# docs/archive/FLEX_SUPPORT_PLAN.md Phase 3 (GEX) + Phase 5 (CRISPR) per-sample counting.
 #
 # Zero new Rust for the GEX side -- loops the existing, fully general
 # `sbxpress matrix` and `sbxpress cells` commands over each sample's Phase 2
@@ -28,7 +28,7 @@
 # molecules for that shared GEM.
 #
 # CRISPR identity piggybacks on GEX-defined cell identity (matching real 10x
-# biology, and FLEX_SUPPORT_PLAN.md Phase 5's own design): the CRISPR side
+# biology, and docs/archive/FLEX_SUPPORT_PLAN.md Phase 5's own design): the CRISPR side
 # uses each sample's Phase 3 GEX-*called* cell list (`gex_outs/filtered_barcodes.csv`,
 # barcode column only -- not the pre-cell-calling probe-demux list), so a
 # sample with no GEX cells called gets no CRISPR counting either.

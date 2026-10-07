@@ -61,7 +61,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         None => None,
     };
 
-    // Load the Flex probe-barcode whitelist (FLEX_SUPPORT_PLAN.md Phase 1), if
+    // Load the Flex probe-barcode whitelist (docs/archive/FLEX_SUPPORT_PLAN.md Phase 1), if
     // provided. `--minimap2` is required (clap `requires`) since PR/PB ride the
     // same FASTQ-comment -> SAM-tag mechanism as CR/CB.
     let probe_wl = match &cli.params.probe_barcode_whitelist {

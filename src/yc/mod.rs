@@ -1,4 +1,4 @@
-//! Roche SBX `YC` duplex-consensus tag — encode and decode (plan: OVERLAP_PLAN.md §Phase 2).
+//! Roche SBX `YC` duplex-consensus tag — encode and decode (plan: docs/archive/OVERLAP_PLAN.md §Phase 2).
 //!
 //! A `YC` tag rides along with a duplex consensus read (as a BAM auxiliary tag,
 //! or as a FASTQ comment field) and encodes losslessly how the consensus differs

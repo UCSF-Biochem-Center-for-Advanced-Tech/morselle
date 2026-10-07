@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Full-dataset, full-depth CAT06 Flex + CRISPR run (FLEX_SUPPORT_PLAN.md
+# Full-dataset, full-depth CAT06 Flex + CRISPR run (docs/archive/FLEX_SUPPORT_PLAN.md
 # Phase 6's remaining literal bar: all real raw shards, not the 800k-read
 # validation sample used through Phase 6's own results section).
 #

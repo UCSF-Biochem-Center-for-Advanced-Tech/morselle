@@ -12,7 +12,7 @@ pub const SYNTHETIC_CONTIG_LEN: i64 = 1_000_000;
 /// Center of the probe-sequence window, in bp from the start of the emitted
 /// R2 read.
 ///
-/// Was empirically 69 (FLEX_SUPPORT_PLAN.md Phase 6) when `extract()` bounded
+/// Was empirically 69 (docs/archive/FLEX_SUPPORT_PLAN.md Phase 6) when `extract()` bounded
 /// R2's far end with the generic Illumina adapter search, which mostly
 /// failed to find anything (13.5% hit rate on real data) and fell back to
 /// the raw read's own end -- an arbitrary, per-read-variable amount of

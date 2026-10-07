@@ -30,3 +30,6 @@ __pycache__/
 # Locally generated presentation/report artifacts
 outputs/
 /presentations/
+
+# Per-user Claude Code permissions (machine-specific, not project config)
+.claude/settings.local.json

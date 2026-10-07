@@ -118,7 +118,7 @@ pub struct WhitelistMetrics {
     pub corrected_hamming2: u64,
 }
 
-/// Flex probe-barcode location/identification metrics (FLEX_SUPPORT_PLAN.md
+/// Flex probe-barcode location/identification metrics (docs/archive/FLEX_SUPPORT_PLAN.md
 /// Phase 1; present only when `--probe-barcode-whitelist` was given).
 #[derive(Serialize)]
 pub struct ProbeBarcodeMetrics {

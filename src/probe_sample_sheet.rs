@@ -1,4 +1,4 @@
-//! Probe-barcode sample sheet parsing (FLEX_SUPPORT_PLAN.md Phase 2).
+//! Probe-barcode sample sheet parsing (docs/archive/FLEX_SUPPORT_PLAN.md Phase 2).
 //!
 //! Two front-end formats feed one internal model, mirroring `sample_sheet.rs`'s
 //! bclconvert/flat split:

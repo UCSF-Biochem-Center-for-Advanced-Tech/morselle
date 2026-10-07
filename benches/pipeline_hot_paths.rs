@@ -61,7 +61,7 @@ fn gex_read() -> (Vec<u8>, Vec<u8>) {
     (seq, qual)
 }
 
-/// A Flex/CRISPR-shaped read, matching what FLEX_SUPPORT_PLAN.md's Phase 0
+/// A Flex/CRISPR-shaped read, matching what docs/archive/FLEX_SUPPORT_PLAN.md's Phase 0
 /// found empirically: no real homopolymer (orient()'s TailFallback path
 /// fires, ~88% of real Flex reads per the orient_method_profile diagnostic),
 /// then a probe barcode 10bp past the CB+UMI bracket.

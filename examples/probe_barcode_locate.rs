@@ -1,4 +1,4 @@
-//! Phase 0 of FLEX_SUPPORT_PLAN.md: confirm, with the real orient()/extract()
+//! Phase 0 of docs/archive/FLEX_SUPPORT_PLAN.md: confirm, with the real orient()/extract()
 //! code path (not an ad hoc Python k-mer scan), where the 10x Flex probe
 //! barcode and the CRISPR Guide Capture anchor+capture-barcode sit relative to
 //! coordinates `extract()` already computes.

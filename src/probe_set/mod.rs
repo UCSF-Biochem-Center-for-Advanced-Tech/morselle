@@ -1,11 +1,11 @@
-//! 10x Flex probe-set alignment (FLEX_SUPPORT_PLAN.md Phase 6 prerequisite):
+//! 10x Flex probe-set alignment (docs/archive/FLEX_SUPPORT_PLAN.md Phase 6 prerequisite):
 //! assigns a Flex GEX read to a gene by direct lookup of its probe sequence
 //! against the real probe-set reference, **not** genome alignment.
 //!
 //! Flex doesn't sequence free cDNA: each read's payload is (approximately)
 //! one of a fixed, closed set of ~54k known 50bp probe sequences (one of a
 //! few probes per targeted gene — see `Chromium_Human_Transcriptome_Probe_Set*.csv`).
-//! Confirmed empirically this session (see FLEX_SUPPORT_PLAN.md Phase 6):
+//! Confirmed empirically this session (see docs/archive/FLEX_SUPPORT_PLAN.md Phase 6):
 //! full-genome splice-aware alignment of real CAT06 Flex reads found almost
 //! nothing (59 of 1.65M records) — the payload isn't cDNA a genome mapper
 //! can place. This module is the real substitute: a windowed, Hamming-tolerant

@@ -11,7 +11,7 @@
 | License of original code | BSD 3-Clause (see `LICENSE`) |
 | Copyright holder | UCSF Biochem — Center for Advanced Technology (2026) |
 | Supported platforms | Ubuntu/Debian-family Linux, macOS (x86-64 and arm64) |
-| Original source size | ~19,400 lines of Rust across 25 library modules and 12 binaries, plus ~1,500 lines of shell/Python tooling |
+| Original source size | ~19,400 lines of Rust across 25 library modules and 11 binaries, plus ~1,500 lines of shell/Python tooling |
 
 This document describes what the software does, how each stage operates
 algorithmically, what it reads and writes, and every dependency it carries —

@@ -205,7 +205,7 @@ Molecules/matrix/cells ran clean end-to-end too (`sbx10x-molecules` →
 independently worth knowing, unrelated to compression: only 59 of the
 1,649,018 records were real countable molecules (55 genes, 59 barcodes).
 That's expected, not a bug — CAT06 is 10x Flex/CRISPR data, whose R2 is a
-probe-barcode + probe/guide payload (see FLEX_SUPPORT_PLAN.md), not free
+probe-barcode + probe/guide payload (see docs/archive/FLEX_SUPPORT_PLAN.md), not free
 poly-dT cDNA, so splice-aware whole-genome alignment of that payload
 finding almost nothing real is exactly what the architecture predicts.
 This run confirms the mechanics of the full binary chain on real data, but

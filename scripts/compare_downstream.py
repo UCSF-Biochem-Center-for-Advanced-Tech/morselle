@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Compare downstream outputs of the baseline and multimap evaluation arms (mapping.md §4).
+Compare downstream outputs of the baseline and multimap evaluation arms (docs/archive/mapping.md §4).
 
 Reads metrics JSONs and matrix outputs from both arms and the three existing
 CellRanger/sbxpress comparators (Illumina, P5, P7 M2_GEX) and prints a

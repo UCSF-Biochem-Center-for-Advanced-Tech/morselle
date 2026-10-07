@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the two-arm CAT02 M2 mapping evaluation described in mapping.md.
+# Run the two-arm CAT02 M2 mapping evaluation described in docs/archive/mapping.md.
 #
 # Input:  pre-demultiplexed paired Illumina-style R1/R2 FASTQs (sbxpress illumina path)
 # Output: two annotated+counted pipeline runs in OUT_DIR/{baseline,multimap}/

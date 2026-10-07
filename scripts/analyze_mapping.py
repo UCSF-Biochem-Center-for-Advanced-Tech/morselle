@@ -2,7 +2,7 @@
 """
 Descriptive mapping-ambiguity analysis for the two-arm CAT02 M2 evaluation.
 
-Three analyses from mapping.md §3:
+Three analyses from docs/archive/mapping.md §3:
   1. NH-by-length  — primary-record NH=1 fraction by read-length bin and GX status
   2. secondary classification  — per-secondary-hit class by length bin (requires name-sort)
   3. score gaps  — primary/secondary AS and MAPQ differences by length bin (requires name-sort)

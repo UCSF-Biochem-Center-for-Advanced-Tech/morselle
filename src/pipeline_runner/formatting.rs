@@ -89,7 +89,7 @@ pub(crate) fn append_processing_tags(header: &mut Vec<u8>, tags: ProcessingTags)
     }
 }
 
-/// Append the Flex probe-barcode tags (FLEX_SUPPORT_PLAN.md Phase 1).
+/// Append the Flex probe-barcode tags (docs/archive/FLEX_SUPPORT_PLAN.md Phase 1).
 pub(crate) fn append_probe_tags(header: &mut Vec<u8>, raw: &[u8], id: Option<&str>) {
     header.extend_from_slice(b"\tPR:Z:");
     header.extend_from_slice(raw);

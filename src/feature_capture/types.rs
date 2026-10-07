@@ -155,7 +155,7 @@ pub struct Cli {
     pub capture_max_mm: u32,
 
     /// Max bp from the read start searched for the anchor. Default is wider
-    /// than the plan's original placeholder (5): FLEX_SUPPORT_PLAN.md's
+    /// than the plan's original placeholder (5): docs/archive/FLEX_SUPPORT_PLAN.md's
     /// Phase 0 empirically confirmed the real CAT06 CRISPR anchor sits at
     /// emitted-R2 offset ~10 with some jitter (46,938 vs. 2,301 hits at the
     /// next-best offset) -- this default covers that with real margin for
