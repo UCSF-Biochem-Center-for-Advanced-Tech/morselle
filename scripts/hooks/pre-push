@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Refuse to push unless the quick gate passes (CI runs the full one).
+# Enable once per clone:  git config core.hooksPath scripts/hooks
+# Bypass in an emergency: git push --no-verify
+set -euo pipefail
+exec "$(git rev-parse --show-toplevel)/scripts/check.sh" --quick

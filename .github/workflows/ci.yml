@@ -1,0 +1,27 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Tools
+        run: sudo apt-get update && sudo apt-get install -y shellcheck cmake
+      # The same single gate used locally; see scripts/check.sh for what
+      # each step guards against.
+      - name: scripts/check.sh
+        run: scripts/check.sh
