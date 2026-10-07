@@ -1,0 +1,192 @@
+{
+  "flex": {
+    "bam": "2b0a30191649370b",
+    "counters": {
+      "collision_groups": 772,
+      "collision_molecules_fractional": 0,
+      "collision_molecules_lost": 793,
+      "collision_molecules_shared": 0,
+      "collision_molecules_won": 623,
+      "collision_ties": 149,
+      "corrected_umi_nodes": 3917,
+      "eligible_records": 11491,
+      "molecules_before_gene_resolution": 3917,
+      "molecules_counted": 2759,
+      "no_sample_records": 244,
+      "raw_cell_gene_umis": 4233,
+      "records": 12042,
+      "representatives_tagged": 2759,
+      "umi_nodes_collapsed": 316
+    },
+    "matrix": "5ba426233b0a2ec1"
+  },
+  "flex_sharded": {
+    "bam": "f4ac8a620aa7e939",
+    "counters": {
+      "collision_groups": 772,
+      "collision_molecules_fractional": 0,
+      "collision_molecules_lost": 793,
+      "collision_molecules_shared": 0,
+      "collision_molecules_won": 623,
+      "collision_ties": 149,
+      "corrected_umi_nodes": 3917,
+      "eligible_records": 11491,
+      "molecules_before_gene_resolution": 3917,
+      "molecules_counted": 2759,
+      "no_sample_records": 244,
+      "raw_cell_gene_umis": 4233,
+      "records": 12042,
+      "representatives_tagged": 2759,
+      "umi_nodes_collapsed": 316
+    },
+    "matrix": "5ba426233b0a2ec1"
+  },
+  "fractional_single_cell": {
+    "bam": "efe8f644bc379d55",
+    "counters": {
+      "collision_groups": 838,
+      "collision_molecules_fractional": 1980,
+      "collision_molecules_lost": 0,
+      "collision_molecules_shared": 0,
+      "collision_molecules_won": 0,
+      "collision_ties": 0,
+      "corrected_umi_nodes": 3939,
+      "eligible_records": 11736,
+      "molecules_before_gene_resolution": 3939,
+      "molecules_counted": 2797,
+      "no_sample_records": 0,
+      "raw_cell_gene_umis": 4242,
+      "records": 12034,
+      "representatives_tagged": 3939,
+      "umi_nodes_collapsed": 303
+    },
+    "matrix": "18f856bb37fec268"
+  },
+  "gex_indexed": {
+    "bam": "060668c26ab208a9",
+    "counters": {
+      "collision_groups": 838,
+      "collision_molecules_fractional": 0,
+      "collision_molecules_lost": 866,
+      "collision_molecules_shared": 0,
+      "collision_molecules_won": 653,
+      "collision_ties": 185,
+      "corrected_umi_nodes": 3939,
+      "eligible_records": 11736,
+      "molecules_before_gene_resolution": 3939,
+      "molecules_counted": 2612,
+      "no_sample_records": 0,
+      "raw_cell_gene_umis": 4242,
+      "records": 12034,
+      "representatives_tagged": 2612,
+      "umi_nodes_collapsed": 303
+    },
+    "matrix": "33271a01cf45b9cf"
+  },
+  "gex_saturation": {
+    "bam": "a97086599e624f8f",
+    "counters": {
+      "collision_groups": 838,
+      "collision_molecules_fractional": 0,
+      "collision_molecules_lost": 866,
+      "collision_molecules_shared": 0,
+      "collision_molecules_won": 653,
+      "collision_ties": 185,
+      "corrected_umi_nodes": 3939,
+      "eligible_records": 11736,
+      "molecules_before_gene_resolution": 3939,
+      "molecules_counted": 2612,
+      "no_sample_records": 0,
+      "raw_cell_gene_umis": 4242,
+      "records": 12034,
+      "representatives_tagged": 2612,
+      "umi_nodes_collapsed": 303
+    },
+    "matrix": "33271a01cf45b9cf",
+    "saturation": "b3d125bb3fac906c"
+  },
+  "gex_serial": {
+    "bam": "a97086599e624f8f",
+    "counters": {
+      "collision_groups": 838,
+      "collision_molecules_fractional": 0,
+      "collision_molecules_lost": 866,
+      "collision_molecules_shared": 0,
+      "collision_molecules_won": 653,
+      "collision_ties": 185,
+      "corrected_umi_nodes": 3939,
+      "eligible_records": 11736,
+      "molecules_before_gene_resolution": 3939,
+      "molecules_counted": 2612,
+      "no_sample_records": 0,
+      "raw_cell_gene_umis": 4242,
+      "records": 12034,
+      "representatives_tagged": 2612,
+      "umi_nodes_collapsed": 303
+    },
+    "matrix": "33271a01cf45b9cf"
+  },
+  "gex_sharded": {
+    "bam": "385433b98de14bd7",
+    "counters": {
+      "collision_groups": 838,
+      "collision_molecules_fractional": 0,
+      "collision_molecules_lost": 866,
+      "collision_molecules_shared": 0,
+      "collision_molecules_won": 653,
+      "collision_ties": 185,
+      "corrected_umi_nodes": 3939,
+      "eligible_records": 11736,
+      "molecules_before_gene_resolution": 3939,
+      "molecules_counted": 2612,
+      "no_sample_records": 0,
+      "raw_cell_gene_umis": 4242,
+      "records": 12034,
+      "representatives_tagged": 2612,
+      "umi_nodes_collapsed": 303
+    },
+    "matrix": "33271a01cf45b9cf"
+  },
+  "tagseq_fractional": {
+    "bam": "db89f3872bf0526f",
+    "counters": {
+      "collision_groups": 845,
+      "collision_molecules_fractional": 1994,
+      "collision_molecules_lost": 0,
+      "collision_molecules_shared": 0,
+      "collision_molecules_won": 0,
+      "collision_ties": 0,
+      "corrected_umi_nodes": 4242,
+      "eligible_records": 11736,
+      "molecules_before_gene_resolution": 4242,
+      "molecules_counted": 3093,
+      "no_sample_records": 0,
+      "raw_cell_gene_umis": 4242,
+      "records": 12034,
+      "representatives_tagged": 4242,
+      "umi_nodes_collapsed": 0
+    },
+    "matrix": "0888e09de3569412"
+  },
+  "tagseq_shared": {
+    "bam": "f3668255f9617ac7",
+    "counters": {
+      "collision_groups": 845,
+      "collision_molecules_fractional": 0,
+      "collision_molecules_lost": 0,
+      "collision_molecules_shared": 1994,
+      "collision_molecules_won": 0,
+      "collision_ties": 0,
+      "corrected_umi_nodes": 4242,
+      "eligible_records": 11736,
+      "molecules_before_gene_resolution": 4242,
+      "molecules_counted": 4242,
+      "no_sample_records": 0,
+      "raw_cell_gene_umis": 4242,
+      "records": 12034,
+      "representatives_tagged": 4242,
+      "umi_nodes_collapsed": 0
+    },
+    "matrix": "14551d8a9c0d8ac0"
+  }
+}
