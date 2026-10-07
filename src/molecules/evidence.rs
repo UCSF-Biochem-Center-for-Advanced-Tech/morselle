@@ -1,4 +1,6 @@
-use std::collections::HashMap;
+// FxHash: these maps hold billions of fixed-size integer keys at real
+// scale; SipHash's DoS resistance buys nothing here and cost ~6% of runtime.
+use rustc_hash::FxHashMap as HashMap;
 use std::path::Path;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
@@ -10,8 +12,7 @@ use rust_htslib::bam::{self, Read};
 use tracing::info;
 
 use super::helpers::{
-    aligned_bases, aux_string, better, choose_gene, intern_sample, read_hash,
-    record_identity, shard_hash,
+    aligned_bases, better, intern_sample, read_hash, record_identity, shard_hash, MoleculeTags,
 };
 use super::types::{Evidence, Metrics, RawKey, Dna, NO_SAMPLE};
 
@@ -54,11 +55,10 @@ pub fn collate<P: AsRef<Path>>(inputs: &[P], threads: usize, shard_paths: &[P]) 
         for result in reader.records() {
             let record = result
                 .with_context(|| format!("reading BAM in collate pass ({})", input.display()))?;
-            let cb = aux_string(&record, b"CB");
-            let pb = aux_string(&record, b"PB");
-            let idx = match &cb {
+            let tags = MoleculeTags::read(&record);
+            let idx = match tags.cb {
                 Some(cb) => {
-                    shard_hash(cb.as_bytes(), pb.as_deref().map(str::as_bytes)) as usize % shards
+                    shard_hash(cb.as_bytes(), tags.pb.map(str::as_bytes)) as usize % shards
                 }
                 None => 0,
             };
@@ -92,11 +92,11 @@ pub fn collect_evidence(
     let mut reader =
         bam::Reader::from_path(path).with_context(|| format!("opening {}", path.display()))?;
     reader.set_threads(threads)?;
-    let mut evidence = HashMap::<RawKey, Evidence>::new();
+    let mut evidence = HashMap::<RawKey, Evidence>::default();
     let mut genes = Vec::<String>::new();
-    let mut gene_ids = HashMap::<String, u32>::new();
+    let mut gene_ids = HashMap::<String, u32>::default();
     let mut samples = Vec::<String>::new();
-    let mut sample_ids = HashMap::<String, u32>::new();
+    let mut sample_ids = HashMap::<String, u32>::default();
     eprintln!("[sbxpress molecules] phase=evidence_collect mode=serial start");
     for (ordinal, result) in reader.records().enumerate() {
         let record = result.context("reading BAM in evidence pass")?;
@@ -110,35 +110,33 @@ pub fn collect_evidence(
         if record.is_unmapped() || record.is_secondary() || record.is_supplementary() {
             continue;
         }
-        let Some(cell) = aux_string(&record, b"CB").and_then(|v| Dna::pack(&v)) else {
+        let tags = MoleculeTags::read(&record);
+        let Some(cell) = tags.cb.and_then(Dna::pack) else {
             continue;
         };
-        let Some(umi) = aux_string(&record, b"UR")
-            .or_else(|| aux_string(&record, b"UB"))
-            .and_then(|v| Dna::pack(&v))
-        else {
+        let Some(umi) = tags.umi().and_then(Dna::pack) else {
             continue;
         };
-        let Some((gene, _name)) = choose_gene(&record) else {
+        let Some((gene, _name)) = tags.gene() else {
             continue;
         };
         // PB is a Flex-only identity component. Tag-seq (and ordinary
         // non-Flex assays) deliberately use CB alone and must not be gated on
         // a PB tag that their chemistry never produces.
-        let sample = if let Some(pb) = aux_string(&record, b"PB").filter(|v| !v.is_empty()) {
-            intern_sample(&pb, &mut samples, &mut sample_ids)
+        let sample = if let Some(pb) = tags.pb.filter(|v| !v.is_empty()) {
+            intern_sample(pb, &mut samples, &mut sample_ids)
         } else if !require_pb {
             NO_SAMPLE
         } else {
             metrics.no_sample_records += 1;
             continue;
         };
-        let gene = if let Some(&id) = gene_ids.get(&gene) {
+        let gene = if let Some(&id) = gene_ids.get(gene) {
             id
         } else {
             let id = genes.len() as u32;
-            genes.push(gene.clone());
-            gene_ids.insert(gene, id);
+            genes.push(gene.to_owned());
+            gene_ids.insert(gene.to_owned(), id);
             id
         };
         metrics.eligible_records += 1;
@@ -230,11 +228,11 @@ pub fn collect_region(
     reader
         .fetch((tid, start, end))
         .with_context(|| format!("fetching tid {tid}:{start}-{end}"))?;
-    let mut evidence = HashMap::<RawKey, Evidence>::new();
+    let mut evidence = HashMap::<RawKey, Evidence>::default();
     let mut genes = Vec::<String>::new();
-    let mut gene_ids = HashMap::<String, u32>::new();
+    let mut gene_ids = HashMap::<String, u32>::default();
     let mut samples = Vec::<String>::new();
-    let mut sample_ids = HashMap::<String, u32>::new();
+    let mut sample_ids = HashMap::<String, u32>::default();
     let mut records = 0_u64;
     let mut eligible_records = 0_u64;
     let mut no_sample_records = 0_u64;
@@ -249,32 +247,30 @@ pub fn collect_region(
         if record.is_unmapped() || record.is_secondary() || record.is_supplementary() {
             continue;
         }
-        let Some(cell) = aux_string(&record, b"CB").and_then(|v| Dna::pack(&v)) else {
+        let tags = MoleculeTags::read(&record);
+        let Some(cell) = tags.cb.and_then(Dna::pack) else {
             continue;
         };
-        let Some(umi) = aux_string(&record, b"UR")
-            .or_else(|| aux_string(&record, b"UB"))
-            .and_then(|v| Dna::pack(&v))
-        else {
+        let Some(umi) = tags.umi().and_then(Dna::pack) else {
             continue;
         };
-        let Some((gene, _name)) = choose_gene(&record) else {
+        let Some((gene, _name)) = tags.gene() else {
             continue;
         };
-        let sample = if let Some(pb) = aux_string(&record, b"PB").filter(|v| !v.is_empty()) {
-            intern_sample(&pb, &mut samples, &mut sample_ids)
+        let sample = if let Some(pb) = tags.pb.filter(|v| !v.is_empty()) {
+            intern_sample(pb, &mut samples, &mut sample_ids)
         } else if !require_pb {
             NO_SAMPLE
         } else {
             no_sample_records += 1;
             continue;
         };
-        let gene = if let Some(&id) = gene_ids.get(&gene) {
+        let gene = if let Some(&id) = gene_ids.get(gene) {
             id
         } else {
             let id = genes.len() as u32;
-            genes.push(gene.clone());
-            gene_ids.insert(gene, id);
+            genes.push(gene.to_owned());
+            gene_ids.insert(gene.to_owned(), id);
             id
         };
         eligible_records += 1;
@@ -373,9 +369,9 @@ pub fn collect_evidence_indexed(
     })?;
     eprintln!("[sbxpress molecules] phase=evidence_collect mode=indexed complete");
     let mut genes = Vec::<String>::new();
-    let mut gene_ids = HashMap::<String, u32>::new();
+    let mut gene_ids = HashMap::<String, u32>::default();
     let mut samples = Vec::<String>::new();
-    let mut sample_ids = HashMap::<String, u32>::new();
+    let mut sample_ids = HashMap::<String, u32>::default();
     let mut remaps = Vec::with_capacity(parts.len());
     let mut sample_remaps = Vec::with_capacity(parts.len());
     for part in &parts {
@@ -425,7 +421,7 @@ pub fn collect_evidence_indexed(
             .zip(remaps.into_par_iter())
             .zip(sample_remaps.into_par_iter())
             .map(|((part, remap), sample_remap)| {
-                let mut map = HashMap::with_capacity(part.evidence.len());
+                let mut map = HashMap::with_capacity_and_hasher(part.evidence.len(), Default::default());
                 for (mut key, item) in part.evidence {
                     key.gene = remap[key.gene as usize];
                     if key.sample != NO_SAMPLE {

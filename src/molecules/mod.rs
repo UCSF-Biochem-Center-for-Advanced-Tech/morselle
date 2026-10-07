@@ -1,9 +1,12 @@
 #[cfg(test)]
 mod collision_tests;
+mod aux_write;
 pub mod collisions;
 pub mod dedup;
 pub mod evidence;
 pub mod helpers;
+#[cfg(test)]
+mod helpers_tests;
 pub mod pipeline;
 #[cfg(test)]
 mod realistic_tests;

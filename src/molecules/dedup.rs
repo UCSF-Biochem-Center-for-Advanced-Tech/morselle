@@ -3,7 +3,11 @@
 //! Restored from the pre-0.5.7 `sbx10x-molecules` implementation (commit
 //! `4d42a18`), with fractional collision resolution layered on top as an
 //! opt-in fourth policy. See `resolve_collisions` for the policy table.
-use std::collections::HashMap;
+// FxHash: these maps hold billions of fixed-size integer keys at real
+// scale; SipHash's DoS resistance buys nothing here and cost ~6% of runtime.
+use rustc_hash::FxHashMap as HashMap;
+use std::collections::HashMap as StdHashMap;
+use std::hash::BuildHasher;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -13,9 +17,9 @@ use tracing::info;
 use super::saturation::Saturation;
 use super::types::{Decision, Dna, Evidence, Metrics, RawKey};
 
-pub fn correct_group(
+pub fn correct_group<S: BuildHasher>(
     mut keys: Vec<RawKey>,
-    evidence: &HashMap<RawKey, Evidence>,
+    evidence: &StdHashMap<RawKey, Evidence, S>,
 ) -> HashMap<RawKey, RawKey> {
     keys.sort_by_key(|key| (std::cmp::Reverse(evidence[key].reads), key.umi));
     // Every raw UMI in a (cell, gene) group is already distinct (RawKey
@@ -26,7 +30,7 @@ pub fn correct_group(
     // is heavily skewed toward highly expressed genes, where n^2 previously
     // dominated the whole molecules stage.
     let by_umi: HashMap<Dna, RawKey> = keys.iter().map(|&k| (k.umi, k)).collect();
-    let mut roots = HashMap::with_capacity(keys.len());
+    let mut roots = HashMap::with_capacity_and_hasher(keys.len(), Default::default());
     for &child in &keys {
         let mut parent = child;
         let threshold = evidence[&child].reads.saturating_mul(2).saturating_sub(1);
@@ -88,8 +92,8 @@ fn rank(item: &Evidence) -> u32 {
 /// in a 12bp space by chance often enough that "low-count neighbour =
 /// sequencing error" no longer holds. Trade-off: true 1bp UMI errors are not
 /// corrected either, so counts trend slightly high rather than low.
-fn correct_umis(
-    evidence: &HashMap<RawKey, Evidence>,
+fn correct_umis<S: BuildHasher + Sync>(
+    evidence: &StdHashMap<RawKey, Evidence, S>,
     groups: HashMap<(Dna, u32, u32), Vec<RawKey>>,
     workers: usize,
     tagseq: bool,
@@ -119,7 +123,7 @@ fn correct_umis(
         return groups
             .into_values()
             .map(|keys| correct_group(keys, evidence))
-            .fold(HashMap::new(), merge_roots);
+            .fold(HashMap::default(), merge_roots);
     }
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
@@ -145,16 +149,16 @@ fn correct_umis(
                 }
                 roots
             })
-            .reduce(HashMap::new, merge_roots)
+            .reduce(HashMap::default, merge_roots)
     })
 }
 
 /// Sum each corrected root's read support and pick its representative read.
-fn aggregate_molecules(
-    evidence: &HashMap<RawKey, Evidence>,
+fn aggregate_molecules<S: BuildHasher>(
+    evidence: &StdHashMap<RawKey, Evidence, S>,
     roots: &HashMap<RawKey, RawKey>,
 ) -> HashMap<RawKey, Molecule> {
-    let mut molecules = HashMap::<RawKey, Molecule>::new();
+    let mut molecules = HashMap::<RawKey, Molecule>::default();
     for (&key, item) in evidence {
         let root = roots[&key];
         molecules
@@ -181,8 +185,10 @@ fn aggregate_molecules(
     molecules
 }
 
-pub fn build_decisions(
-    evidence: &HashMap<RawKey, Evidence>,
+/// `evidence` may use any hasher (callers and tests pass std `HashMap`s);
+/// every internal table is FxHash.
+pub fn build_decisions<S: BuildHasher + Sync>(
+    evidence: &StdHashMap<RawKey, Evidence, S>,
     metrics: &mut Metrics,
     saturation_interval: Option<u64>,
     workers: usize,
@@ -195,7 +201,7 @@ pub fn build_decisions(
     // map (keyed on UMI alone within a group) silently overwrite one
     // sample's evidence with another's whenever two samples' reads for the
     // same cell+gene happen to share a UMI value.
-    let mut groups = HashMap::<(Dna, u32, u32), Vec<RawKey>>::new();
+    let mut groups = HashMap::<(Dna, u32, u32), Vec<RawKey>>::default();
     for &key in evidence.keys() {
         groups
             .entry((key.cell, key.sample, key.gene))

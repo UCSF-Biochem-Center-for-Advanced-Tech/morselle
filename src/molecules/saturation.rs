@@ -1,4 +1,6 @@
-use std::collections::HashMap;
+// FxHash: these maps hold billions of fixed-size integer keys at real
+// scale; SipHash's DoS resistance buys nothing here and cost ~6% of runtime.
+use rustc_hash::FxHashMap as HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -28,10 +30,10 @@ impl Saturation {
         Self {
             total_reads,
             interval,
-            cells: HashMap::new(),
+            cells: HashMap::default(),
             per_cell: Vec::new(),
             molecule_events: vec![0; points],
-            gene_min_hash: HashMap::new(),
+            gene_min_hash: HashMap::default(),
         }
     }
 

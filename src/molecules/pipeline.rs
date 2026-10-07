@@ -6,7 +6,9 @@
 //! Restored from the pre-0.5.7 implementation (commit `4d42a18`). `ZG` is
 //! never written here: it belongs to `annotate` (terminal gene call used to
 //! resolve multi-gene `GX`) and is read back by `choose_gene`.
-use std::collections::HashMap;
+// FxHash: these maps hold billions of fixed-size integer keys at real
+// scale; SipHash's DoS resistance buys nothing here and cost ~6% of runtime.
+use rustc_hash::FxHashMap as HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -14,11 +16,12 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use rayon::prelude::*;
-use rust_htslib::bam::{self, record::Aux, Read};
+use rust_htslib::bam::{self, Read};
 
 use super::dedup::build_decisions;
 use super::evidence::{collate, collect_evidence};
-use super::helpers::{aux_string, choose_gene, record_identity};
+use super::aux_write::{append_char, append_f32, append_i32, append_u32, remove_tag, replace_str};
+use super::helpers::{record_identity, MoleculeTags};
 use super::types::{merge_metrics, Decision, Dna, Metrics, RawKey, NO_SAMPLE};
 
 /// Settings shared by the unsharded and sharded write paths.
@@ -39,25 +42,17 @@ pub struct KeyTables<'a> {
     pub sample_ids: &'a HashMap<String, u32>,
 }
 
-fn replace_string(record: &mut bam::Record, tag: &[u8; 2], value: &str) -> Result<()> {
-    let _ = record.remove_aux(tag);
-    record.push_aux(tag, Aux::String(value))?;
-    Ok(())
-}
-
-fn record_key(record: &bam::Record, flex: bool, tables: &KeyTables) -> Option<RawKey> {
+fn record_key(record: &bam::Record, tags: &MoleculeTags, flex: bool, tables: &KeyTables) -> Option<RawKey> {
     if record.is_unmapped() || record.is_secondary() || record.is_supplementary() {
         return None;
     }
-    let cell = aux_string(record, b"CB").and_then(|v| Dna::pack(&v))?;
-    let umi = aux_string(record, b"UR")
-        .or_else(|| aux_string(record, b"UB"))
-        .and_then(|v| Dna::pack(&v))?;
-    let gene = choose_gene(record).and_then(|(g, _)| tables.gene_ids.get(&g).copied())?;
+    let cell = tags.cb.and_then(Dna::pack)?;
+    let umi = tags.umi().and_then(Dna::pack)?;
+    let gene = tags.gene().and_then(|(g, _)| tables.gene_ids.get(g).copied())?;
     let sample = if flex {
-        aux_string(record, b"PB")
+        tags.pb
             .filter(|v| !v.is_empty())
-            .and_then(|pb| tables.sample_ids.get(&pb).copied())?
+            .and_then(|pb| tables.sample_ids.get(pb).copied())?
     } else {
         NO_SAMPLE
     };
@@ -75,32 +70,41 @@ fn tag_record(
     tables: &KeyTables,
     metrics: &mut Metrics,
 ) -> Result<()> {
-    let key = record_key(record, flex, tables);
-    for tag in [b"xf", b"XV", b"XW", b"ZW"] {
-        let _ = record.remove_aux(tag);
+    // Everything read from the tags is resolved (and copied where needed)
+    // before the record is mutated below.
+    let tags = MoleculeTags::read(record);
+    let key = record_key(record, &tags, flex, tables);
+    let multi_gene_name = match tags.gx {
+        Some(gx) if gx.contains(';') => Some(tags.gene().map(|(_, name)| name.to_owned())),
+        _ => None,
+    };
+    let has_output_tags = tags.has_output_tags;
+    if has_output_tags {
+        for tag in [b"xf", b"XV", b"XW", b"ZW"] {
+            remove_tag(record, tag);
+        }
     }
     let Some((key, decision)) = key.and_then(|key| decisions.get(&key).map(|d| (key, d))) else {
         return Ok(());
     };
-    replace_string(record, b"UB", &decision.corrected.unpack())?;
+    replace_str(record, b"UB", &decision.corrected.unpack())?;
     // A unique ZG terminal call can resolve a multi-gene GX. Materialize
     // that decision so counted representatives satisfy the single-GX
     // invariant expected by cr-bam-to-mtx.
-    if aux_string(record, b"GX").is_some_and(|gx| gx.contains(';')) {
+    if let Some(name) = multi_gene_name {
         let selected = &tables.genes[key.gene as usize];
-        let selected_name = choose_gene(record)
-            .map(|(_, name)| name)
-            .unwrap_or_else(|| selected.clone());
-        replace_string(record, b"GX", selected)?;
-        replace_string(record, b"GN", &selected_name)?;
+        let selected_name = name.unwrap_or_else(|| selected.clone());
+        replace_str(record, b"GX", selected)?;
+        replace_str(record, b"GN", &selected_name)?;
     }
     let representative =
         decision.representative == identity(record) && decision.outcome.is_counted();
-    record.push_aux(b"xf", Aux::I32(if representative { 25 } else { 17 }))?;
-    record.push_aux(b"XV", Aux::U32(decision.collision_degree))?;
-    record.push_aux(b"XW", Aux::Char(decision.outcome.xw_code()))?;
+    // xf/XV/XW/ZW are absent here: removed above or never present.
+    append_i32(record, b"xf", if representative { 25 } else { 17 })?;
+    append_u32(record, b"XV", decision.collision_degree)?;
+    append_char(record, b"XW", decision.outcome.xw_code())?;
     if decision.outcome == super::types::Outcome::Fractional {
-        record.push_aux(b"ZW", Aux::Float(decision.weight))?;
+        append_f32(record, b"ZW", decision.weight)?;
     }
     if representative {
         metrics.representatives_tagged += 1;

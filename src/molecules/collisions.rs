@@ -10,7 +10,9 @@
 //! Fractional weights for one collision group always sum to 1.0, so the
 //! group contributes exactly one molecule to the matrix, split across genes
 //! in proportion to read support.
-use std::collections::HashMap;
+// FxHash: these maps hold billions of fixed-size integer keys at real
+// scale; SipHash's DoS resistance buys nothing here and cost ~6% of runtime.
+use rustc_hash::FxHashMap as HashMap;
 
 use super::dedup::Molecule;
 use super::types::{Dna, Metrics, Outcome, RawKey};
@@ -39,7 +41,7 @@ pub(crate) fn resolve_collisions(
     // (cell, sample, umi): without `sample`, two different samples'
     // molecules sharing a cell+UMI would look like one real molecule
     // colliding across two genes.
-    let mut collisions = HashMap::<(Dna, u32, Dna), Vec<RawKey>>::new();
+    let mut collisions = HashMap::<(Dna, u32, Dna), Vec<RawKey>>::default();
     for &root in molecules.keys() {
         collisions
             .entry((root.cell, root.sample, root.umi))
@@ -51,7 +53,7 @@ pub(crate) fn resolve_collisions(
         collisions.len()
     );
     eprintln!("[sbxpress molecules] phase=gene_collision_resolve start");
-    let mut out = HashMap::<RawKey, Resolved>::with_capacity(molecules.len());
+    let mut out = HashMap::<RawKey, Resolved>::with_capacity_and_hasher(molecules.len(), Default::default());
     for claimants in collisions.values() {
         let degree = claimants.len() as u32;
         if degree == 1 {
