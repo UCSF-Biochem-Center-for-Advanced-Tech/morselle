@@ -4,6 +4,16 @@ All notable changes to `sbxpress` are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.7] — 2026-10-06
+
+### Added
+- Expanded hot-path microbenchmarks in `benches/pipeline_hot_paths.rs` (`bench_molecules_dedup`) benchmarking UMI directional graph collapse (~23 µs per 50 UMIs) and fractional vs winner-take-all decision matrix building (~128 µs per 1,000 UMIs).
+- Comprehensive codebase gap analysis report (`codebase_gap_analysis.md`) evaluating input format and output table equivalence across SBX and Illumina input modes and GEX, TagSeq, and Flex analysis modes.
+
+### Refactored
+- Consolidated stub module `src/annotate_bam.rs` into `src/annotate/mod.rs` and updated `src/bin/sbx10x-annotate.rs`.
+- Converted `scripts/sbxpress-gex-pipeline.sh` into a clean forwarder script invoking the unified multi-mode driver script `scripts/sbxpress-pipeline.sh`.
+
 ## [0.5.6] — 2026-10-06
 
 ### Added
