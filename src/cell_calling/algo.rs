@@ -11,6 +11,7 @@ use statrs::function::gamma::ln_gamma;
 
 use crate::cr_bam_to_mtx::{write_h5, write_matrix};
 use super::h5::{filtered_matrix, read_raw, resolve_h5, totals};
+use super::types::round_count;
 use super::types::{
     Cli, Metrics, RawMatrix, MIN_RECOVERED_CELLS, ORDMAG_BOOTSTRAPS, ORDMAG_QUANTILE,
 };
@@ -194,20 +195,24 @@ fn emptydrops(
         );
     }
 
-    let mut ambient_counts = vec![0u64; raw.features.len()];
-    let mut global_counts = vec![0u64; raw.features.len()];
+    // Summed in f64 so fractional matrices keep every partial molecule;
+    // the ambient profile is rounded per feature (SGT needs integer
+    // frequencies), which is exact for integer matrices.
+    let mut ambient_sums = vec![0f64; raw.features.len()];
+    let mut global_counts = vec![0f64; raw.features.len()];
     for bc in 0..raw.barcodes.len() {
         for pos in raw.indptr[bc] as usize..raw.indptr[bc + 1] as usize {
-            global_counts[raw.indices[pos] as usize] += raw.data[pos] as u64;
+            global_counts[raw.indices[pos] as usize] += raw.data[pos];
         }
     }
     for &bc in &ambient {
         for pos in raw.indptr[bc] as usize..raw.indptr[bc + 1] as usize {
-            ambient_counts[raw.indices[pos] as usize] += raw.data[pos] as u64;
+            ambient_sums[raw.indices[pos] as usize] += raw.data[pos];
         }
     }
+    let ambient_counts: Vec<u64> = ambient_sums.into_iter().map(round_count).collect();
     let eval_features: Vec<usize> = (0..raw.features.len())
-        .filter(|&i| global_counts[i] > 0)
+        .filter(|&i| global_counts[i] > 0.0)
         .collect();
     let positive: Vec<u64> = eval_features
         .iter()
@@ -251,7 +256,7 @@ fn emptydrops(
         let n = totals[bc];
         let mut ll = ln_gamma(n as f64 + 1.0);
         for pos in raw.indptr[bc] as usize..raw.indptr[bc + 1] as usize {
-            let count = raw.data[pos] as f64;
+            let count = raw.data[pos];
             let e = feature_to_eval[&(raw.indices[pos] as usize)];
             ll -= ln_gamma(count + 1.0);
             ll += count * logp[e];

@@ -59,11 +59,19 @@ pub struct Cli {
 
 /// 10x-style CSC feature-barcode matrix (features x barcodes, `indptr`
 /// column/barcode-indexed, `indices` = feature row per nonzero entry).
+///
+/// `data` is `f64` so that fractional matrices (`sbxpress molecules
+/// --fractional-collisions`, written by `cr-bam-to-mtx` as an `f32`
+/// dataset) are read without truncation; integer (`u32`) matrices convert
+/// exactly. Algorithms that need integer UMI totals (OrdMag ranking,
+/// EmptyDrops' multinomial draws) use [`round_count`] on per-barcode or
+/// per-feature *sums*, never on individual fractional entries, so a 0.25
+/// molecule still contributes to its barcode's total.
 pub(crate) struct RawMatrix {
     pub(crate) features: Vec<Feature>,
     pub(crate) barcodes: Vec<String>,
     pub(crate) genome: String,
-    pub(crate) data: Vec<u32>,
+    pub(crate) data: Vec<f64>,
     pub(crate) indices: Vec<u32>,
     pub(crate) indptr: Vec<u32>,
 }
@@ -90,4 +98,9 @@ pub struct Metrics {
     pub filtered_cells: usize,
     pub filtered_molecules: u64,
     pub elapsed_secs: f64,
+}
+
+/// Round a (possibly fractional) summed count to the nearest whole UMI.
+pub(crate) fn round_count(value: f64) -> u64 {
+    value.round().max(0.0) as u64
 }

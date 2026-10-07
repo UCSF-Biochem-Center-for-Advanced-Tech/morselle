@@ -5,7 +5,7 @@ use anyhow::{bail, Context, Result};
 use hdf5::types::VarLenAscii;
 
 use crate::cr_bam_to_mtx::{Feature, Matrix};
-use super::types::RawMatrix;
+use super::types::{round_count, RawMatrix};
 
 pub fn resolve_h5(path: &Path) -> PathBuf {
     if path.is_dir() {
@@ -31,7 +31,8 @@ pub(crate) fn read_raw(path: &Path) -> Result<RawMatrix> {
     let names = ascii_strings(features_group.dataset("name")?)?;
     let genomes = ascii_strings(features_group.dataset("genome")?)?;
     let barcodes = ascii_strings(matrix.dataset("barcodes")?)?;
-    let data = matrix.dataset("data")?.read_raw::<u32>()?;
+    // f64 holds both u32 (exactly) and f32 fractional datasets.
+    let data = matrix.dataset("data")?.read_raw::<f64>()?;
     let indices = matrix.dataset("indices")?.read_raw::<u32>()?;
     let indptr = matrix.dataset("indptr")?.read_raw::<u32>()?;
     if ids.len() != names.len() || data.len() != indices.len() || indptr.len() != barcodes.len() + 1
@@ -57,7 +58,7 @@ pub(crate) fn totals(raw: &RawMatrix) -> Vec<u64> {
         .map(|bc| {
             let start = raw.indptr[bc] as usize;
             let end = raw.indptr[bc + 1] as usize;
-            raw.data[start..end].iter().map(|&x| x as u64).sum()
+            round_count(raw.data[start..end].iter().sum())
         })
         .collect()
 }
@@ -68,14 +69,15 @@ pub(crate) fn filtered_matrix(raw: &RawMatrix, selected: &[usize]) -> Matrix {
         .filter(|i| selected_set.contains(i))
         .collect();
     let mut counts = BTreeMap::new();
-    let mut molecules = 0u64;
+    let mut molecules = 0f64;
     for (new_bc, &old_bc) in ordered.iter().enumerate() {
         for pos in raw.indptr[old_bc] as usize..raw.indptr[old_bc + 1] as usize {
-            let count = raw.data[pos] as u64;
-            counts.insert((new_bc, raw.indices[pos] as usize), count as f64);
+            let count = raw.data[pos];
+            counts.insert((new_bc, raw.indices[pos] as usize), count);
             molecules += count;
         }
     }
+    let molecules = round_count(molecules);
     Matrix {
         features: raw.features.clone(),
         barcodes: ordered.iter().map(|&i| raw.barcodes[i].clone()).collect(),

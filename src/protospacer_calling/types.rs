@@ -41,7 +41,7 @@ pub(crate) fn feature_counts(raw: &RawMatrix, feature_row: usize) -> Vec<u64> {
             let (start, end) = (raw.indptr[bc] as usize, raw.indptr[bc + 1] as usize);
             (start..end)
                 .find(|&i| raw.indices[i] as usize == feature_row)
-                .map_or(0, |i| raw.data[i] as u64)
+                .map_or(0, |i| crate::cell_calling::round_count(raw.data[i]))
         })
         .collect()
 }
