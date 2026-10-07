@@ -40,6 +40,22 @@ representatives, so `matrix` produces empty matrices.
   TECHNICAL_DESCRIPTION.md (11, not 12). The `codebase_gap_analysis.md`
   mentioned under 0.5.7 was never committed.
 
+### Performance
+Measured on a synthetic 2M-read annotated BAM with real tag layout (24 aux
+tags per record); outputs byte-identical to before (SAM text incl. tag
+order; MEX/H5 equal):
+- `sbxpress molecules`: 16.2 s → 7.6 s wall (2.1×), 18.0 G → 7.6 G
+  instructions; peak RSS −24% (−29% with `--tagseq`). Single raw aux-tag
+  pass per record instead of ~6 `aux()` scans + String allocations;
+  FxHash tables; tag appends without `push_aux`'s duplicate pre-scan;
+  sorted-run grouping instead of `HashMap<_, Vec<_>>` indexes; collision
+  outcomes stored inline.
+- `sbxpress matrix`: 4.2 s → 2.7 s (1.6×); one aux pass per record and
+  interned barcodes (~16 B instead of ~70 B per counted molecule).
+- All BAM I/O: rust-htslib `libdeflate` feature (BGZF via libdeflate).
+- `scripts/sbxpress-pipeline.sh --extract-no-gzip` (opt-in; PROFILING.md:
+  7.3× extract, 2.2× extract+map, ~4× intermediate disk).
+
 ### Added
 - `tests/molecules_matrix_e2e.rs`: runs the real `sbx10x-molecules` and
   `cr-bam-to-mtx` binaries on a fixture with `UB`/`UR`/`ZG` and multi-gene

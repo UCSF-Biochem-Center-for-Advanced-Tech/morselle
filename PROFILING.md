@@ -212,3 +212,38 @@ This run confirms the mechanics of the full binary chain on real data, but
 is **not** the "real annotated+molecule GEX BAM" Phase 2/3 are still
 waiting on — that needs Flex's actual probe-set-reference alignment
 strategy, not standard genome mapping, and is Phase 6 territory.
+
+### `molecules` / `matrix` per-record cost (2026-10-07)
+
+Investigated the open question in PIPELINE_NOTES.md ("`molecules` alone is
+2.7x longer than Cell Ranger's whole ALIGN_AND_COUNT"). Callgrind on a
+synthetic 200k-record annotated BAM with the real tag layout (minimap2 +
+extract comment + annotate tags, 24 per record) showed the time was
+per-record overhead, not the UMI algorithms:
+
+| cost (baseline `sbx10x-molecules`) | share of instructions |
+|---|---|
+| zlib deflate + crc32 (BGZF output) | ~35% |
+| `bam_aux_next`/`bam_aux_get` — every `record.aux()` / `push_aux` / `remove_aux` rescans all 24 tags | ~21% |
+| SipHash (std `HashMap`) | ~6% |
+| `from_utf8` / `AuxIter` decoding tags never used | ~10% after the first fix |
+
+Fixes (all output-identical): one raw aux walk per record
+(`bam_helpers::for_each_aux`, `MoleculeTags`), FxHash, scan-free tag
+appends (`molecules/aux_write.rs`), rust-htslib `libdeflate`, and sorted
+runs instead of `HashMap<_, Vec<_>>` group indexes. Result on a 2M-read
+BAM: `molecules` 16.2 s → 7.6 s, 18.0 G → 7.6 G instructions, peak RSS
+339 → 256 MB; `matrix` 4.2 s → 2.7 s.
+
+What is left in `molecules`: ~40% is BGZF compression of the output BAM
+(htslib default level). A `--compression-level` option (or level 1–4 for
+this intermediate) is the next lever, at some cost in file size. Peak
+memory is now at decision materialization (evidence + roots + molecules +
+decisions); having the write pass look up `roots` + `molecules` directly
+instead of building the `decisions` table would cut it roughly another
+quarter, but changes `build_decisions`' public return type.
+
+Reproduce: generate a BAM with the real tag set, then
+`valgrind --tool=callgrind sbx10x-molecules in.bam -o out.bam --threads 1`
+and `callgrind_annotate`. Instruction counts are deterministic, unlike
+wall time on a shared box.
