@@ -25,7 +25,8 @@ struct Cli {
     /// With --shards == 1 (the default), exactly one file is required.
     #[arg(value_name = "BAM", num_args = 1..)]
     bam: Vec<PathBuf>,
-    /// Output BAM. Input order is preserved.
+    /// Output BAM. Input order is preserved unless --shards > 1, which
+    /// emits unsorted hash buckets; sort that output before indexing.
     #[arg(short, long)]
     output: PathBuf,
     /// JSON metrics output (default: <output>.metrics.json).

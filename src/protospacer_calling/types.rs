@@ -35,13 +35,13 @@ pub fn resolve_filtered_h5(path: &Path) -> PathBuf {
 }
 
 /// Per-barcode UMI count for one feature row, in the matrix's barcode order.
-pub(crate) fn feature_counts(raw: &RawMatrix, feature_row: usize) -> Vec<u64> {
+pub(crate) fn feature_counts(raw: &RawMatrix, feature_row: usize) -> Vec<f64> {
     (0..raw.barcodes.len())
         .map(|bc| {
             let (start, end) = (raw.indptr[bc] as usize, raw.indptr[bc + 1] as usize);
             (start..end)
                 .find(|&i| raw.indices[i] as usize == feature_row)
-                .map_or(0, |i| crate::cell_calling::round_count(raw.data[i]))
+                .map_or(0.0, |i| raw.data[i])
         })
         .collect()
 }
@@ -97,4 +97,21 @@ pub fn stddev(values: &[u64]) -> f64 {
         .sum::<f64>()
         / n)
         .sqrt()
+}
+
+/// Fraction-preserving statistics; the public integer helpers remain compatible.
+pub(crate) fn weighted_median(values: &[f64]) -> f64 {
+    let mut sorted = values.to_vec();
+    sorted.sort_by(f64::total_cmp);
+    let mid = sorted.len() / 2;
+    if sorted.len().is_multiple_of(2) {
+        (sorted[mid - 1] + sorted[mid]) / 2.0
+    } else {
+        sorted[mid]
+    }
+}
+
+pub(crate) fn weighted_stddev(values: &[f64]) -> f64 {
+    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    (values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64).sqrt()
 }

@@ -6,8 +6,10 @@ use std::time::Instant;
 use anyhow::{ensure, Context, Result};
 use tracing::info;
 
-use super::gmm::fit_threshold;
-use super::types::{feature_counts, median, resolve_filtered_h5, stddev, Cli, SummaryRow};
+use super::gmm::fit_weighted_threshold;
+use super::types::{
+    feature_counts, resolve_filtered_h5, weighted_median, weighted_stddev, Cli, SummaryRow,
+};
 use crate::cell_calling::read_raw;
 
 pub fn run(cli: &Cli) -> Result<()> {
@@ -18,10 +20,10 @@ pub fn run(cli: &Cli) -> Result<()> {
     ensure!(n_cells > 0, "{} has no cells", h5.display());
 
     let mut thresholds: HashMap<usize, u64> = HashMap::new();
-    let mut counts_by_feature: HashMap<usize, Vec<u64>> = HashMap::new();
+    let mut counts_by_feature: HashMap<usize, Vec<f64>> = HashMap::new();
     for (fi, _feature) in raw.features.iter().enumerate() {
         let counts = feature_counts(&raw, fi);
-        if let Some(t) = fit_threshold(&counts, cli.min_umi) {
+        if let Some(t) = fit_weighted_threshold(&counts, cli.min_umi) {
             thresholds.insert(fi, t);
         }
         counts_by_feature.insert(fi, counts);
@@ -33,12 +35,12 @@ pub fn run(cli: &Cli) -> Result<()> {
     };
 
     // Per-cell calls: which called features clear their threshold.
-    let mut per_cell_calls: Vec<Vec<(usize, u64)>> = vec![Vec::new(); n_cells];
+    let mut per_cell_calls: Vec<Vec<(usize, f64)>> = vec![Vec::new(); n_cells];
     for &fi in &called_features {
         let threshold = thresholds[&fi];
         let counts = &counts_by_feature[&fi];
         for (bc, &count) in counts.iter().enumerate() {
-            if count >= threshold {
+            if count >= threshold as f64 {
                 per_cell_calls[bc].push((fi, count));
             }
         }
@@ -100,7 +102,7 @@ pub fn run(cli: &Cli) -> Result<()> {
             .filter(|&bc| {
                 called_features
                     .iter()
-                    .all(|&fi| counts_by_feature[&fi][bc] == 0)
+                    .all(|&fi| counts_by_feature[&fi][bc] == 0.0)
             })
             .count();
         let no_confident_call = per_cell_calls.iter().filter(|c| c.is_empty()).count();
@@ -144,7 +146,7 @@ pub fn run(cli: &Cli) -> Result<()> {
             stddev_umis: None,
         });
         for &fi in &called_features {
-            let sole_umis: Vec<u64> = one_assigned
+            let sole_umis: Vec<f64> = one_assigned
                 .iter()
                 .filter_map(|&bc| {
                     per_cell_calls[bc]
@@ -157,8 +159,8 @@ pub fn run(cli: &Cli) -> Result<()> {
                 feature_call: raw.features[fi].id.clone(),
                 num_cells: sole_umis.len(),
                 pct_cells: pct(sole_umis.len()),
-                median_umis: (!sole_umis.is_empty()).then(|| median(&sole_umis)),
-                stddev_umis: (!sole_umis.is_empty()).then(|| stddev(&sole_umis)),
+                median_umis: (!sole_umis.is_empty()).then(|| weighted_median(&sole_umis)),
+                stddev_umis: (!sole_umis.is_empty()).then(|| weighted_stddev(&sole_umis)),
             });
         }
 

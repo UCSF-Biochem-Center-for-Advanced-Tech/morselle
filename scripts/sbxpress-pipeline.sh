@@ -245,6 +245,16 @@ AUDIT_MOLECULES="$AUDIT_DIR/$SAMPLE.molecules.tsv.gz"
 MULTIPLEXED_FLEX=0
 [[ $ANALYSIS_MODE == flex && -n $PROBE_SAMPLE_SHEET ]] && MULTIPLEXED_FLEX=1
 
+source "$SCRIPT_DIR/pipeline_state.sh"
+# Extraction is shared across samples; downstream analysis is sample-specific.
+bind_pipeline_state "$EXTRACT_DIR" "$INPUT_MODE" "$ANALYSIS_MODE" "$WHITELIST" "$SAMPLE_SHEET" \
+    "$PROBE_BARCODE_WL" "$SPLIT" "$EXTRACT_NO_GZIP" \
+    ${FASTQS[@]+"${FASTQS[@]}"} ${R1_FASTQS[@]+"${R1_FASTQS[@]}"} ${R2_FASTQS[@]+"${R2_FASTQS[@]}"}
+bind_pipeline_state "$SAMPLE_OUT" "$INPUT_MODE" "$ANALYSIS_MODE" "$SAMPLE" \
+    "$MMI" "$GTF" "$JUNCTIONS" "$GENOME" "$PROBE_SET" "$PROBE_SAMPLE_SHEET" \
+    "$THREE_PRIME" "$MULTIMAP_TAGS" "$FRACTIONAL" "$POSITION_AWARE" \
+    "$EXPECT_CELLS" "$TAGSEQ_BARCODES" "$MOLECULE_COMPRESSION" "genes-manifest=$GENES_MTX"
+
 mkdir -p "$EXTRACT_DIR" "$ANNOTATION_DIR" "$MOLECULES_DIR" "$MATRIX_DIR" "$LOG_DIR" "$TMP_DIR" "$(dirname "$GENES_MTX")"
 (( AUDIT == 0 )) || mkdir -p "$AUDIT_DIR"
 
@@ -391,21 +401,27 @@ if (( MULTIPLEXED_FLEX )); then
     fi
     echo "[5/5] per-sample matrices and cell calling (run_flex_multi.sh)"
     run "$LOG_DIR/flex_multi.log" "$SCRIPT_DIR/run_flex_multi.sh" \
-        "$MOLECULE_BAM" "$DEMUX_DIR" "$FLEX_OUT" "${CELL_ARGS[@]}"
+        "$MOLECULE_BAM" "$DEMUX_DIR" "$FLEX_OUT" ${CELL_ARGS[@]+"${CELL_ARGS[@]}"}
 else
     # ---- [4/5] raw matrix ---------------------------------------------------
-    if [[ ! -s "$RAW_H5" ]]; then
+    if [[ ! -s "$RAW_H5" || ! -e "$MATRIX_DIR/.raw.done" ]]; then
+        RAW_WORK="$MATRIX_DIR/.raw.partial"
+        prepare_matrix_stage "$RAW_WORK"
         echo "[4/5] creating complete raw feature-barcode matrix"
-        MATRIX_ARGS=(--output "$MATRIX_DIR" --genome "$GENOME" --cell-barcodes "$WHITELIST"
+        MATRIX_ARGS=(--output "$RAW_WORK" --genome "$GENOME" --cell-barcodes "$WHITELIST"
             --features "$GENES_MTX")
         run "$LOG_DIR/matrix.log" sbxpress matrix "$MOLECULE_BAM" "${MATRIX_ARGS[@]}"
+        publish_matrix_stage "$RAW_WORK" "$MATRIX_DIR" .raw.done
     else
         echo "[4/5] raw matrix already complete; reusing $RAW_H5"
     fi
     # ---- [5/5] cell calling -------------------------------------------------
-    if [[ ! -s "$FILTERED_H5" ]]; then
+    if [[ ! -s "$FILTERED_H5" || ! -e "$MATRIX_DIR/.cells.done" ]]; then
+        CELL_WORK="$MATRIX_DIR/.cells.partial"
+        prepare_matrix_stage "$CELL_WORK"
         echo "[5/5] calling cells and writing filtered counts"
-        run "$LOG_DIR/cells.log" sbxpress cells "$RAW_H5" --output "$MATRIX_DIR" "${CELL_ARGS[@]}"
+        run "$LOG_DIR/cells.log" sbxpress cells "$RAW_H5" --output "$CELL_WORK" ${CELL_ARGS[@]+"${CELL_ARGS[@]}"}
+        publish_matrix_stage "$CELL_WORK" "$MATRIX_DIR" .cells.done
     else
         echo "[5/5] filtered matrix already complete; reusing $FILTERED_H5"
     fi

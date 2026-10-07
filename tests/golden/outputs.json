@@ -60,10 +60,10 @@
       "representatives_tagged": 3939,
       "umi_nodes_collapsed": 303
     },
-    "matrix": "18f856bb37fec268"
+    "matrix": "d98b651fcd05fe69"
   },
   "gex_indexed": {
-    "bam": "060668c26ab208a9",
+    "bam": "a97086599e624f8f",
     "counters": {
       "collision_groups": 838,
       "collision_molecules_fractional": 0,
@@ -208,7 +208,7 @@
       "representatives_tagged": 4242,
       "umi_nodes_collapsed": 0
     },
-    "matrix": "0888e09de3569412"
+    "matrix": "debf127e3743041e"
   },
   "tagseq_position_aware": {
     "bam": "d59db6b6f0912a0e",

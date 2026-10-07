@@ -21,7 +21,7 @@ use rust_htslib::bam::{self, Read};
 use super::aux_write::{append_char, append_f32, append_i32, append_u32, remove_tag, replace_str};
 use super::dedup::{build_decisions_with, DedupPolicy};
 use super::evidence::{collate, collect_evidence};
-use super::helpers::{record_identity, umi_key, MoleculeTags};
+use super::helpers::{require_bam_offsets, umi_key, MoleculeTags};
 use super::types::{merge_metrics, Decision, Dna, Metrics, RawKey, NO_SAMPLE};
 
 /// Settings shared by the unsharded and sharded write paths.
@@ -70,10 +70,12 @@ fn record_key(
     let gene = tags
         .gene()
         .and_then(|(g, _)| tables.gene_ids.get(g).copied())?;
-    let sample = if opts.flex {
-        tags.pb
-            .filter(|v| !v.is_empty())
-            .and_then(|pb| tables.sample_ids.get(pb).copied())?
+    // Match evidence collection: preserve a present PB in every assay;
+    // --flex additionally rejects records without a confident PB.
+    let sample = if let Some(pb) = tags.pb.filter(|v| !v.is_empty()) {
+        tables.sample_ids.get(pb).copied()?
+    } else if opts.flex {
+        return None;
     } else {
         NO_SAMPLE
     };
@@ -87,7 +89,7 @@ fn record_key(
 
 /// Rewrite one record's molecule tags in place. `identity` is the value the
 /// evidence pass stored as `best_ordinal` for this record (positional
-/// ordinal in serial mode, `record_identity()` in indexed mode).
+/// ordinal in serial mode, BGZF end-of-record offset in indexed mode).
 fn tag_record(
     record: &mut bam::Record,
     identity: impl Fn(&bam::Record) -> u64,
@@ -149,6 +151,9 @@ pub fn write_output(
 ) -> Result<()> {
     eprintln!("[sbxpress molecules] phase=bam_write start");
     let mut reader = bam::Reader::from_path(input)?;
+    if opts.evidence_workers > 1 {
+        require_bam_offsets(&reader)?;
+    }
     reader.set_threads(opts.threads)?;
     let header = bam::Header::from_template(reader.header());
     let mut writer = bam::Writer::from_path(output, &header, bam::Format::Bam)?;
@@ -156,16 +161,15 @@ pub fn write_output(
     writer.set_threads(opts.threads)?;
     let indexed = opts.evidence_workers > 1;
     let mut written = 0_u64;
-    for (ordinal, result) in reader.records().enumerate() {
-        let mut record = result?;
-        let identity = |r: &bam::Record| {
-            if indexed {
-                record_identity(r)
-            } else {
-                ordinal as u64
-            }
+    let mut record = bam::Record::new();
+    while let Some(result) = reader.read(&mut record) {
+        result?;
+        let identity = if indexed {
+            reader.tell() as u64
+        } else {
+            written
         };
-        tag_record(&mut record, identity, opts, decisions, tables, metrics)?;
+        tag_record(&mut record, |_| identity, opts, decisions, tables, metrics)?;
         writer.write(&record)?;
         written += 1;
         if written % 25_000_000 == 0 {
@@ -234,7 +238,30 @@ pub fn run_sharded(
 
     let header = {
         let reader = bam::Reader::from_path(&inputs[0])?;
-        bam::Header::from_template(reader.header())
+        // Hash buckets are emitted independently, not in coordinate order.
+        // Do not advertise a sort order the output cannot satisfy.
+        let text = String::from_utf8_lossy(reader.header().as_bytes());
+        let lines: Vec<String> = text
+            .lines()
+            .map(|line| {
+                if line.starts_with("@HD\t") {
+                    let mut fields: Vec<&str> = line
+                        .split('\t')
+                        .filter(|field| {
+                            !field.starts_with("SO:")
+                                && !field.starts_with("SS:")
+                                && !field.starts_with("GO:")
+                        })
+                        .collect();
+                    fields.push("SO:unsorted");
+                    fields.join("\t")
+                } else {
+                    line.to_owned()
+                }
+            })
+            .collect();
+        let header_bytes = format!("{}\n", lines.join("\n"));
+        bam::Header::from_template(&bam::HeaderView::from_bytes(header_bytes.as_bytes()))
     };
     let mut writer = bam::Writer::from_path(output, &header, bam::Format::Bam)?;
     apply_compression(&mut writer, opts)?;

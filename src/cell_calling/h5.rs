@@ -39,6 +39,14 @@ pub(crate) fn read_raw(path: &Path) -> Result<RawMatrix> {
     {
         bail!("invalid 10x CSC matrix dimensions");
     }
+    if indptr.first() != Some(&0)
+        || indptr.last().copied().map(|v| v as usize) != Some(data.len())
+        || indptr.windows(2).any(|w| w[0] > w[1])
+        || indices.iter().any(|&i| i as usize >= ids.len())
+        || data.iter().any(|&v| !v.is_finite() || v < 0.0)
+    {
+        bail!("invalid 10x CSC matrix pointers, indices, or counts");
+    }
     Ok(RawMatrix {
         features: ids
             .into_iter()

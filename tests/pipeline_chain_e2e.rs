@@ -58,6 +58,22 @@ fn check_molecule_bam(input: &Path, output: &Path, metrics: &BTreeMap<String, u6
     assert_eq!(before.len(), after.len(), "every input record is written");
     for (a, b) in before.iter().zip(&after) {
         assert_eq!(a.qname(), b.qname(), "input order is preserved");
+        assert_eq!(
+            a.seq().as_bytes(),
+            b.seq().as_bytes(),
+            "sequence is preserved"
+        );
+        assert_eq!(a.qual(), b.qual(), "qualities are preserved");
+        assert_eq!(
+            a.cigar().to_string(),
+            b.cigar().to_string(),
+            "CIGAR is preserved"
+        );
+        assert_eq!(
+            (a.mapq(), a.mtid(), a.mpos(), a.insert_size()),
+            (b.mapq(), b.mtid(), b.mpos(), b.insert_size()),
+            "alignment and mate fields are preserved"
+        );
         // annotate's tags survive untouched.
         assert_eq!(s(a, b"ZG"), s(b, b"ZG"), "ZG belongs to annotate");
         assert_eq!(s(a, b"UR"), s(b, b"UR"), "UR is the raw UMI");
@@ -414,3 +430,6 @@ fn compression_level_changes_file_size_not_records() {
         .unwrap();
     assert!(!bad.status.success(), "levels above 9 are rejected");
 }
+
+#[path = "regressions/pipeline.rs"]
+mod regressions;

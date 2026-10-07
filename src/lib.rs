@@ -7,6 +7,10 @@
 pub mod accounting;
 pub mod anchors;
 pub mod annotate;
+/// Compatibility with the public module path used before 0.5.7.
+pub mod annotate_bam {
+    pub use crate::annotate::{run, Cli};
+}
 pub mod bam_audit;
 pub mod bam_helpers;
 pub mod barcode;

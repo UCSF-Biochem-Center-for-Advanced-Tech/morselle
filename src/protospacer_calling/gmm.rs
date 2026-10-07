@@ -227,11 +227,28 @@ pub fn decision_boundary(low: &Component, high: &Component) -> f64 {
 /// description. See `real_data_rz211_cd45_threshold_regression` for the
 /// pinned, honestly-labeled test.
 pub fn fit_threshold(counts: &[u64], min_umi: u64) -> Option<u64> {
-    let nonzero: Vec<f64> = counts
-        .iter()
-        .filter(|&&c| c > 0)
-        .map(|&c| (c as f64).ln_1p())
-        .collect();
+    threshold_from_nonzero(
+        counts
+            .iter()
+            .filter(|&&c| c > 0)
+            .map(|&c| (c as f64).ln_1p())
+            .collect(),
+        min_umi,
+    )
+}
+
+pub(crate) fn fit_weighted_threshold(counts: &[f64], min_umi: u64) -> Option<u64> {
+    threshold_from_nonzero(
+        counts
+            .iter()
+            .filter(|&&c| c > 0.0)
+            .map(|&c| c.ln_1p())
+            .collect(),
+        min_umi,
+    )
+}
+
+fn threshold_from_nonzero(nonzero: Vec<f64>, min_umi: u64) -> Option<u64> {
     if nonzero.is_empty() {
         return None;
     }

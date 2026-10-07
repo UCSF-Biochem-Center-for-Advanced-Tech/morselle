@@ -29,8 +29,11 @@ case "$sub" in
     annotate) cat > /dev/null; echo "annotated" ;;
     probeset-align) echo stub > "$(value --output -o)" ;;
     molecules) echo stub > "$(value --output -o)" ;;
-    matrix) out=$(value --output -o); mkdir -p "$out"; echo stub > "$out/raw_feature_bc_matrix.h5" ;;
+    matrix) out=$(value --output -o); mkdir -p "$out"; echo stub > "$out/raw_feature_bc_matrix.h5"
+        [[ ${STUB_FAIL_MATRIX:-0} != 1 ]] || exit 9 ;;
     cells)
+        list=$(value --tagseq-barcodes || true)
+        [[ -z $list || -f $list ]] || { echo "stub: barcode-list argument was split: $list" >&2; exit 2; }
         out=$(value --output -o); mkdir -p "$out/filtered_feature_bc_matrix"
         echo stub > "$out/filtered_feature_bc_matrix.h5"
         printf 'genome,barcode\nG,AAAC-1\n' > "$out/filtered_barcodes.csv" ;;

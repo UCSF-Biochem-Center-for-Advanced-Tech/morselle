@@ -99,7 +99,7 @@ while [ $# -gt 0 ]; do
     *) positional+=("$1"); shift ;;
   esac
 done
-set -- "${positional[@]}"
+set -- ${positional[@]+"${positional[@]}"}
 
 [ $# -ge 3 ] || usage
 gex_bam=$1
@@ -166,14 +166,14 @@ run_sample() {
   n=$(wc -l < "$barcodes")
   echo "== $sample: $n assigned barcode(s) =="
 
-  local extra=()
-  [ -z "${CELLS_EXTRA_ARGS:-}" ] || read -ra extra <<< "$CELLS_EXTRA_ARGS"
+  local extra=() argument
+  while IFS= read -r -d '' argument; do extra+=("$argument"); done < "$CELLS_EXTRA_ARGS_FILE"
 
   echo "-- $sample: matrix (GEX) --"
   sbxpress matrix "$gex_bam" --cell-barcodes "$barcodes" --probe-barcodes "$probes" --skip-unlisted-barcodes -o "$gex_raw"
 
   echo "-- $sample: cells (GEX) --"
-  sbxpress cells "$gex_raw/raw_feature_bc_matrix.h5" -o "$gex_outs" "${extra[@]}"
+  sbxpress cells "$gex_raw/raw_feature_bc_matrix.h5" -o "$gex_outs" ${extra[@]+"${extra[@]}"}
 
   [ -n "$crispr_bam" ] || { echo "== $sample: done =="; return 0; }
 
@@ -201,8 +201,14 @@ run_sample() {
 }
 export -f run_sample
 export out_dir demux_dir gex_bam crispr_bam guide_features crispr_molecules
-export CELLS_EXTRA_ARGS="${cells_extra_args[*]:-}"
+# NUL-delimited arguments preserve whitespace and quoting across workers.
+CELLS_EXTRA_ARGS_FILE=$(mktemp "$out_dir/.cells-args.XXXXXX")
+trap 'rm -f "$CELLS_EXTRA_ARGS_FILE"' EXIT
+if (( ${#cells_extra_args[@]} > 0 )); then
+  printf '%s\0' "${cells_extra_args[@]}" > "$CELLS_EXTRA_ARGS_FILE"
+fi
+export CELLS_EXTRA_ARGS_FILE
 
-printf '%s\n' "${barcode_files[@]}" | xargs -P "$jobs" -I{} bash -c 'run_sample "{}"'
+printf '%s\0' "${barcode_files[@]}" | xargs -0 -P "$jobs" -I{} bash -c 'run_sample "$1"' _ {}
 
 echo "done: per-sample GEX matrices + cell-calling$([ -n "$crispr_bam" ] && echo " + CRISPR counting/protospacer calling") in $out_dir"

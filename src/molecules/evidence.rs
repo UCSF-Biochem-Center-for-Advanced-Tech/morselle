@@ -12,7 +12,7 @@ use std::sync::{
 use tracing::info;
 
 use super::helpers::{
-    aligned_bases, better, intern_sample, read_hash, record_identity, shard_hash, umi_key,
+    aligned_bases, better, intern_sample, read_hash, require_bam_offsets, shard_hash, umi_key,
     MoleculeTags,
 };
 use super::types::{Dna, Evidence, Metrics, RawKey, NO_SAMPLE};
@@ -28,6 +28,25 @@ pub fn collate<P: AsRef<Path>>(inputs: &[P], threads: usize, shard_paths: &[P]) 
             .with_context(|| format!("opening {}", first.display()))?;
         bam::Header::from_template(reader.header())
     };
+    // Numeric tid/mtid fields have meaning only in their own dictionary.
+    // Validate every input before creating shard files; never reinterpret
+    // another BAM's chromosome ids using the first BAM's header.
+    let reference = bam::Reader::from_path(first)?;
+    for input in inputs.iter().skip(1) {
+        let path = input.as_ref();
+        let reader = bam::Reader::from_path(path)?;
+        let a = reference.header();
+        let b = reader.header();
+        if a.target_names() != b.target_names()
+            || (0..a.target_count()).any(|tid| a.target_len(tid) != b.target_len(tid))
+        {
+            bail!(
+                "incompatible BAM reference dictionary in {} (must match {})",
+                path.display(),
+                first.display()
+            );
+        }
+    }
     // Uncompressed: shard files are pure ephemeral intermediates, deleted
     // right after quant reads each one exactly once -- same lesson as
     // extract's --no-gzip finding (PROFILING.md: 53.9% of extract's CPU was
@@ -233,6 +252,7 @@ pub fn collect_region(
 ) -> Result<RegionEvidence> {
     let mut reader = bam::IndexedReader::from_path(path)
         .with_context(|| format!("opening indexed {}", path.display()))?;
+    require_bam_offsets(&reader)?;
     reader
         .fetch((tid, start, end))
         .with_context(|| format!("fetching tid {tid}:{start}-{end}"))?;
@@ -244,8 +264,12 @@ pub fn collect_region(
     let mut records = 0_u64;
     let mut eligible_records = 0_u64;
     let mut no_sample_records = 0_u64;
-    for result in reader.records() {
-        let record = result.context("reading BAM region in evidence pass")?;
+    let mut record = bam::Record::new();
+    while let Some(result) = reader.read(&mut record) {
+        result.context("reading BAM region in evidence pass")?;
+        // The end-of-record BGZF virtual offset uniquely identifies the
+        // physical occurrence, even for identical names/coordinates/tags.
+        let identity = reader.tell() as u64;
         // An indexed query can return an alignment overlapping its left edge.
         // Assign by alignment start so adjacent work items never double-count.
         if record.tid() != tid as i32 || record.pos() < start as i64 || record.pos() >= end as i64 {
@@ -297,7 +321,7 @@ pub fn collect_region(
         };
         let candidate = Evidence {
             reads: 1,
-            best_ordinal: record_identity(&record),
+            best_ordinal: identity,
             best_mapq: record.mapq(),
             best_aligned: aligned_bases(&record),
             min_read_hash: read_hash(record.qname()),

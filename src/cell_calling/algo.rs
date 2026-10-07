@@ -324,6 +324,14 @@ pub fn run(cli: &Cli) -> Result<()> {
     let started = Instant::now();
     let input = resolve_h5(&cli.raw_matrix);
     let raw = read_raw(&input)?;
+    if cli.force_cells.is_none()
+        && cli.tagseq_barcodes.is_none()
+        && raw.data.iter().any(|&count| count != count.round())
+    {
+        // Multinomial simulations assume discrete molecule counts. Reading
+        // fractions losslessly does not calibrate that null distribution.
+        bail!("automatic EmptyDrops cell calling is not calibrated for fractional counts; use --tagseq-barcodes or --force-cells for explicit selection");
+    }
     let totals = totals(&raw);
     let nonzero = totals.iter().filter(|&&x| x > 0).count();
     let mut rng = ChaCha8Rng::seed_from_u64(cli.seed);

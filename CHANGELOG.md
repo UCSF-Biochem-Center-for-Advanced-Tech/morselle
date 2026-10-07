@@ -6,6 +6,30 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- Molecule output now uses the same present `PB` identity as evidence collection
+  in every assay; `--flex` still requires it. Indexed representatives use unique
+  physical BAM offsets, preventing duplicate representatives and selecting the
+  first physical record on equal quality. Multiple input BAMs with incompatible
+  reference dictionaries are rejected; sharded output declares unsorted order.
+- Fractional MEX output retains full precision, including weights below 1e-5;
+  non-finite/negative weights and malformed CSC matrices are rejected. Fractional
+  saturation counts each collision group once. Protospacer calling preserves
+  fractional values through fitting, threshold comparison, and summaries.
+- Automatic EmptyDrops rejects fractional inputs because its integer multinomial
+  null is not calibrated for them; explicit barcode/forced selection is supported.
+- Pipeline drivers work with macOS Bash empty arrays, bind restarts to input and
+  analysis configuration, and publish matrix/cell outputs only after successful
+  completion. Existing output directories without a restart manifest require a
+  fresh output directory. Flex worker arguments preserve whitespace.
+- Restored the public `annotate_bam::{Cli, run}` compatibility path. Reporting
+  consumes molecule/cell metrics and real pipeline filenames, labels historical
+  slides, and is split into modules below the file ceiling. UMI benchmarks now
+  use valid, deterministic identity groups.
+- Added 16 regression tests without removing existing tests, plus Python restart
+  and reporting cases; CI now checks Linux and macOS. Golden updates are limited
+  to the intentional indexed tie-break and fractional MEX precision changes.
+
 ### Changed
 - **`sbxpress molecules --tagseq` counts every gene in a UMI collision in
   full again (`XW:S`, the 0.5.6 behaviour); fractional splitting is opt-in

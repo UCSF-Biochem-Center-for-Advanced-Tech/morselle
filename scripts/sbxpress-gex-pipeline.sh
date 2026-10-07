@@ -6,6 +6,7 @@
 # they make a failed stage restartable without repeating raw-data processing or
 # mapping. The audit pass is optional because it is not needed to create counts.
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 usage() {
     cat <<'EOF'
@@ -148,6 +149,11 @@ AUDIT_JSON="$AUDIT_DIR/$SAMPLE.audit.json"
 AUDIT_MOLECULES="$AUDIT_DIR/$SAMPLE.molecules.tsv.gz"
 AUDIT_LABEL=${AUDIT_LABEL:-"SBX_$SAMPLE"}
 
+source "$SCRIPT_DIR/pipeline_state.sh"
+bind_pipeline_state "$EXTRACT_DIR" sbx gex "$WHITELIST" "$SAMPLE_SHEET" "$SPLIT" "${FASTQS[@]}"
+bind_pipeline_state "$SAMPLE_OUT" sbx gex "$SAMPLE" "$MMI" "$GTF" "$JUNCTIONS" "$GENOME" \
+    "$THREE_PRIME" "$MULTIMAP_TAGS" "$EXPECT_CELLS" "genes-manifest=$GENES_MTX"
+
 mkdir -p "$EXTRACT_DIR" "$ANNOTATION_DIR" "$MOLECULES_DIR" "$MATRIX_DIR" "$LOG_DIR" "$TMP_DIR" "$(dirname "$GENES_MTX")"
 (( AUDIT == 0 )) || mkdir -p "$AUDIT_DIR"
 
@@ -217,22 +223,28 @@ else
     echo "[3/5] molecule BAM already complete; reusing $MOLECULE_BAM"
 fi
 
-if [[ ! -s "$RAW_H5" ]]; then
+if [[ ! -s "$RAW_H5" || ! -e "$MATRIX_DIR/.raw.done" ]]; then
+    RAW_WORK="$MATRIX_DIR/.raw.partial"
+    prepare_matrix_stage "$RAW_WORK"
     echo "[4/5] creating complete raw feature-barcode matrix"
     sbxpress matrix "$MOLECULE_BAM" \
-        --output "$MATRIX_DIR" --genome "$GENOME" \
+        --output "$RAW_WORK" --genome "$GENOME" \
         --features "$GENES_MTX" --cell-barcodes "$WHITELIST" \
         2> "$LOG_DIR/matrix.log"
+    publish_matrix_stage "$RAW_WORK" "$MATRIX_DIR" .raw.done
 else
     echo "[4/5] raw matrix already complete; reusing $RAW_H5"
 fi
 
-if [[ ! -s "$FILTERED_H5" ]]; then
+if [[ ! -s "$FILTERED_H5" || ! -e "$MATRIX_DIR/.cells.done" ]]; then
+    CELL_WORK="$MATRIX_DIR/.cells.partial"
+    prepare_matrix_stage "$CELL_WORK"
     echo "[5/5] calling cells and writing filtered counts"
     CELL_ARGS=()
     [[ -z "$EXPECT_CELLS" ]] || CELL_ARGS+=(--expect-cells "$EXPECT_CELLS")
-    sbxpress cells "$RAW_H5" --output "$MATRIX_DIR" "${CELL_ARGS[@]}" \
+    sbxpress cells "$RAW_H5" --output "$CELL_WORK" ${CELL_ARGS[@]+"${CELL_ARGS[@]}"} \
         2> "$LOG_DIR/cells.log"
+    publish_matrix_stage "$CELL_WORK" "$MATRIX_DIR" .cells.done
 else
     echo "[5/5] filtered matrix already complete; reusing $FILTERED_H5"
 fi

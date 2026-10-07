@@ -41,6 +41,13 @@ the biological 3′ assay preference.
 
 ## 2. Raw SBX reads: complete, restartable pipeline
 
+Both pipeline drivers record input paths, sizes, modification times, and analysis
+settings for safe restarts. Changed inputs/settings or pre-existing outputs with
+no restart manifest require a new output directory. Matrix and cell-calling
+stages use temporary directories and completion markers, so interrupted writes
+are rebuilt. Keep each driver's shared helper files beside the driver.
+
+
 Use the repository workflow for production SBX processing. You can use the unified pipeline runner `scripts/sbxpress-pipeline.sh` which supports both `--input-mode {sbx|illumina}` and `--analysis-mode {gex|flex|tagseq}`:
 
 ```bash
@@ -275,6 +282,13 @@ sbxpress molecules "$OUT/annotation/sample.annotated.bam" \
   --tagseq \
   --output "$OUT/molecules/sample.molecules.bam"
 ```
+
+Fractional matrices retain small positive weights and MEX precision; HDF5 stores
+fractional values as `f32`. Automatic EmptyDrops requires integer counts and
+rejects fractional input. For fractional matrices, select known samples with
+`--tagseq-barcodes` or use `--force-cells` for an explicit ranked selection.
+Fractional saturation counts a collision group once, at its first supporting
+read; it uses full-depth molecule decisions rather than refitting at each depth.
 
 ### Position-aware UMIs (`--position-aware-umis`)
 

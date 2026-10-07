@@ -325,10 +325,21 @@ pub fn build_decisions_with<S: BuildHasher + Sync>(
     super::collisions::resolve_collisions(&mut molecules, metrics, tagseq, fractional);
 
     if let Some(curve) = saturation.as_mut() {
+        // Fractional claimants form ONE resolved molecule. Its first
+        // supporting read is the earliest event across all its genes.
+        let mut fractional_events = HashMap::<_, u32>::default();
         for (&root, molecule) in &molecules {
-            if molecule.resolved.outcome.is_counted() {
+            if molecule.resolved.outcome == super::types::Outcome::Fractional {
+                fractional_events
+                    .entry((root.cell, root.sample, root.umi))
+                    .and_modify(|hash| *hash = (*hash).min(molecule.min_read_hash))
+                    .or_insert(molecule.min_read_hash);
+            } else if molecule.resolved.outcome.is_counted() {
                 curve.add_molecule(root.cell, molecule.min_read_hash);
             }
+        }
+        for ((cell, _, _), hash) in fractional_events {
+            curve.add_molecule(cell, hash);
         }
     }
     eprintln!("[sbxpress molecules] phase=decision_materialize start");

@@ -513,6 +513,14 @@ not byte-reproducible between runs. The per-file path is byte-reproducible.
 
 ## Development
 
+Contributor checks require Python with `numpy` and `python-pptx`, in addition to
+the Rust toolchain and HDF5. Install those Python packages in your development
+environment. If reporting uses a separate Python environment, set
+`SBXPRESS_REPORT_PYTHON` to its interpreter. Run `scripts/check.sh` for the full
+build, regression tests, test inventory, file ceiling, formatting, and clippy
+checks; CI runs that gate on Linux and macOS.
+
+
 ```bash
 cargo build --release     # optimized binary
 cargo test  --release     # unit tests

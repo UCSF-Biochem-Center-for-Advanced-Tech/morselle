@@ -9,7 +9,7 @@
 
 use std::io::Write as _;
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 
 use sbx10x::anchors::{revcomp, P5, P7, R1_PRIMER};
 use sbx10x::barcode::Whitelist;
@@ -261,10 +261,37 @@ fn bench_molecules_dedup(c: &mut Criterion) {
         }
     }
 
-    c.bench_function("molecules_dedup/correct_group_50_umis", |b| {
-        let keys: Vec<RawKey> = evidence.keys().copied().take(50).collect();
-        b.iter(|| black_box(correct_group(keys.clone(), &evidence)))
-    });
+    // correct_group requires ONE (cell, sample, gene), with distinct UMIs.
+    // Never sample arbitrary keys from the multi-cell collision fixture.
+    let mut group = c.benchmark_group("molecules_dedup/correct_group");
+    for size in [50_u64, 500, 5_000] {
+        let mut one_group = HashMap::new();
+        let keys: Vec<RawKey> = (0..size)
+            .map(|i| {
+                let key = RawKey {
+                    cell: Dna::pack(cell_bases[0]).unwrap(),
+                    sample: NO_SAMPLE,
+                    gene: 0,
+                    umi: Dna((12_u64 << 56) | i),
+                };
+                one_group.insert(
+                    key,
+                    Evidence {
+                        reads: (i % 5 + 1) as u32,
+                        best_ordinal: i,
+                        best_mapq: 60,
+                        best_aligned: 150,
+                        min_read_hash: i as u32,
+                    },
+                );
+                key
+            })
+            .collect();
+        group.bench_with_input(BenchmarkId::from_parameter(size), &keys, |b, keys| {
+            b.iter(|| black_box(correct_group(keys.clone(), &one_group)))
+        });
+    }
+    group.finish();
 
     c.bench_function("molecules_dedup/build_decisions_fractional", |b| {
         b.iter(|| {

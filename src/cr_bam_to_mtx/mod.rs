@@ -9,3 +9,6 @@ mod tests;
 pub use io_helpers::*;
 pub use matrix_ops::*;
 pub use types::*;
+
+#[cfg(test)]
+mod precision_tests;

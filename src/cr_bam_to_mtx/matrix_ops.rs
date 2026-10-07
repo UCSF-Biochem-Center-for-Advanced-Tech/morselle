@@ -88,6 +88,12 @@ pub(crate) fn read_matrix(
             index
         };
         let weight = aux_slot_f64(&zw, b"ZW")?.unwrap_or(1.0);
+        if !weight.is_finite() || weight < 0.0 {
+            bail!(
+                "ZW must be finite and non-negative (read {})",
+                String::from_utf8_lossy(record.qname())
+            );
+        }
         let cb_id = match cb_ids.get(cb) {
             Some(&id) => id,
             None => {
@@ -158,6 +164,7 @@ fn writer(path: &Path, gzip: bool) -> Result<Box<dyn Write>> {
 }
 
 pub(crate) fn write_matrix(matrix: &Matrix, output: &Path, gzip: bool) -> Result<()> {
+    validate_counts(matrix)?;
     fs::create_dir_all(output).with_context(|| format!("creating {}", output.display()))?;
     let suffix = if gzip { ".gz" } else { "" };
     let mut features = writer(&output.join(format!("features.tsv{suffix}")), gzip)?;
@@ -172,10 +179,7 @@ pub(crate) fn write_matrix(matrix: &Matrix, output: &Path, gzip: bool) -> Result
     for barcode in &matrix.barcodes {
         writeln!(barcodes, "{barcode}")?;
     }
-    let is_fractional = matrix
-        .counts
-        .values()
-        .any(|&c| (c - c.round()).abs() > 1e-5);
+    let is_fractional = matrix.counts.values().any(|&c| c != c.round());
     let matrix_type = if is_fractional { "real" } else { "integer" };
     let mut mtx = writer(&output.join(format!("matrix.mtx{suffix}")), gzip)?;
     writeln!(
@@ -196,7 +200,9 @@ pub(crate) fn write_matrix(matrix: &Matrix, output: &Path, gzip: bool) -> Result
     )?;
     for (&(barcode, feature), &count) in &matrix.counts {
         if is_fractional {
-            writeln!(mtx, "{} {} {:.4}", feature + 1, barcode + 1, count)?;
+            // Display uses enough significant digits to round-trip f64,
+            // including tiny positive fractional counts.
+            writeln!(mtx, "{} {} {count}", feature + 1, barcode + 1)?;
         } else {
             writeln!(
                 mtx,
@@ -205,6 +211,18 @@ pub(crate) fn write_matrix(matrix: &Matrix, output: &Path, gzip: bool) -> Result
                 barcode + 1,
                 count.round() as u64
             )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_counts(matrix: &Matrix) -> Result<()> {
+    for (&(barcode, feature), &count) in &matrix.counts {
+        if barcode >= matrix.barcodes.len() || feature >= matrix.features.len() {
+            bail!("matrix entry is outside feature/barcode dimensions");
+        }
+        if !count.is_finite() || count < 0.0 || count > f32::MAX as f64 {
+            bail!("matrix counts must be finite, non-negative, and within float32 range");
         }
     }
     Ok(())
@@ -236,6 +254,7 @@ fn write_sparse_column<T: hdf5::H5Type>(
 /// Write the standard 10x CSC HDF5 feature-barcode matrix alongside the MEX
 /// directory. The barcode-major BTreeMap is already in CSC traversal order.
 pub(crate) fn write_h5(matrix: &Matrix, path: &Path, genome: &str) -> Result<()> {
+    validate_counts(matrix)?;
     let file = hdf5::File::create(path).with_context(|| format!("creating {}", path.display()))?;
     let group = file.create_group("matrix")?;
     let features = group.create_group("features")?;
@@ -261,10 +280,7 @@ pub(crate) fn write_h5(matrix: &Matrix, path: &Path, genome: &str) -> Result<()>
     let genomes = vec![genome; matrix.features.len()];
     let all_tag_keys = vec![ascii("genome", "tag key")?];
 
-    let is_fractional = matrix
-        .counts
-        .values()
-        .any(|&c| (c - c.round()).abs() > 1e-5);
+    let is_fractional = matrix.counts.values().any(|&c| c != c.round());
     let mut data_u32 = Vec::<u32>::new();
     let mut data_f32 = Vec::<f32>::new();
     let mut indices = Vec::<u32>::with_capacity(matrix.counts.len());

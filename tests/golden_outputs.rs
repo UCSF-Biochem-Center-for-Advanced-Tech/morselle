@@ -11,8 +11,11 @@
 //!
 //!     SBXPRESS_UPDATE_GOLDEN=1 cargo test --release --test golden_outputs
 //!
-//! The non-fractional cases were seeded from, and are still reproduced by,
-//! the 0.5.6 release binaries. To re-verify against any other build:
+//! The non-fractional cases were seeded from 0.5.6. The indexed BAM golden
+//! now deliberately selects the first physical occurrence on a quality tie,
+//! instead of a QNAME/coordinate hash, to prevent duplicate representatives.
+//! Integer matrices remain unchanged. Fractional MEX goldens now retain full
+//! precision instead of four decimal places. To compare another build:
 //!
 //!     SBXPRESS_TEST_BIN_DIR=/path/to/old/target/release SBXPRESS_GOLDEN_LEGACY=1 \
 //!         cargo test --release --test golden_outputs

@@ -254,3 +254,13 @@ pub fn umi_key(record: &bam::Record, umi: &str, position_aware: bool) -> Option<
         Some(dna)
     }
 }
+
+/// `Read::tell` is a BGZF operation; never dereference a CRAM stream as BGZF.
+pub(crate) fn require_bam_offsets<R: bam::Read>(reader: &R) -> anyhow::Result<()> {
+    // SAFETY: this reader owns a live htsFile throughout the shared borrow.
+    let format = unsafe { (*reader.htsfile()).format.format };
+    if format != rust_htslib::htslib::htsExactFormat_bam {
+        anyhow::bail!("indexed molecule evidence requires BAM input for unique record offsets");
+    }
+    Ok(())
+}

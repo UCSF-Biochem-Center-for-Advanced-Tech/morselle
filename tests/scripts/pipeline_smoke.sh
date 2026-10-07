@@ -12,7 +12,7 @@ mkdir -p "$WORK/bin" "$WORK/ref" "$WORK/fastqs"
 ln -s "$REPO/tests/scripts/stub_sbxpress.sh" "$WORK/bin/sbxpress"
 ln -s "$REPO/tests/scripts/stub_samtools.sh" "$WORK/bin/samtools"
 export PATH="$WORK/bin:$PATH" STUB_SAMPLE=S1
-for f in wl.txt.gz sheet.csv ref.mmi genes.gtf junc.bed probes.csv pbwl.txt config.csv cells.txt r1.fq.gz r2.fq.gz; do
+for f in wl.txt.gz sheet.csv ref.mmi genes.gtf junc.bed probes.csv pbwl.txt config.csv cells.txt "cells with spaces.txt" r1.fq.gz r2.fq.gz; do
     : > "$WORK/ref/$f"
 done
 R="$WORK/ref"
@@ -68,6 +68,9 @@ expect_call sbx_flex "molecules .*--flex"
 check sbx_flex_multi "$P" --analysis-mode flex "${COMMON[@]}" "${SBX[@]}" "${FLEX[@]}" --probe-barcode-wl "$R/pbwl.txt" --config "$R/config.csv"
 expect_call sbx_flex_multi "probe-demux .*--probe-sample-sheet"
 expect_call sbx_flex_multi "sbxpress matrix .*--probe-barcodes"
+check sbx_flex_multi_spaces "$P" --analysis-mode flex "${COMMON[@]}" "${SBX[@]}" "${FLEX[@]}" \
+    --probe-barcode-wl "$R/pbwl.txt" --config "$R/config.csv" --tagseq-barcodes "$R/cells with spaces.txt"
+expect_call sbx_flex_multi_spaces "cells .*--tagseq-barcodes .*cells with spaces.txt"
 check illumina_gex "$P" --input-mode illumina "${COMMON[@]}" "${ILL[@]}" "${GEX[@]}"
 expect_call illumina_gex "sbxpress illumina --r1 .* --r2 "
 check illumina_flex "$P" --input-mode illumina --analysis-mode flex "${COMMON[@]}" "${ILL[@]}" "${FLEX[@]}"
@@ -75,9 +78,27 @@ reject_call illumina_flex "molecules .*--flex"
 
 # Restartability: a second run reuses every stage and calls no tool.
 export STUB_LOG="$WORK/rerun.calls"; : > "$STUB_LOG"
-"$P" "${COMMON[@]}" "${SBX[@]}" "${GEX[@]}" --out-dir "$WORK/sbx_gex" > /dev/null 2>&1
+"$P" "${COMMON[@]}" "${SBX[@]}" "${GEX[@]}" --audit --expect-cells 500 --out-dir "$WORK/sbx_gex" > /dev/null 2>&1
 if grep -qv -- "--version" "$STUB_LOG"; then echo "FAIL rerun called tools:"; cat "$STUB_LOG"; exit 1; fi
 echo "ok   rerun reuses finished stages"
+
+# Changed analysis settings must never reuse old counts.
+if "$P" "${COMMON[@]}" "${SBX[@]}" "${GEX[@]}" --out-dir "$WORK/sbx_gex" \
+    --fractional-collisions --analysis-mode tagseq > "$WORK/changed.out" 2>&1; then
+    echo "FAIL changed counting settings reused outputs"; exit 1
+fi
+grep -q "settings changed" "$WORK/changed.out" || { cat "$WORK/changed.out"; exit 1; }
+echo "ok   rejects changed restart configuration"
+
+# A failed matrix write leaves a partial H5. Restart must rebuild it.
+export STUB_LOG="$WORK/interrupted.calls" STUB_FAIL_MATRIX=1
+if "$P" "${COMMON[@]}" "${SBX[@]}" "${GEX[@]}" --out-dir "$WORK/interrupted" > "$WORK/interrupted.out" 2>&1; then
+    echo "FAIL injected matrix failure was ignored"; exit 1
+fi
+unset STUB_FAIL_MATRIX
+check interrupted "$P" "${COMMON[@]}" "${SBX[@]}" "${GEX[@]}"
+expect_call interrupted "sbxpress matrix"
+echo "ok   rebuilds an interrupted matrix"
 
 # Bad input combinations fail fast with a message.
 if "$P" --input-mode illumina --analysis-mode flex "${COMMON[@]}" "${ILL[@]}" "${FLEX[@]}" \

@@ -74,3 +74,27 @@ fn pipeline_scripts_run_end_to_end_against_stubs() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+#[test]
+fn pipeline_restart_and_reporting_python_regressions() {
+    let out = Command::new("python3")
+        .arg(repo().join("tests/scripts/python_regressions.py"))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn presentation_cli_uses_pipeline_metrics_and_labels_historical_slides() {
+    let python = std::env::var_os("SBXPRESS_REPORT_PYTHON").unwrap_or_else(|| "python3".into());
+    let out = Command::new(python)
+        .arg(repo().join("tests/scripts/presentation_cli.py"))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "reporting tests require python-pptx (or SBXPRESS_REPORT_PYTHON pointing to a Python with it):\n{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+}
