@@ -5,13 +5,13 @@
 | Item | Value |
 |---|---|
 | Software name | `sbxpress` (Cargo package `sbxpress`; library crate `sbx10x`) |
-| Version described | 0.3.5 |
-| Source revision | `c906ca1` (2026-08-25) |
+| Version described | 0.5.7 |
+| Source revision | `v0.5.7` (2026-10-06) |
 | Implementation language | Rust (edition 2021), built with rustc 1.96.0 |
 | License of original code | BSD 3-Clause (see `LICENSE`) |
 | Copyright holder | UCSF Biochem — Center for Advanced Technology (2026) |
 | Supported platforms | Ubuntu/Debian-family Linux, macOS (x86-64 and arm64) |
-| Original source size | ~9,200 lines of Rust across 16 library modules and 7 binaries, plus ~1,000 lines of shell/Python tooling |
+| Original source size | ~19,400 lines of Rust across 25 library modules and 12 binaries, plus ~1,500 lines of shell/Python tooling |
 
 This document describes what the software does, how each stage operates
 algorithmically, what it reads and writes, and every dependency it carries —

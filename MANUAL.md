@@ -226,19 +226,30 @@ For automated multi-sample SBX Flex pipelines, refer to `scripts/run_flex_multi.
 
 ## 7. CAT Tagseq & Targeted Expression Mode
 
-Targeted assays, CRISPR guide capture, and CAT Tagseq datasets require custom molecule deduplication and cell-calling rules due to shared UMIs across distinct target genes and pre-determined cell lists.
+Targeted assays, high-depth bulk/pooled samples, CRISPR guide capture, and CAT Tagseq datasets require specialized molecule deduplication and cell-calling rules due to oversubscribed UMI space and pre-determined cell lists.
 
-### Targeted UMI Deduplication (`sbxpress molecules --tagseq`)
+### Fractional UMI Collision Resolution (`sbxpress molecules --tagseq`)
 
-In standard GEX, a single UMI observed across multiple genes is adjudicated via winner-take-all collision resolution to eliminate PCR chimeras. In targeted/Tag-seq assays, distinct target genes independently sharing a UMI represent genuine distinct molecular captures.
+In high-depth bulk or targeted TagSeq samples (e.g., 2–25M reads/sample into a 12bp UMI space), UMI oversubscription can cause distinct molecules to share the same UMI sequence. Standard winner-take-all collision resolution discards minor colliding genes. 
 
-Pass `--tagseq` to `sbxpress molecules` to skip winner-take-all collision filtering and count each gene independently:
+Pass `--tagseq` to `sbxpress molecules` to enable **fractional collision resolution** by default (or use `--fractional-collisions` explicitly). For colliding genes $g_1 \dots g_k$ with read counts $r_1 \dots r_k$, fractional resolution assigns proportional credit $w_i = r_i / \sum r$, tagging records with `ZG:Z:fractional` and emitting floating-point weight tags `ZW:f:<weight>`:
 
 ```bash
 sbxpress molecules "$OUT/annotation/sample.annotated.bam" \
   --tagseq \
+  --fractional-collisions \
   --output "$OUT/molecules/sample.molecules.bam"
 ```
+
+To explicitly enforce winner-take-all collision resolution in `--tagseq` mode, pass `--no-fractional-collisions`.
+
+### Real & Float32 Expression Matrices (`sbxpress matrix`)
+
+When `sbxpress matrix` (`cr-bam-to-mtx`) encounters `ZW:f` floating-point weight tags in the molecules BAM, it automatically materializes fractional count matrices:
+- **Matrix Market MEX**: Emits real-valued coordinate headers (`%%MatrixMarket matrix coordinate real general`).
+- **HDF5 Matrix**: Emits 32-bit floating-point datasets (`f32`) for `data` in `raw_feature_bc_matrix.h5`.
+
+Standard integer runs without fractional weights continue emitting exact integer MTX and 32-bit unsigned integer (`u32`) HDF5 datasets.
 
 ### Whitelist Cell Calling (`sbxpress cells --tagseq-barcodes`)
 
@@ -251,4 +262,5 @@ sbxpress cells "$OUT/outs/raw_feature_bc_matrix.h5" \
   --tagseq-barcodes "$REF/known_gex_cells.txt" \
   --output "$OUT/outs"
 ```
+
 
