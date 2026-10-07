@@ -7,7 +7,6 @@
 pub mod accounting;
 pub mod anchors;
 pub mod annotate;
-pub mod annotate_bam;
 pub mod bam_audit;
 pub mod bam_helpers;
 pub mod barcode;

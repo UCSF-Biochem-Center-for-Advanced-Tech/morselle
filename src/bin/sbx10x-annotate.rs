@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::{CommandFactory, FromArgMatches, Parser};
 use tracing_subscriber::EnvFilter;
 
-use sbx10x::annotate_bam::{self, Cli};
+use sbx10x::annotate::{self, Cli};
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -20,5 +20,5 @@ fn main() -> Result<()> {
     } else {
         Cli::parse()
     };
-    annotate_bam::run(&cli)
+    annotate::run(&cli)
 }
