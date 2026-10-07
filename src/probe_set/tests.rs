@@ -233,3 +233,41 @@ fn run_end_to_end_writes_mapped_and_unmapped_records_with_carried_tags() {
     assert!(unmapped.aux(b"GX").is_err());
     assert!(unmapped.aux(b"PB").is_err());  // PB optional, absent here
 }
+
+/// Multi-threaded runs must write records in input order (the 0.5.3
+/// channel-based version wrote each batch in scheduling order).
+#[test]
+fn multithreaded_run_preserves_input_order() {
+    let probe_csv = write_csv(REAL_SHAPE);
+    let dir = tempfile::tempdir().unwrap();
+    let fastq_path = dir.path().join("r2.fastq");
+    let matched_seq = read_with_probe_at(DEFAULT_PROBE_SEQ_OFFSET, b"AAAACCCCGGGGTTTTACGTACGTA");
+    let unmatched_seq = vec![b'A'; 120];
+    let mut fastq = File::create(&fastq_path).unwrap();
+    // More than one 10,000-read batch, alternating matched / unmatched.
+    let n = 25_000;
+    for i in 0..n {
+        let seq = if i % 3 == 0 { &matched_seq } else { &unmatched_seq };
+        writeln!(fastq, "@r{i}\tCB:Z:ACGTACGTACGTACGT-1\tUR:Z:AAAACCCCGGGG").unwrap();
+        writeln!(fastq, "{}\n+\n{}", String::from_utf8_lossy(seq), "I".repeat(seq.len())).unwrap();
+    }
+    drop(fastq);
+    let out_bam = dir.path().join("probeset.bam");
+    let cli = Cli {
+        r2_fastq: fastq_path,
+        probe_set: probe_csv.path().to_path_buf(),
+        output: out_bam.clone(),
+        genes_out: None,
+        metrics: None,
+        max_mm: 1,
+        window: 15,
+        threads: 4,
+    };
+    run(&cli).unwrap();
+    let mut reader = bam::Reader::from_path(&out_bam).unwrap();
+    for (i, record) in reader.records().enumerate() {
+        let record = record.unwrap();
+        assert_eq!(record.qname(), format!("r{i}").as_bytes());
+        assert_eq!(record.is_unmapped(), i % 3 != 0);
+    }
+}

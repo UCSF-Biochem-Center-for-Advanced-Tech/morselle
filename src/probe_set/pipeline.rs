@@ -50,6 +50,45 @@ pub fn establish_genes_manifest(path: &Path, genes: &[(&str, &str)]) -> Result<(
     fs::write(path, &expected).with_context(|| format!("writing {}", path.display()))
 }
 
+/// One FASTQ record -> its BAM record (mapped to the matched probe's gene
+/// contig, or unmapped), plus the matched gene index for metrics.
+fn build_record(
+    header_line: &str,
+    seq: &[u8],
+    qual: &[u8],
+    matcher: &ProbeMatcher,
+    reference: &ProbeSetReference,
+    gene_index: &HashMap<&str, usize>,
+    gene_name: &HashMap<&str, &str>,
+) -> Result<(bam::Record, Option<usize>)> {
+    let (qname, comment) = header_line.split_once('\t').unwrap_or((header_line, ""));
+    let mut record = bam::Record::new();
+    let mut matched_gene_idx = None;
+    if let Some(probe_idx) = matcher.locate(seq) {
+        let gene_id = reference.probes[probe_idx].gene_id.as_str();
+        let g_idx = gene_index[gene_id];
+        matched_gene_idx = Some(g_idx);
+        let cigar = CigarString(vec![Cigar::Match(seq.len() as u32)]);
+        record.set(qname.as_bytes(), Some(&cigar), seq, qual);
+        record.set_tid(g_idx as i32);
+        record.set_pos(0);
+        record.set_mapq(60);
+        record.unset_unmapped();
+        record.push_aux(b"GX", Aux::String(gene_id))?;
+        record.push_aux(b"GN", Aux::String(gene_name[gene_id]))?;
+    } else {
+        record.set(qname.as_bytes(), None, seq, qual);
+    }
+    for tag in ["CR", "CB", "UR", "UB", "PR", "PB"] {
+        if let Some(value) = parse_tag(comment, &format!("{tag}:Z:")) {
+            if !value.is_empty() {
+                record.push_aux(tag.as_bytes(), Aux::String(value))?;
+            }
+        }
+    }
+    Ok((record, matched_gene_idx))
+}
+
 pub fn run(cli: &Cli) -> Result<()> {
     let started = Instant::now();
     let reference = ProbeSetReference::load(&cli.probe_set)?;
@@ -98,6 +137,9 @@ pub fn run(cli: &Cli) -> Result<()> {
             .build()
             .context("building thread pool")?
     };
+    // BGZF compression was single-threaded and becomes the bottleneck once
+    // matching is parallel; give htslib the same worker budget.
+    writer.set_threads(pool.current_num_threads())?;
 
     let mut reads = 0u64;
     let mut matched = 0u64;
@@ -130,48 +172,23 @@ pub fn run(cli: &Cli) -> Result<()> {
             break;
         }
 
-        let (sender, receiver) = crossbeam_channel::unbounded();
-        pool.install(|| {
-            batch.par_iter().for_each_with(sender, |sender, (header_line, seq, qual)| {
-                let (qname, comment) = header_line.split_once('\t').unwrap_or((header_line.as_str(), ""));
-                let mut record = bam::Record::new();
-                let mut matched_gene_idx = None;
-
-                if let Some(probe_idx) = matcher.locate(seq) {
-                    let probe = &reference.probes[probe_idx];
-                    let gene_id = probe.gene_id.as_str();
-                    let g_idx = gene_index[gene_id];
-                    matched_gene_idx = Some(g_idx);
-                    let tid = g_idx as i32;
-                    let cigar = CigarString(vec![Cigar::Match(seq.len() as u32)]);
-                    let _ = record.set(qname.as_bytes(), Some(&cigar), seq, qual);
-                    record.set_tid(tid);
-                    record.set_pos(0);
-                    record.set_mapq(60);
-                    record.unset_unmapped();
-                    let _ = record.push_aux(b"GX", Aux::String(gene_id));
-                    let _ = record.push_aux(b"GN", Aux::String(gene_name[gene_id]));
-                } else {
-                    let _ = record.set(qname.as_bytes(), None, seq, qual);
-                }
-
-                for tag in ["CR", "CB", "UR", "UB", "PR", "PB"] {
-                    if let Some(value) = parse_tag(comment, &format!("{tag}:Z:")) {
-                        if !value.is_empty() {
-                            let _ = record.push_aux(tag.as_bytes(), Aux::String(value));
-                        }
-                    }
-                }
-                let _ = sender.send((record, matched_gene_idx));
-            });
-        });
-
-        for (record, matched_gene_idx) in receiver {
+        // `map` + `collect` (not a channel) keeps the output BAM in input
+        // FASTQ order, so runs are reproducible and downstream ordinals
+        // (molecules' representative tiebreak) don't depend on scheduling.
+        let built: Vec<(bam::Record, Option<usize>)> = pool.install(|| {
+            batch
+                .par_iter()
+                .map(|(header_line, seq, qual)| {
+                    build_record(header_line, seq, qual, &matcher, &reference, &gene_index, &gene_name)
+                })
+                .collect::<Result<Vec<_>>>()
+        })?;
+        for (record, matched_gene_idx) in &built {
             if let Some(g_idx) = matched_gene_idx {
                 matched += 1;
-                genes_hit.insert(g_idx);
+                genes_hit.insert(*g_idx);
             }
-            writer.write(&record)?;
+            writer.write(record)?;
         }
     }
     drop(writer);
