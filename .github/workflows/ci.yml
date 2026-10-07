@@ -20,7 +20,7 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - name: Tools
-        run: sudo apt-get update && sudo apt-get install -y shellcheck cmake
+        run: sudo apt-get update && sudo apt-get install -y shellcheck cmake python3-numpy
       # The same single gate used locally; see scripts/check.sh for what
       # each step guards against.
       - name: scripts/check.sh

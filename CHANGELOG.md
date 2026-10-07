@@ -4,6 +4,33 @@ All notable changes to `sbxpress` are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **`sbxpress molecules --tagseq` counts every gene in a UMI collision in
+  full again (`XW:S`, the 0.5.6 behaviour); fractional splitting is opt-in
+  (`--fractional-collisions`).** At tag-seq depth collisions are mostly
+  distinct molecules that drew the same UMI (DZEC03: 81% of `(cell, UMI)`
+  pairs, genomically unrelated genes), and fractional splitting counts each
+  collision as one molecule — an undercount concentrated in the most
+  expressed genes, plus non-integer matrices. `--no-fractional-collisions`
+  is still accepted (no-op).
+
+### Added
+- `sbxpress molecules --position-aware-umis`: molecules keyed on
+  `(cell, gene, UMI, strand-aware unclipped 5′ start)`, so chance UMI
+  matches stay separate across and within genes; UMI correction then runs
+  per start, even with `--tagseq`. No memory cost (the start is a 24-bit
+  tag in spare bits of the packed UMI). On an oversubscribed simulation
+  with known truth: 0.02% error vs 10% (shared) and 74% (fractional).
+- `scripts/compare_tagseq_modes.sh` / `.py`: run a BAM through each mode
+  and compare with a reference matrix (e.g. Illumina) on normalised
+  correlation, per-gene log2 ratio, and expression-dependent bias.
+- `scripts/sbxpress-pipeline.sh --fractional-collisions`,
+  `--position-aware-umis`.
+- molecules metrics JSON records `fractional_collisions` and
+  `position_aware_umis`.
+
 ## [0.5.9] — 2026-10-07
 
 Review and repair of the 0.5.2–0.5.8 changes made on 2026-10-06. Replaces

@@ -260,21 +260,47 @@ Targeted assays, high-depth bulk/pooled samples, and CAT Tagseq datasets require
 
 ### UMI collision policies (`sbxpress molecules`)
 
-In high-depth bulk or targeted TagSeq samples (e.g., 2–25M reads/sample into a 12bp UMI space), distinct molecules from different genes often share a UMI by chance. `--tagseq` therefore (a) skips 1-mismatch UMI correction, since two real UMIs 1bp apart are common at this depth, and (b) does not discard the minor gene in a collision. Three collision policies exist:
+In high-depth bulk or targeted TagSeq samples (e.g., 2–25M reads/sample into a 12bp UMI space), distinct molecules often share a UMI by chance — DZEC03 measured ~2.1x oversubscription, with 81% of `(cell, UMI)` pairs claimed by more than one, genomically unrelated, gene. `--tagseq` therefore (a) skips 1-mismatch UMI correction, since two real UMIs 1bp apart are common at this depth, and (b) does not discard the minor gene in a collision:
 
 | Flags | Collision outcome (`XW`) | Matrix contribution |
 |---|---|---|
 | default (single-cell) | `W` winner / `L` loser, `T` on exact tie | 1 for the winner, 0 otherwise |
-| `--tagseq` (fractional by default) or `--fractional-collisions` | `F` for every gene | `w_i = r_i / Σr` (read support), weights of one collision sum to 1 |
-| `--tagseq --no-fractional-collisions` | `S` for every gene | 1 for every gene |
+| `--tagseq` | `S` for every gene | 1 for every gene (the collision is treated as distinct molecules) |
+| `--fractional-collisions` (with or without `--tagseq`) | `F` for every gene | `w_i = r_i / Σr` (read support); weights of one collision sum to 1 |
 
-Fractional molecules carry the weight as `ZW:f` on their reads; the representative read is flagged `xf:25` like any counted molecule. `ZG` is never touched (it is `annotate`'s terminal gene call). In the metrics JSON, a fractional collision adds 1 to `molecules_counted` and one per gene to `collision_molecules_fractional`. `--fractional-collisions` also works without `--tagseq` (UMI correction stays on).
+Fractional splitting counts a collision as **one** molecule. That is right if collisions are mostly one molecule seen on two genes, and an undercount — largest for the most expressed genes — if they are mostly distinct molecules that drew the same UMI, which is what DZEC03 shows. It is therefore opt-in (it was the `--tagseq` default in 0.5.6–0.5.9). Fractional molecules carry the weight as `ZW:f`; the representative read is flagged `xf:25` like any counted molecule; `ZG` is never touched. In the metrics JSON a fractional collision adds 1 to `molecules_counted`.
 
 ```bash
 sbxpress molecules "$OUT/annotation/sample.annotated.bam" \
   --tagseq \
   --output "$OUT/molecules/sample.molecules.bam"
 ```
+
+### Position-aware UMIs (`--position-aware-umis`)
+
+Every policy above still merges two distinct molecules of the **same** gene that drew the same UMI — invisible, and frequent for highly expressed genes at tag-seq depth. `--position-aware-umis` keys molecules on `(cell, gene, UMI, read 5′ start)` (strand-aware, unclipped), the usual deduplication key for bulk 3′ tag-seq: PCR duplicates share a start, chance UMI matches almost never do. Because 1-mismatch neighbours are then only compared at the same start, where they are almost always sequencing errors, UMI correction runs in this mode even with `--tagseq`. It works with any collision policy and with `--shards`/`--evidence-workers`; UMIs must be ≤16 bases.
+
+```bash
+sbxpress molecules "$OUT/annotation/sample.annotated.bam" \
+  --tagseq --position-aware-umis \
+  --output "$OUT/molecules/sample.molecules.bam"
+```
+
+Caveat: duplicates whose start differs (an indel or soft-clip difference at the read's 5′ end) are counted separately, so this mode can overcount slightly. Validate on your data before switching.
+
+### Choosing a mode: compare against a reference
+
+`scripts/compare_tagseq_modes.sh` runs one annotated BAM through each mode and compares every matrix with an independent reference — typically the same library sequenced on Illumina and counted separately:
+
+```bash
+scripts/compare_tagseq_modes.sh \
+  --bam "$OUT/DZEC03/annotation/DZEC03.annotated.coordinate.bam" \
+  --reference /path/to/illumina/outs/raw_feature_bc_matrix.h5 \
+  --features "$OUT/reference/genes.mtx" --out-dir "$OUT/mode_comparison" \
+  --threads 16 --molecule-args "--shards 8"
+```
+
+It writes `summary.tsv` (per mode: per-barcode correlation of library-normalised counts, median per-gene |log2 ratio|, and the slope of log2 ratio against expression) and `per_gene.tsv`. Depth differs between platforms, so judge modes on the normalised metrics: collision undercounting shows up as a **negative slope** (the most expressed genes lose the most); a mode without collision bias is flat. Needs `numpy` (`h5py` for an `.h5` reference).
 
 ### Real & Float32 Expression Matrices (`sbxpress matrix`)
 

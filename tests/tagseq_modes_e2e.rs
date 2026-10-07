@@ -213,3 +213,127 @@ fn position_aware_umis_keep_ub_clean_and_reject_overlong_umis() {
     assert!(!failed.status.success());
     assert!(String::from_utf8_lossy(&failed.stderr).contains("at most 16 bases"));
 }
+
+/// scripts/compare_tagseq_modes.sh end to end, with the fixture's true
+/// counts as the "reference" matrix: the tool must rank position-aware
+/// closest to truth and show fractional's expression-dependent undercount.
+#[test]
+fn compare_tagseq_modes_tool_ranks_modes_against_a_reference() {
+    let numpy = std::process::Command::new("python3")
+        .args(["-c", "import numpy"])
+        .output();
+    if !numpy.is_ok_and(|o| o.status.success()) {
+        eprintln!("python3 with numpy not available; skipping");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let fx = write_fixture(
+        dir.path(),
+        FixtureSpec {
+            seed: 0x7A65_0002,
+            molecules: 6_000,
+            umi_pool: 40,
+            shared_start: true,
+            ..FixtureSpec::default()
+        },
+    );
+    // Truth as a MEX reference.
+    let reference = dir.path().join("truth");
+    std::fs::create_dir_all(&reference).unwrap();
+    let truth = truth(&fx.bam);
+    let barcodes: Vec<&String> = truth
+        .keys()
+        .map(|(b, _)| b)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let genes: Vec<&String> = truth
+        .keys()
+        .map(|(_, g)| g)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    std::fs::write(
+        reference.join("barcodes.tsv"),
+        barcodes
+            .iter()
+            .map(|b| format!("{b}\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+    std::fs::write(
+        reference.join("features.tsv"),
+        genes
+            .iter()
+            .map(|g| format!("{g}\t{g}\tGene Expression\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+    let mut mtx = format!(
+        "%%MatrixMarket matrix coordinate integer general\n{} {} {}\n",
+        genes.len(),
+        barcodes.len(),
+        truth.len()
+    );
+    for ((b, g), v) in &truth {
+        let gi = genes.iter().position(|x| *x == g).unwrap() + 1;
+        let bi = barcodes.iter().position(|x| *x == b).unwrap() + 1;
+        mtx.push_str(&format!("{gi} {bi} {v}\n"));
+    }
+    std::fs::write(reference.join("matrix.mtx"), mtx).unwrap();
+
+    let out = dir.path().join("compare");
+    let result = std::process::Command::new("bash")
+        .arg(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("scripts/compare_tagseq_modes.sh"),
+        )
+        .args([
+            "--bam",
+            fx.bam.to_str().unwrap(),
+            "--reference",
+            reference.to_str().unwrap(),
+        ])
+        .args(["--out-dir", out.to_str().unwrap(), "--threads", "1"])
+        .env("SBXPRESS", env!("CARGO_BIN_EXE_sbxpress"))
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let summary = std::fs::read_to_string(out.join("summary.tsv")).unwrap();
+    eprintln!("{summary}");
+    let rows: BTreeMap<String, BTreeMap<String, f64>> = {
+        let mut lines = summary.lines();
+        let header: Vec<&str> = lines.next().unwrap().split('\t').collect();
+        lines
+            .map(|l| {
+                let f: Vec<&str> = l.split('\t').collect();
+                let values = header
+                    .iter()
+                    .zip(&f)
+                    .skip(1)
+                    .map(|(h, v)| (h.to_string(), v.parse().unwrap()))
+                    .collect();
+                (f[0].to_owned(), values)
+            })
+            .collect()
+    };
+    let total = |m: &str| rows[m]["total_vs_reference"];
+    let err = |m: &str| rows[m]["median_abs_log2_cpm_ratio"];
+    assert!(
+        (total("position") - 1.0).abs() < 0.01,
+        "position total {}",
+        total("position")
+    );
+    assert!(err("position") <= err("shared") && err("position") < err("fractional"));
+    assert!(total("fractional") < total("shared"));
+    // Collision loss grows with expression: fractional's ratio falls with level.
+    assert!(
+        rows["fractional"]["log2_ratio_vs_expression_slope"]
+            < rows["position"]["log2_ratio_vs_expression_slope"]
+    );
+}

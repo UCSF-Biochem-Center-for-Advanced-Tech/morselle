@@ -50,6 +50,7 @@ fn pipeline_scripts_pass_shellcheck_when_available() {
         .arg(repo().join("scripts/sbxpress-pipeline.sh"))
         .arg(repo().join("scripts/sbxpress-gex-pipeline.sh"))
         .arg(repo().join("scripts/run_flex_multi.sh"))
+        .arg(repo().join("scripts/compare_tagseq_modes.sh"))
         .output()
         .unwrap();
     assert!(

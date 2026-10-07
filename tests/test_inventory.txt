@@ -277,5 +277,6 @@ src/lib.rs yc::tests::trimming_drops_zero_length_ops_at_the_boundary
 src/lib.rs yc::tests::trimming_everything_empties_the_tag
 src/lib.rs yc::tests::trims_into_the_duplex_segment
 src/lib.rs yc::tests::trims_within_the_tails
+tagseq_modes_e2e compare_tagseq_modes_tool_ranks_modes_against_a_reference
 tagseq_modes_e2e position_aware_mode_recovers_true_molecule_counts
 tagseq_modes_e2e position_aware_umis_keep_ub_clean_and_reject_overlong_umis
