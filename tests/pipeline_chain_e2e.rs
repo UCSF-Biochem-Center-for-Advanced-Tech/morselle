@@ -206,8 +206,12 @@ fn tagseq_fractional_chain_keeps_fractions_through_cells() {
             ..FixtureSpec::default()
         },
     );
-    let (metrics, counts, is_real, outs) =
-        molecules_matrix(dir.path(), &fx.bam, "tagseq", &["--tagseq"]);
+    let (metrics, counts, is_real, outs) = molecules_matrix(
+        dir.path(),
+        &fx.bam,
+        "tagseq",
+        &["--tagseq", "--fractional-collisions"],
+    );
     assert!(is_real, "fractional collisions give a real-valued matrix");
     assert!(metrics["collision_molecules_fractional"] > 0);
     check_matrix_total(&counts, &metrics);

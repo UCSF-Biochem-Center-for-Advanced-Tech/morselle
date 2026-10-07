@@ -57,6 +57,10 @@ pub struct FixtureSpec {
     pub umi_pool: usize,
     /// Tag reads with Flex probe barcodes `BC001`.. (`None`: no `PB` tag).
     pub probe_barcodes: Option<usize>,
+    /// PCR duplicates of a molecule share its start, soft clip and strand
+    /// (as real duplicates do), and molecules use both strands. Off keeps
+    /// the original per-read random positions the golden fixtures use.
+    pub shared_start: bool,
 }
 
 impl Default for FixtureSpec {
@@ -69,6 +73,7 @@ impl Default for FixtureSpec {
             genes: 40,
             umi_pool: 600,
             probe_barcodes: None,
+            shared_start: false,
         }
     }
 }
@@ -94,6 +99,7 @@ struct Read {
     mapq: u8,
     unmapped: bool,
     clip: u32,
+    reverse: bool,
 }
 
 /// Write a coordinate-sorted, indexed annotated BAM plus its whitelist.
@@ -143,6 +149,14 @@ pub fn write_fixture(dir: &Path, spec: FixtureSpec) -> Fixture {
         let multi_gene = rng.chance(50);
         let other = (gene + 1 + rng.below(spec.genes as u64 - 1) as usize) % spec.genes;
         let copies = 1 + rng.below(5);
+        // Drawn only in shared_start mode, so default fixtures are unchanged.
+        let start = spec.shared_start.then(|| {
+            (
+                genes[gene].3 + rng.below(400) as i64,
+                rng.below(3) as u32 * 10,
+                rng.chance(500),
+            )
+        });
         for copy in 0..copies {
             let mut read_umi = umi.clone();
             if copy > 0 && rng.chance(40) {
@@ -178,7 +192,11 @@ pub fn write_fixture(dir: &Path, spec: FixtureSpec) -> Fixture {
                 mapq: [60, 60, 60, 3, 255][rng.below(5) as usize],
                 unmapped: rng.chance(15),
                 clip: rng.below(3) as u32 * 10,
+                reverse: false,
             });
+            if let (Some((pos, clip, reverse)), Some(read)) = (start, reads.last_mut()) {
+                (read.pos, read.clip, read.reverse) = (pos, clip, reverse);
+            }
         }
     }
     reads.sort_by(|a, b| (a.tid, a.pos, &a.name).cmp(&(b.tid, b.pos, &b.name)));
@@ -213,6 +231,9 @@ pub fn write_fixture(dir: &Path, spec: FixtureSpec) -> Fixture {
         record.set_tid(r.tid);
         record.set_pos(r.pos);
         record.set_mapq(r.mapq);
+        if r.reverse {
+            record.set_flags(record.flags() | 0x10);
+        }
         if r.unmapped {
             record.set_unmapped();
         } else {
@@ -415,4 +436,10 @@ pub fn molecule_counters(metrics_path: &Path) -> BTreeMap<String, u64> {
     .iter()
     .map(|k| (k.to_string(), json[*k].as_u64().unwrap_or(0)))
     .collect()
+}
+
+/// Source molecule of a fixture read (its name is `SBX:<molecule>:<copy>`).
+pub fn molecule_id(record: &bam::Record) -> u64 {
+    let name = String::from_utf8_lossy(record.qname()).to_string();
+    name.split(':').nth(1).unwrap().parse().unwrap()
 }

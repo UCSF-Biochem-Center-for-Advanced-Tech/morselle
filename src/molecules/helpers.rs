@@ -207,3 +207,50 @@ pub fn choose_gene_parts<'a>(
     let name = gn.split(';').nth(index).unwrap_or(zg);
     Some((zg, name))
 }
+
+/// 24-bit class of a read's start: tid, strand, and the unclipped 5' end
+/// of the alignment (forward: start minus leading soft clip; reverse:
+/// end plus trailing soft clip). PCR duplicates of one molecule share it;
+/// distinct molecules that drew the same UMI almost never do. Hashed to fit
+/// beside a <=16bp UMI (see `Dna::with_position_tag`); two different
+/// positions only alias with probability 2^-24 per pair, and only matter
+/// if they also share cell, gene and UMI.
+pub fn position_tag(record: &bam::Record) -> u32 {
+    use rust_htslib::bam::record::Cigar;
+    let cigar = record.cigar();
+    let five_prime = if record.is_reverse() {
+        let trailing = match cigar.iter().last() {
+            Some(Cigar::SoftClip(n)) => *n as i64,
+            _ => 0,
+        };
+        cigar.end_pos() - 1 + trailing
+    } else {
+        let leading = match cigar.iter().next() {
+            Some(Cigar::SoftClip(n)) => *n as i64,
+            _ => 0,
+        };
+        record.pos() - leading
+    };
+    let mut value = 0xcbf29ce484222325u64;
+    for part in [record.tid() as i64, record.is_reverse() as i64, five_prime] {
+        for byte in part.to_le_bytes() {
+            value ^= byte as u64;
+            value = value.wrapping_mul(0x100000001b3);
+        }
+    }
+    let mut z = value.wrapping_add(0x9E3779B97F4A7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+    ((z ^ (z >> 31)) & super::types::POSITION_TAG_MASK) as u32
+}
+
+/// The UMI part of a record's molecule key: the packed `UR`/`UB`, tagged
+/// with the read's position class under `--position-aware-umis`.
+pub fn umi_key(record: &bam::Record, umi: &str, position_aware: bool) -> Option<super::types::Dna> {
+    let dna = super::types::Dna::pack(umi)?;
+    if position_aware {
+        dna.with_position_tag(position_tag(record))
+    } else {
+        Some(dna)
+    }
+}

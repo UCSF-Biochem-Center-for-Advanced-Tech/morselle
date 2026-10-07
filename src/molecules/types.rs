@@ -59,6 +59,17 @@ impl Dna {
         })
     }
 
+    /// This UMI tagged with a read-position class (see
+    /// `helpers::position_tag`), for `--position-aware-umis`. The tag lives
+    /// in bits 32..56, unused by sequences of <= 16 bases, so it takes part
+    /// in equality/hashing (keys at different positions never meet) while
+    /// `unpack`, `hamming` and `one_mismatch_neighbors` see only the bases
+    /// -- 1-mismatch neighbours therefore stay at the same position.
+    /// `None` for sequences longer than 16 bases.
+    pub fn with_position_tag(self, tag: u32) -> Option<Self> {
+        (self.len() <= 16).then(|| Self(self.0 | ((tag as u64 & POSITION_TAG_MASK) << 32)))
+    }
+
     pub fn unpack(self) -> String {
         let len = self.len();
         let mut out = vec![b'A'; len];
@@ -70,6 +81,9 @@ impl Dna {
         String::from_utf8(out).unwrap()
     }
 }
+
+/// Width of the position tag stored by [`Dna::with_position_tag`] (24 bits).
+pub const POSITION_TAG_MASK: u64 = 0x00FF_FFFF;
 
 /// No `PB` tag on this record (non-Flex data, or a probe barcode that
 /// wasn't confidently located) -- `sample` is genuinely absent, not merely
@@ -156,6 +170,9 @@ pub struct Metrics {
     pub input_bam: String,
     pub output_bam: String,
     pub tagseq: bool,
+    /// Policy flags this run used (see `sbx10x-molecules --help`).
+    pub fractional_collisions: bool,
+    pub position_aware_umis: bool,
     pub records: u64,
     pub eligible_records: u64,
     /// Otherwise-eligible (mapped, valid CB+UMI+gene) records dropped for

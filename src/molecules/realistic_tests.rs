@@ -95,17 +95,18 @@ mod tests {
         bam::index::build(&path, None, bam::index::Type::Bai, 1).unwrap();
         assert_eq!(indexed_regions(&path, 10).unwrap().len(), 10);
         assert_eq!(
-            collect_region(&path, 0, 0, 10, false)
+            collect_region(&path, 0, 0, 10, false, false)
                 .unwrap()
                 .eligible_records,
             2
         );
 
         let mut serial_metrics = Metrics::default();
-        let (serial, _, _, _, _) = collect_evidence(&path, 1, false, &mut serial_metrics).unwrap();
+        let (serial, _, _, _, _) =
+            collect_evidence(&path, 1, false, false, &mut serial_metrics).unwrap();
         let mut parallel_metrics = Metrics::default();
         let (parallel, _, _, _, _) =
-            collect_evidence_indexed(&path, 2, 10, false, &mut parallel_metrics).unwrap();
+            collect_evidence_indexed(&path, 2, 10, false, false, &mut parallel_metrics).unwrap();
         assert_eq!(serial_metrics.eligible_records, 3);
         assert_eq!(parallel_metrics.eligible_records, 3);
         assert_eq!(serial.len(), 2);

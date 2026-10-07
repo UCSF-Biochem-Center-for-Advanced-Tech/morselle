@@ -47,9 +47,11 @@ GEX / tagseq:
                            (query-grouped streaming annotation, slower).
 Tagseq:
   --tagseq-barcodes FILE   Call exactly these barcodes as cells (skips EmptyDrops).
-  --no-fractional-collisions
-                           Count every gene in a UMI collision in full instead of
-                           splitting it by read support (the --tagseq default).
+  --fractional-collisions  Split each cross-gene UMI collision by read support
+                           (counts one molecule per collision; real-valued matrix).
+                           Default (tagseq): count every gene in a collision in full.
+  --position-aware-umis    Deduplicate on (cell, gene, UMI, read 5' start): chance
+                           UMI matches stay separate; UMI errors corrected per start.
 Flex:
   --probe-set FILE         10x Flex probe-set reference CSV.
   --probe-barcode-whitelist FILE (alias --probe-barcode-wl)
@@ -111,7 +113,7 @@ PROBE_SET='' PROBE_BARCODE_WL='' PROBE_SAMPLE_SHEET='' TAGSEQ_BARCODES=''
 THREADS='' EXTRACT_THREADS='' MAP_THREADS='' ANNOTATE_THREADS='' ALIGN_THREADS=''
 SORT_THREADS='' MOLECULE_THREADS=''
 SPLIT=16 SORT_MEM=1G TMP_DIR='' EXPECT_CELLS=''
-THREE_PRIME=1 MULTIMAP_TAGS=0 FRACTIONAL=1 EXTRACT_NO_GZIP=0
+THREE_PRIME=1 MULTIMAP_TAGS=0 FRACTIONAL=0 POSITION_AWARE=0 EXTRACT_NO_GZIP=0
 AUDIT=0 AUDIT_LABEL='' MOLECULE_SAMPLE=64 MOLECULE_COMPRESSION=''
 
 while (( $# > 0 )); do
@@ -143,7 +145,10 @@ while (( $# > 0 )); do
         --probe-barcode-whitelist|--probe-barcode-wl) PROBE_BARCODE_WL=${2:?missing value for $1}; shift 2 ;;
         --probe-sample-sheet|--config) PROBE_SAMPLE_SHEET=${2:?missing value for $1}; shift 2 ;;
         --tagseq-barcodes) TAGSEQ_BARCODES=${2:?missing value for $1}; shift 2 ;;
+        --fractional-collisions) FRACTIONAL=1; shift ;;
+        # Shared is the default again (fractional is opt-in); accepted for old command lines.
         --no-fractional-collisions) FRACTIONAL=0; shift ;;
+        --position-aware-umis) POSITION_AWARE=1; shift ;;
         --threads) THREADS=${2:?missing value for $1}; shift 2 ;;
         --extract-threads) EXTRACT_THREADS=${2:?missing value for $1}; shift 2 ;;
         --map-threads) MAP_THREADS=${2:?missing value for $1}; shift 2 ;;
@@ -353,10 +358,11 @@ if [[ ! -s "$MOLECULE_BAM.bai" ]]; then
     MOLECULE_ARGS=(--output "$MOLECULE_BAM" --metrics "$MOLECULES_DIR/$SAMPLE.molecules.metrics.json"
         --threads "$MOLECULE_THREADS")
     [[ -z $MOLECULE_COMPRESSION ]] || MOLECULE_ARGS+=(--compression-level "$MOLECULE_COMPRESSION")
+    (( POSITION_AWARE == 0 )) || MOLECULE_ARGS+=(--position-aware-umis)
     case "$ANALYSIS_MODE" in
         tagseq)
             MOLECULE_ARGS+=(--tagseq)
-            (( FRACTIONAL )) || MOLECULE_ARGS+=(--no-fractional-collisions) ;;
+            (( FRACTIONAL == 0 )) || MOLECULE_ARGS+=(--fractional-collisions) ;;
         flex)
             # Multiplexed Flex needs PB to keep samples sharing a GEM apart;
             # single-sample Illumina Flex has no PB tag at all.

@@ -244,11 +244,14 @@ fn single_cell_default_is_winner_take_all_with_umi_correction() {
 }
 
 #[test]
-fn tagseq_defaults_to_fractional_split_without_umi_correction() {
+fn tagseq_fractional_opt_in_splits_without_umi_correction() {
     let dir = tempfile::tempdir().unwrap();
     for (name, extra) in [
-        ("serial", vec!["--tagseq"]),
-        ("sharded", vec!["--tagseq", "--shards", "2"]),
+        ("serial", vec!["--tagseq", "--fractional-collisions"]),
+        (
+            "sharded",
+            vec!["--tagseq", "--fractional-collisions", "--shards", "2"],
+        ),
     ] {
         let run = molecules_then_matrix(dir.path(), name, &extra);
         check_output_invariants(&run);
@@ -277,27 +280,32 @@ fn tagseq_defaults_to_fractional_split_without_umi_correction() {
 #[test]
 fn tagseq_without_fractional_counts_every_claimant_in_full() {
     let dir = tempfile::tempdir().unwrap();
-    let run = molecules_then_matrix(
-        dir.path(),
-        "shared",
-        &["--tagseq", "--no-fractional-collisions"],
-    );
-    check_output_invariants(&run);
-    expect(
-        &run,
-        &[
-            (C1, "G1", 3.0),
-            (C1, "G2", 1.0),
-            (C1, "G3", 1.0),
-            (C2, "G2", 1.0),
-        ],
-    );
-    assert!(!run.is_real);
-    assert!(matches!(find(&run, "r8").aux(b"XW"), Ok(Aux::Char(b'S'))));
-    assert!(
-        find(&run, "r8").aux(b"ZW").is_err(),
-        "ZW is only written for fractional molecules"
-    );
+    // Shared is the --tagseq default; the old opt-out flag is still accepted.
+    for (name, args) in [
+        ("default", vec!["--tagseq"]),
+        (
+            "legacy_flag",
+            vec!["--tagseq", "--no-fractional-collisions"],
+        ),
+    ] {
+        let run = molecules_then_matrix(dir.path(), name, &args);
+        check_output_invariants(&run);
+        expect(
+            &run,
+            &[
+                (C1, "G1", 3.0),
+                (C1, "G2", 1.0),
+                (C1, "G3", 1.0),
+                (C2, "G2", 1.0),
+            ],
+        );
+        assert!(!run.is_real, "{name}");
+        assert!(matches!(find(&run, "r8").aux(b"XW"), Ok(Aux::Char(b'S'))));
+        assert!(
+            find(&run, "r8").aux(b"ZW").is_err(),
+            "ZW is only written for fractional molecules"
+        );
+    }
 }
 
 #[test]

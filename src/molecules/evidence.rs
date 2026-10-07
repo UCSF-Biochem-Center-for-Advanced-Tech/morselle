@@ -12,7 +12,8 @@ use std::sync::{
 use tracing::info;
 
 use super::helpers::{
-    aligned_bases, better, intern_sample, read_hash, record_identity, shard_hash, MoleculeTags,
+    aligned_bases, better, intern_sample, read_hash, record_identity, shard_hash, umi_key,
+    MoleculeTags,
 };
 use super::types::{Dna, Evidence, Metrics, RawKey, NO_SAMPLE};
 
@@ -79,6 +80,7 @@ pub fn collect_evidence(
     path: &Path,
     threads: usize,
     require_pb: bool,
+    position_aware: bool,
     metrics: &mut Metrics,
 ) -> Result<(
     HashMap<RawKey, Evidence>,
@@ -112,7 +114,14 @@ pub fn collect_evidence(
         let Some(cell) = tags.cb.and_then(Dna::pack) else {
             continue;
         };
-        let Some(umi) = tags.umi().and_then(Dna::pack) else {
+        if position_aware && tags.umi().is_some_and(|u| u.len() > 16) {
+            bail!(
+                "--position-aware-umis supports UMIs of at most 16 bases; read {} has {}",
+                String::from_utf8_lossy(record.qname()),
+                tags.umi().unwrap_or_default().len()
+            );
+        }
+        let Some(umi) = tags.umi().and_then(|u| umi_key(&record, u, position_aware)) else {
             continue;
         };
         let Some((gene, _name)) = tags.gene() else {
@@ -220,6 +229,7 @@ pub fn collect_region(
     start: u64,
     end: u64,
     require_pb: bool,
+    position_aware: bool,
 ) -> Result<RegionEvidence> {
     let mut reader = bam::IndexedReader::from_path(path)
         .with_context(|| format!("opening indexed {}", path.display()))?;
@@ -249,7 +259,14 @@ pub fn collect_region(
         let Some(cell) = tags.cb.and_then(Dna::pack) else {
             continue;
         };
-        let Some(umi) = tags.umi().and_then(Dna::pack) else {
+        if position_aware && tags.umi().is_some_and(|u| u.len() > 16) {
+            bail!(
+                "--position-aware-umis supports UMIs of at most 16 bases; read {} has {}",
+                String::from_utf8_lossy(record.qname()),
+                tags.umi().unwrap_or_default().len()
+            );
+        }
+        let Some(umi) = tags.umi().and_then(|u| umi_key(&record, u, position_aware)) else {
             continue;
         };
         let Some((gene, _name)) = tags.gene() else {
@@ -320,6 +337,7 @@ pub fn collect_evidence_indexed(
     workers: usize,
     chunk_bases: u64,
     require_pb: bool,
+    position_aware: bool,
     metrics: &mut Metrics,
 ) -> Result<(
     HashMap<RawKey, Evidence>,
@@ -354,7 +372,7 @@ pub fn collect_evidence_indexed(
         regions
             .par_iter()
             .map(|&(tid, start, end)| {
-                let result = collect_region(path, tid, start, end, require_pb);
+                let result = collect_region(path, tid, start, end, require_pb, position_aware);
                 let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
                 if done % checkpoint == 0 || done == total_regions {
                     eprintln!(

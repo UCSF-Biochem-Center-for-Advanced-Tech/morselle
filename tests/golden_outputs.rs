@@ -29,7 +29,8 @@ use serde_json::{json, Value};
 
 struct Case {
     name: &'static str,
-    flex_fixture: bool,
+    /// "gex", "flex", or "starts" (duplicates share their 5' start).
+    fixture: &'static str,
     args: &'static [&'static str],
     /// Equivalent 0.5.6 flags, or `None` if 0.5.6 had no such mode.
     legacy_args: Option<&'static [&'static str]>,
@@ -38,25 +39,25 @@ struct Case {
 const CASES: &[Case] = &[
     Case {
         name: "gex_serial",
-        flex_fixture: false,
+        fixture: "gex",
         args: &[],
         legacy_args: Some(&[]),
     },
     Case {
         name: "gex_indexed",
-        flex_fixture: false,
+        fixture: "gex",
         args: &["--evidence-workers", "2"],
         legacy_args: Some(&["--evidence-workers", "2"]),
     },
     Case {
         name: "gex_sharded",
-        flex_fixture: false,
+        fixture: "gex",
         args: &["--shards", "3", "--shard-concurrency", "2"],
         legacy_args: Some(&["--shards", "3", "--shard-concurrency", "2"]),
     },
     Case {
         name: "gex_saturation",
-        flex_fixture: false,
+        fixture: "gex",
         args: &[
             "--saturation",
             "{dir}/sat.tsv.gz",
@@ -72,31 +73,57 @@ const CASES: &[Case] = &[
     },
     Case {
         name: "tagseq_shared",
-        flex_fixture: false,
+        fixture: "gex",
         args: &["--tagseq", "--no-fractional-collisions"],
+        legacy_args: Some(&["--tagseq"]),
+    },
+    // Shared is the --tagseq default again after 0.5.9 (0.5.6 behaviour); must
+    // equal tagseq_shared, which still passes the old opt-out flag.
+    Case {
+        name: "tagseq_default",
+        fixture: "gex",
+        args: &["--tagseq"],
         legacy_args: Some(&["--tagseq"]),
     },
     Case {
         name: "tagseq_fractional",
-        flex_fixture: false,
-        args: &["--tagseq"],
+        fixture: "gex",
+        args: &["--tagseq", "--fractional-collisions"],
+        legacy_args: None,
+    },
+    Case {
+        name: "gex_position_aware",
+        fixture: "starts",
+        args: &["--position-aware-umis"],
+        legacy_args: None,
+    },
+    Case {
+        name: "tagseq_position_aware",
+        fixture: "starts",
+        args: &["--tagseq", "--position-aware-umis"],
+        legacy_args: None,
+    },
+    Case {
+        name: "tagseq_position_aware_sharded",
+        fixture: "starts",
+        args: &["--tagseq", "--position-aware-umis", "--shards", "3"],
         legacy_args: None,
     },
     Case {
         name: "fractional_single_cell",
-        flex_fixture: false,
+        fixture: "gex",
         args: &["--fractional-collisions"],
         legacy_args: None,
     },
     Case {
         name: "flex",
-        flex_fixture: true,
+        fixture: "flex",
         args: &["--flex"],
         legacy_args: Some(&["--flex"]),
     },
     Case {
         name: "flex_sharded",
-        flex_fixture: true,
+        fixture: "flex",
         args: &["--flex", "--shards", "2"],
         legacy_args: Some(&["--flex", "--shards", "2"]),
     },
@@ -164,6 +191,16 @@ fn molecules_and_matrix_outputs_match_golden() {
             ..FixtureSpec::default()
         },
     );
+    let starts_dir = dir.path().join("starts");
+    std::fs::create_dir_all(&starts_dir).unwrap();
+    let starts = write_fixture(
+        &starts_dir,
+        FixtureSpec {
+            umi_pool: 300,
+            shared_start: true,
+            ..FixtureSpec::default()
+        },
+    );
     let flex = write_fixture(
         &flex_dir,
         FixtureSpec {
@@ -183,10 +220,10 @@ fn molecules_and_matrix_outputs_match_golden() {
         } else {
             case.args
         };
-        let (dir, fixture) = if case.flex_fixture {
-            (&flex_dir, &flex.bam)
-        } else {
-            (&gex_dir, &gex.bam)
+        let (dir, fixture) = match case.fixture {
+            "flex" => (&flex_dir, &flex.bam),
+            "starts" => (&starts_dir, &starts.bam),
+            _ => (&gex_dir, &gex.bam),
         };
         results.insert(case.name.to_owned(), run_case(dir, fixture, case, args));
     }

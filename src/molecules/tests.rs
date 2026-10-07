@@ -212,7 +212,7 @@ fn records_without_a_confident_sample_barcode_are_dropped_not_bucketed() {
     drop(writer);
 
     let mut metrics = Metrics::default();
-    let (evidence, ..) = collect_evidence(&path, 1, true, &mut metrics).unwrap();
+    let (evidence, ..) = collect_evidence(&path, 1, true, false, &mut metrics).unwrap();
     assert_eq!(
         metrics.eligible_records, 1,
         "only the real-PB record is eligible"
@@ -224,7 +224,8 @@ fn records_without_a_confident_sample_barcode_are_dropped_not_bucketed() {
     assert_eq!(evidence.len(), 1);
 
     let mut tagseq_metrics = Metrics::default();
-    let (tagseq_evidence, ..) = collect_evidence(&path, 1, false, &mut tagseq_metrics).unwrap();
+    let (tagseq_evidence, ..) =
+        collect_evidence(&path, 1, false, false, &mut tagseq_metrics).unwrap();
     assert_eq!(
         tagseq_metrics.eligible_records, 3,
         "tag-seq must not require PB"

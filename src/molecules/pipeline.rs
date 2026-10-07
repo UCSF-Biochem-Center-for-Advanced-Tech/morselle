@@ -19,9 +19,9 @@ use rayon::prelude::*;
 use rust_htslib::bam::{self, Read};
 
 use super::aux_write::{append_char, append_f32, append_i32, append_u32, remove_tag, replace_str};
-use super::dedup::build_decisions;
+use super::dedup::{build_decisions_with, DedupPolicy};
 use super::evidence::{collate, collect_evidence};
-use super::helpers::{record_identity, MoleculeTags};
+use super::helpers::{record_identity, umi_key, MoleculeTags};
 use super::types::{merge_metrics, Decision, Dna, Metrics, RawKey, NO_SAMPLE};
 
 /// Settings shared by the unsharded and sharded write paths.
@@ -32,6 +32,9 @@ pub struct MoleculeOptions {
     pub flex: bool,
     pub tagseq: bool,
     pub fractional: bool,
+    /// Key molecules on (cell, gene, UMI, read 5' position); see
+    /// `helpers::position_tag`.
+    pub position_aware: bool,
     /// BGZF level (0-9) for the output BAM; `None` keeps htslib's default.
     pub compression_level: Option<u32>,
 }
@@ -54,18 +57,20 @@ pub struct KeyTables<'a> {
 fn record_key(
     record: &bam::Record,
     tags: &MoleculeTags,
-    flex: bool,
+    opts: &MoleculeOptions,
     tables: &KeyTables,
 ) -> Option<RawKey> {
     if record.is_unmapped() || record.is_secondary() || record.is_supplementary() {
         return None;
     }
     let cell = tags.cb.and_then(Dna::pack)?;
-    let umi = tags.umi().and_then(Dna::pack)?;
+    let umi = tags
+        .umi()
+        .and_then(|u| umi_key(record, u, opts.position_aware))?;
     let gene = tags
         .gene()
         .and_then(|(g, _)| tables.gene_ids.get(g).copied())?;
-    let sample = if flex {
+    let sample = if opts.flex {
         tags.pb
             .filter(|v| !v.is_empty())
             .and_then(|pb| tables.sample_ids.get(pb).copied())?
@@ -86,7 +91,7 @@ fn record_key(
 fn tag_record(
     record: &mut bam::Record,
     identity: impl Fn(&bam::Record) -> u64,
-    flex: bool,
+    opts: &MoleculeOptions,
     decisions: &HashMap<RawKey, Decision>,
     tables: &KeyTables,
     metrics: &mut Metrics,
@@ -94,7 +99,7 @@ fn tag_record(
     // Everything read from the tags is resolved (and copied where needed)
     // before the record is mutated below.
     let tags = MoleculeTags::read(record);
-    let key = record_key(record, &tags, flex, tables);
+    let key = record_key(record, &tags, opts, tables);
     let multi_gene_name = match tags.gx {
         Some(gx) if gx.contains(';') => Some(tags.gene().map(|(_, name)| name.to_owned())),
         _ => None,
@@ -160,7 +165,7 @@ pub fn write_output(
                 ordinal as u64
             }
         };
-        tag_record(&mut record, identity, opts.flex, decisions, tables, metrics)?;
+        tag_record(&mut record, identity, opts, decisions, tables, metrics)?;
         writer.write(&record)?;
         written += 1;
         if written % 25_000_000 == 0 {
@@ -195,7 +200,7 @@ fn write_shard_output(
         tag_record(
             &mut record,
             |_| ordinal as u64,
-            opts.flex,
+            opts,
             decisions,
             tables,
             metrics,
@@ -250,15 +255,19 @@ pub fn run_sharded(
             .par_iter()
             .map(|shard_path| -> Result<Metrics> {
                 let mut local = Metrics::default();
-                let (evidence, genes, gene_ids, _samples, sample_ids) =
-                    collect_evidence(shard_path, opts.threads, opts.flex, &mut local)?;
-                let (decisions, _) = build_decisions(
+                let (evidence, genes, gene_ids, _samples, sample_ids) = collect_evidence(
+                    shard_path,
+                    opts.threads,
+                    opts.flex,
+                    opts.position_aware,
+                    &mut local,
+                )?;
+                let (decisions, _) = build_decisions_with(
                     &evidence,
                     &mut local,
                     None,
                     opts.evidence_workers,
-                    opts.tagseq,
-                    opts.fractional,
+                    DedupPolicy::from_flags(opts.tagseq, opts.fractional, opts.position_aware),
                 );
                 drop(evidence);
                 let tables = KeyTables {

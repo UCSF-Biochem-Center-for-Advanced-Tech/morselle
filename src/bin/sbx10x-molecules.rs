@@ -5,8 +5,8 @@ use std::time::Instant;
 use anyhow::{bail, Result};
 use clap::{CommandFactory, FromArgMatches, Parser};
 use sbx10x::molecules::{
-    build_decisions, collect_evidence, collect_evidence_indexed, run_sharded, write_output,
-    KeyTables, Metrics, MoleculeOptions,
+    build_decisions_with, collect_evidence, collect_evidence_indexed, run_sharded, write_output,
+    DedupPolicy, KeyTables, Metrics, MoleculeOptions,
 };
 use tracing::info;
 
@@ -85,21 +85,22 @@ struct Cli {
     /// unrelated genes) become common rather than rare, so the default
     /// single-cell policy of keeping only the higher-support gene and
     /// discarding the rest silently throws away real molecules from
-    /// genuinely distinct genes. `--tagseq` counts every gene's corrected
-    /// UMI nodes instead of adjudicating a winner. It also skips 1-mismatch
+    /// genuinely distinct genes. `--tagseq` counts every gene in a collision
+    /// in full (`XW:S`) instead of adjudicating a winner, and skips 1-mismatch
     /// UMI correction (at pooled-sample UMI diversity, two distinct molecules
-    /// 1bp apart are common). Collisions are split fractionally by default
-    /// under --tagseq (see --fractional-collisions); pass
-    /// --no-fractional-collisions to count every claimant in full
-    /// (`XW:S`). Leaves single-cell runs (the default) unchanged.
+    /// 1bp apart are common) unless --position-aware-umis is also given.
+    /// See also --fractional-collisions. Leaves single-cell runs unchanged.
     #[arg(long)]
     tagseq: bool,
     /// Split each cross-gene UMI collision across its genes in proportion to
     /// read support (weight = support / total support), instead of
     /// winner-take-all (single-cell default) or counting every claimant in
-    /// full (--tagseq --no-fractional-collisions). Weights for one collision
-    /// sum to 1.0 and are written as `ZW:f` with `XW:F`; cr-bam-to-mtx then
-    /// writes a real-valued matrix. Default: on with --tagseq, off otherwise.
+    /// full (--tagseq default). Weights for one collision sum to 1.0, so a
+    /// collision counts as ONE molecule: right if collisions are mostly one
+    /// molecule seen on two genes, an undercount if they are mostly distinct
+    /// molecules sharing a UMI by chance (the usual case at tag-seq depth).
+    /// Written as `ZW:f` with `XW:F`; matrix then writes a real-valued
+    /// (non-integer) matrix. Off by default.
     #[arg(long)]
     fractional_collisions: bool,
     /// BGZF compression level (0-9) for the output BAM. Default: htslib's
@@ -109,9 +110,22 @@ struct Cli {
     /// `matrix`/`audit`. Records are identical at every level.
     #[arg(long, value_parser = clap::value_parser!(u32).range(0..=9))]
     compression_level: Option<u32>,
-    /// Disable fractional collision resolution (overrides the --tagseq default).
-    #[arg(long, conflicts_with = "fractional_collisions")]
+    /// Accepted for compatibility with 0.5.6-0.5.9, where fractional was the
+    /// --tagseq default. Now a no-op: fractional is opt-in.
+    #[arg(long, conflicts_with = "fractional_collisions", hide = true)]
     no_fractional_collisions: bool,
+    /// Treat reads as one molecule only if they also share their alignment
+    /// start: (cell, gene, UMI, strand-aware unclipped 5' position) instead
+    /// of (cell, gene, UMI). PCR duplicates share a start; distinct molecules
+    /// that drew the same UMI almost never do, so chance UMI matches stay
+    /// separate -- across genes and, unlike every other mode, within one
+    /// gene. 1-mismatch UMI correction then runs among reads at the same
+    /// position, even under --tagseq. The usual dedup key for bulk 3'
+    /// tag-seq. Requires UMIs of at most 16 bases. Caveat: an indel or
+    /// soft-clip difference at the read start splits duplicates (slight
+    /// overcount); compare against an orthogonal count before relying on it.
+    #[arg(long)]
+    position_aware_umis: bool,
     /// 10x Flex mode. Require a non-empty probe/sample barcode (`PB`) on
     /// every counted molecule so identical GEM barcodes from distinct Flex
     /// samples cannot be merged.
@@ -172,7 +186,8 @@ fn main() -> Result<()> {
         evidence_workers: cli.evidence_workers,
         flex: cli.flex,
         tagseq: cli.tagseq,
-        fractional: (cli.tagseq || cli.fractional_collisions) && !cli.no_fractional_collisions,
+        fractional: cli.fractional_collisions,
+        position_aware: cli.position_aware_umis,
         compression_level: cli.compression_level,
     };
     let started = Instant::now();
@@ -185,6 +200,8 @@ fn main() -> Result<()> {
             .join(","),
         output_bam: cli.output.display().to_string(),
         tagseq: cli.tagseq,
+        fractional_collisions: cli.fractional_collisions,
+        position_aware_umis: cli.position_aware_umis,
         ..Default::default()
     };
     if cli.shards > 1 {
@@ -219,23 +236,29 @@ fn main() -> Result<()> {
             cli.evidence_workers,
             cli.evidence_chunk_bases,
             cli.flex,
+            opts.position_aware,
             &mut metrics,
         )?
     } else {
-        collect_evidence(single_bam, cli.threads, cli.flex, &mut metrics)?
+        collect_evidence(
+            single_bam,
+            cli.threads,
+            cli.flex,
+            opts.position_aware,
+            &mut metrics,
+        )?
     };
     eprintln!(
         "[sbxpress molecules] phase=evidence_ready raw_nodes={} eligible={}",
         evidence.len(),
         metrics.eligible_records
     );
-    let (decisions, saturation) = build_decisions(
+    let (decisions, saturation) = build_decisions_with(
         &evidence,
         &mut metrics,
         cli.saturation.as_ref().map(|_| cli.saturation_interval),
         cli.evidence_workers,
-        opts.tagseq,
-        opts.fractional,
+        DedupPolicy::from_flags(opts.tagseq, opts.fractional, opts.position_aware),
     );
     drop(evidence);
     if let (Some(curve), Some(path)) = (saturation, cli.saturation.as_deref()) {

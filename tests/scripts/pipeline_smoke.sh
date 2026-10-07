@@ -54,8 +54,13 @@ expect_call sbx_flex_nogzip "probeset-align .*R2_002.fastq .*--output .*/R2_002.
 check sbx_tagseq "$P" --analysis-mode tagseq "${COMMON[@]}" "${SBX[@]}" "${GEX[@]}" --tagseq-barcodes "$R/cells.txt"
 expect_call sbx_tagseq "sbxpress molecules .*--tagseq"
 expect_call sbx_tagseq "sbxpress cells .*--tagseq-barcodes"
-check sbx_tagseq_shared "$P" --analysis-mode tagseq "${COMMON[@]}" "${SBX[@]}" "${GEX[@]}" --no-fractional-collisions
-expect_call sbx_tagseq_shared "molecules .*--tagseq --no-fractional-collisions"
+reject_call sbx_tagseq "fractional"
+check sbx_tagseq_legacy_flag "$P" --analysis-mode tagseq "${COMMON[@]}" "${SBX[@]}" "${GEX[@]}" --no-fractional-collisions
+reject_call sbx_tagseq_legacy_flag "fractional"
+check sbx_tagseq_fractional "$P" --analysis-mode tagseq "${COMMON[@]}" "${SBX[@]}" "${GEX[@]}" --fractional-collisions
+expect_call sbx_tagseq_fractional "molecules .*--tagseq --fractional-collisions"
+check sbx_tagseq_position "$P" --analysis-mode tagseq "${COMMON[@]}" "${SBX[@]}" "${GEX[@]}" --position-aware-umis
+expect_call sbx_tagseq_position "molecules .*--position-aware-umis --tagseq"
 check sbx_flex "$P" --analysis-mode flex "${COMMON[@]}" "${SBX[@]}" "${FLEX[@]}" --probe-barcode-whitelist "$R/pbwl.txt"
 expect_call sbx_flex "extract .*--flex --probe-barcode-whitelist"
 expect_call sbx_flex "probeset-align .*S1_S1_L001_R2_002.fastq.gz"

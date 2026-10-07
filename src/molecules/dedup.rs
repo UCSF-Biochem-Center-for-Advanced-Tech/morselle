@@ -96,6 +96,11 @@ fn rank(item: &Evidence) -> u32 {
 /// in a 12bp space by chance often enough that "low-count neighbour =
 /// sequencing error" no longer holds. Trade-off: true 1bp UMI errors are not
 /// corrected either, so counts trend slightly high rather than low.
+///
+/// Exception, `--position-aware-umis`: the UMI carries the read's 5'
+/// position tag, so 1-mismatch neighbours are only ever looked up at the
+/// same position, where a 1bp-different UMI is almost always an error of
+/// the same molecule. Correction then runs even under `--tagseq`.
 /// (cell, sample, gene): the UMI-correction group of a raw key.
 fn same_umi_group(a: &RawKey, b: &RawKey) -> bool {
     (a.cell, a.sample, a.gene) == (b.cell, b.sample, b.gene)
@@ -120,9 +125,9 @@ fn correct_umis<S: BuildHasher + Sync>(
     sorted_keys: &[RawKey],
     total_groups: usize,
     workers: usize,
-    tagseq: bool,
+    skip: bool,
 ) -> HashMap<RawKey, RawKey> {
-    if tagseq {
+    if skip {
         // Pooled-sample mode: directional UMI correction assumes a
         // low-count 1-mismatch neighbor is a sequencing error of a nearby
         // high-count node. At pooled-sample UMI diversity that assumption
@@ -134,7 +139,7 @@ fn correct_umis<S: BuildHasher + Sync>(
         // errors in the UMI itself are no longer corrected either, so
         // molecule counts trend slightly high rather than slightly low.
         eprintln!(
-            "[sbxpress molecules] phase=umi_correct skipped (--tagseq) raw_nodes={}",
+            "[sbxpress molecules] phase=umi_correct skipped (--tagseq without --position-aware-umis) raw_nodes={}",
             evidence.len()
         );
         return evidence.keys().map(|&key| (key, key)).collect();
@@ -221,6 +226,48 @@ pub fn build_decisions<S: BuildHasher + Sync>(
     tagseq: bool,
     fractional: bool,
 ) -> (HashMap<RawKey, Decision>, Option<Saturation>) {
+    let policy = DedupPolicy {
+        tagseq,
+        fractional,
+        correct_umis: !tagseq,
+    };
+    build_decisions_with(evidence, metrics, saturation_interval, workers, policy)
+}
+
+/// How molecules are formed and collisions resolved.
+#[derive(Clone, Copy, Debug)]
+pub struct DedupPolicy {
+    /// Count every gene in a collision (`Shared`) unless `fractional`.
+    pub tagseq: bool,
+    /// Split collisions by read support (`Fractional`).
+    pub fractional: bool,
+    /// Directional 1-mismatch UMI correction within (cell, sample, gene).
+    pub correct_umis: bool,
+}
+
+impl DedupPolicy {
+    /// The policy `sbx10x-molecules` uses for its flags.
+    pub fn from_flags(tagseq: bool, fractional: bool, position_aware: bool) -> Self {
+        Self {
+            tagseq,
+            fractional,
+            correct_umis: !tagseq || position_aware,
+        }
+    }
+}
+
+pub fn build_decisions_with<S: BuildHasher + Sync>(
+    evidence: &StdHashMap<RawKey, Evidence, S>,
+    metrics: &mut Metrics,
+    saturation_interval: Option<u64>,
+    workers: usize,
+    policy: DedupPolicy,
+) -> (HashMap<RawKey, Decision>, Option<Saturation>) {
+    let DedupPolicy {
+        tagseq,
+        fractional,
+        correct_umis: correct,
+    } = policy;
     // Grouped by (cell, sample, gene), not just (cell, gene): the same CB
     // whitelist is shared across every sample in a pooled Flex run, so
     // omitting `sample` here would let correct_group()'s internal by-UMI
@@ -252,7 +299,7 @@ pub fn build_decisions<S: BuildHasher + Sync>(
         }
     }
 
-    let roots = correct_umis(evidence, &sorted_keys, total_groups, workers, tagseq);
+    let roots = correct_umis(evidence, &sorted_keys, total_groups, workers, !correct);
     drop(sorted_keys);
     eprintln!(
         "[sbxpress molecules] phase=umi_correct complete roots={}",
