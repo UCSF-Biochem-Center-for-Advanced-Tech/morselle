@@ -141,9 +141,15 @@ a fresh output directory each time:
   (`convert` and `annotate` functions).
 - `molecules`: `/mnt/analysis/active_projects/sbxpress_validation/dzec05_dedup/30min/annotated.bam`
   with `--tagseq --evidence-workers 16`.
-- `extract`: the CAT06 5-chunk SBX subset in
-  `/mnt/analysis/active_projects/sbxpress_validation/v0.5.6_vs_v0.6.0/inputs/cat06_sbx`
-  (Flex; see `docs/SERVER_TESTING.md` for the full command).
+- `extract`: the CAT06 5-chunk SBX subset, raw chunks
+  `/mnt/analysis/active_projects/roche_SBX_ABRF/CAT06/raw_fastqs/20260901_UCSF_Cat06_843_PT370_C3-000300.fastq.gz`
+  through `-000304.fastq.gz` (symlink them into one directory for `--fastqs`).
+  It's Flex; the full command is in `docs/SERVER_TESTING.md`. The 0.5.6/0.6.0
+  validation tree was deleted after acceptance; its evidence is in
+  `/mnt/analysis/active_projects/sbxpress_validation/v0.5.6_vs_v0.6.0_evidence.tar.gz`.
+- Install the before/after builds into their own prefixes (`install.sh --prefix
+  … --skip-packages --skip-rust`). `dzec05_dedup/run_dzec05.sh` points at a
+  0.6.0 install that no longer exists, so take only its commands from it.
 
 Run each twice and record `/usr/bin/time -v` wall time and peak RSS.
 Acceptance: wall-time increase ≤ 2% and peak RSS increase ≤ 5% per stage
