@@ -10,9 +10,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Correctness review of the 0.5.6–0.5.9 refactoring and repairs, with
 regression coverage and a reproducible server validation procedure.
-Real-data validation on the server remains pending.
+Server real-data acceptance (docs/SERVER_TESTING.md) against 0.5.6 passed
+on 2026-10-08: CAT02 GEX (SBX, Illumina), CAT06 Flex multi GEX + CRISPR
+(SBX, Illumina) and DZEC04 tag-seq gave identical count matrices, called
+cells and protospacer calls in every run; molecule BAMs differ only in the
+`xf` representative read. `molecules` was up to 3.1x faster with up to 40% less
+peak memory (DZEC04 full depth: 27:20 -> 15:54, 45.9 -> 27.8 GB).
 
 ### Fixed
+- `install.sh` installs all 11 private engines. Since 0.5.2 it installed
+  only 7, omitting `sbxpress-probeset-align`, `sbxpress-probe-demux`,
+  `sbxpress-guides` and `sbxpress-protospacer-call`, so an installed
+  `sbxpress` failed every Flex and CRISPR command with "helper not found"
+  (found by the server acceptance run on CAT06). The helper list is
+  now one `HELPERS` array, and `tests/pipeline_scripts.rs` checks it
+  against the dispatch table in `src/bin/sbxpress.rs`.
 - Molecule output now uses the same present `PB` identity as evidence collection
   in every assay; `--flex` still requires it. Indexed representatives use unique
   physical BAM offsets, preventing duplicate representatives and selecting the

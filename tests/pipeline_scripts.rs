@@ -35,6 +35,52 @@ fn every_script_parses() {
     );
 }
 
+/// install.sh in 0.5.2–0.6.0 installed only 7 of the 11 private engines, so
+/// an installed `sbxpress` could not run probeset-align, probe-demux, guides
+/// or protospacer-call (found by the 0.6.0 server acceptance run on CAT06).
+/// Every engine the dispatcher can name must be in install.sh's HELPERS.
+#[test]
+fn install_script_installs_every_dispatched_helper() {
+    let dispatcher = std::fs::read_to_string(repo().join("src/bin/sbxpress.rs")).unwrap();
+    let body = &dispatcher[dispatcher
+        .find("fn engine(")
+        .expect("engine() in sbxpress.rs")..];
+    let body = &body[..body.find("\n}\n").unwrap()];
+    let mut dispatched: Vec<String> = body
+        .match_indices("=> Some(\"")
+        .map(|(i, m)| {
+            let rest = &body[i + m.len()..];
+            rest[..rest.find('"').unwrap()].to_string()
+        })
+        .collect();
+    let out = Command::new("bash")
+        .arg("-c")
+        .arg(r#"eval "$(sed -n '/^HELPERS=(/,/)/p' "$1")"; printf '%s\n' "${HELPERS[@]}""#)
+        .arg("install-helpers")
+        .arg(repo().join("install.sh"))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let mut installed: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::to_string)
+        .collect();
+    dispatched.sort();
+    installed.sort();
+    assert!(
+        dispatched.len() >= 11,
+        "parsed only {dispatched:?} from engine()"
+    );
+    assert_eq!(
+        installed, dispatched,
+        "install.sh HELPERS must match the engines sbxpress dispatches to"
+    );
+}
+
 #[test]
 fn pipeline_scripts_pass_shellcheck_when_available() {
     if Command::new("shellcheck")

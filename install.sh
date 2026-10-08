@@ -103,14 +103,16 @@ if [[ -f Cargo.lock ]]; then
 else
   cargo build --release
 fi
-[[ -x target/release/sbx10x ]] || die "build did not produce target/release/sbx10x"
-[[ -x target/release/sbx10x-annotate ]] || die "build did not produce target/release/sbx10x-annotate"
-[[ -x target/release/sbx10x-molecules ]] || die "build did not produce target/release/sbx10x-molecules"
-[[ -x target/release/bam-audit ]] || die "build did not produce target/release/bam-audit"
-[[ -x target/release/cr-bam-to-mtx ]] || die "build did not produce target/release/cr-bam-to-mtx"
-[[ -x target/release/sbxpress ]] || die "build did not produce target/release/sbxpress"
-[[ -x target/release/sbxpress-illumina ]] || die "build did not produce target/release/sbxpress-illumina"
-[[ -x target/release/sbxpress-cells ]] || die "build did not produce target/release/sbxpress-cells"
+# Every private engine `sbxpress` dispatches to (engine() in src/bin/sbxpress.rs).
+# 0.5.2-0.6.0 omitted the four Flex/CRISPR helpers here, so an installed
+# sbxpress could not run probeset-align, probe-demux, guides or
+# protospacer-call; tests/pipeline_scripts.rs now checks this list against
+# the dispatch table.
+HELPERS=(sbx10x sbxpress-illumina sbxpress-cells sbx10x-annotate sbx10x-molecules bam-audit cr-bam-to-mtx
+  sbxpress-probe-demux sbxpress-guides sbxpress-protospacer-call sbxpress-probeset-align)
+for binary in sbxpress "${HELPERS[@]}"; do
+  [[ -x target/release/$binary ]] || die "build did not produce target/release/$binary"
+done
 
 # 4. Install public CLI and private engines ------------------------------------
 BIN_DIR="$PREFIX/bin"
@@ -119,7 +121,7 @@ log "installing public command -> $BIN_DIR/sbxpress"
 $SUDO install -d "$BIN_DIR"
 $SUDO install -m 0755 target/release/sbxpress "$BIN_DIR/sbxpress"
 $SUDO install -d "$LIBEXEC_DIR"
-for helper in sbx10x sbxpress-illumina sbxpress-cells sbx10x-annotate sbx10x-molecules bam-audit cr-bam-to-mtx; do
+for helper in "${HELPERS[@]}"; do
   log "installing private engine -> $LIBEXEC_DIR/$helper"
   $SUDO install -m 0755 "target/release/$helper" "$LIBEXEC_DIR/$helper"
 done
