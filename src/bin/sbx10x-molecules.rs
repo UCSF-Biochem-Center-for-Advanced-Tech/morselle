@@ -5,8 +5,8 @@ use std::time::Instant;
 use anyhow::{bail, Result};
 use clap::{CommandFactory, FromArgMatches, Parser};
 use sbx10x::molecules::{
-    barcode_metrics, build_decisions_with, collect_evidence, collect_evidence_indexed, run_sharded,
-    write_output, DedupPolicy, KeyTables, Metrics, MoleculeOptions,
+    barcode_metrics, build_decisions_with, collect_evidence_indexed_with, collect_evidence_with,
+    run_sharded, write_output, DedupPolicy, KeyTables, Metrics, MoleculeOptions,
 };
 use tracing::info;
 
@@ -137,6 +137,13 @@ struct Cli {
     /// samples cannot be merged.
     #[arg(long, conflicts_with = "tagseq")]
     flex: bool,
+    /// Count only confidently mapped reads, as Cell Ranger does: MAPQ at
+    /// least this (60 = minimap2's unique; STAR's 255 passes), or rescued by
+    /// `sbxpress annotate` (`mm:i:1`: one compatible exonic gene). Dropped
+    /// reads are reported as `low_mapq_records` / `multimapper_records`
+    /// (`NH` > 1). 0 counts every MAPQ (the pre-0.6.2 behaviour).
+    #[arg(long, default_value_t = 60)]
+    min_mapq: u8,
 }
 
 fn write_metrics(cli: &Cli, metrics: &Metrics) -> Result<()> {
@@ -196,6 +203,7 @@ fn main() -> Result<()> {
         tagseq: cli.tagseq,
         fractional: cli.fractional_collisions,
         position_aware: cli.position_aware_umis,
+        min_mapq: cli.min_mapq,
         compression_level: cli.compression_level,
     };
     let started = Instant::now();
@@ -210,6 +218,7 @@ fn main() -> Result<()> {
         tagseq: cli.tagseq,
         fractional_collisions: cli.fractional_collisions,
         position_aware_umis: cli.position_aware_umis,
+        min_mapq: cli.min_mapq,
         ..Default::default()
     };
     if cli.shards > 1 {
@@ -239,22 +248,15 @@ fn main() -> Result<()> {
             workers = cli.evidence_workers,
             "collecting evidence from indexed BAM regions"
         );
-        collect_evidence_indexed(
+        collect_evidence_indexed_with(
             single_bam,
             cli.evidence_workers,
             cli.evidence_chunk_bases,
-            cli.flex,
-            opts.position_aware,
+            &opts.record_filter(),
             &mut metrics,
         )?
     } else {
-        collect_evidence(
-            single_bam,
-            cli.threads,
-            cli.flex,
-            opts.position_aware,
-            &mut metrics,
-        )?
+        collect_evidence_with(single_bam, cli.threads, &opts.record_filter(), &mut metrics)?
     };
     eprintln!(
         "[sbxpress molecules] phase=evidence_ready raw_nodes={} eligible={}",

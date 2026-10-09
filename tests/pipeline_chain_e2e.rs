@@ -469,3 +469,6 @@ fn compression_level_changes_file_size_not_records() {
 
 #[path = "regressions/pipeline.rs"]
 mod regressions;
+
+#[path = "regressions/mapping_quality.rs"]
+mod mapping_quality;

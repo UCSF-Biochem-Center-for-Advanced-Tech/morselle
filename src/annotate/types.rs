@@ -47,6 +47,15 @@ pub struct Cli {
     #[arg(long)]
     pub multimap_tags: bool,
 
+    /// Cell Ranger's confident-mapping MAPQ (60 for minimap2). A primary read
+    /// below it whose genes come from compatible sense exonic transcripts of
+    /// exactly one gene is tagged `mm:i:1` (rescued; MAPQ is kept), which
+    /// `sbxpress molecules --min-mapq` counts. Intronic hits are never rescued.
+    /// With --multimap-tags the rule spans the query group. 0 restores the
+    /// pre-0.6.2 tags (no `mm`; the looser group rule with --multimap-tags).
+    #[arg(long, default_value_t = 60)]
+    pub confident_mapq: u8,
+
     /// Optional JSON metrics path (default: OUTPUT.metrics.json).
     #[arg(long)]
     pub metrics: Option<PathBuf>,
@@ -73,6 +82,15 @@ pub struct Cli {
     /// Use terminal-exon support as a non-destructive preference signal for a 3' assay.
     #[arg(long)]
     pub three_prime: bool,
+}
+
+/// Per-record settings shared by every annotation path.
+#[derive(Clone, Copy, Debug)]
+pub struct RecordOptions {
+    pub include_introns: bool,
+    pub three_prime: bool,
+    /// `Cli::confident_mapq`; 0 disables the per-record `mm` rescue.
+    pub confident_mapq: u8,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -155,12 +173,15 @@ pub struct Call {
     pub antisense: Vec<String>,
     pub terminal_genes: Vec<usize>,
     pub terminal_tx: Vec<String>,
+    /// `genes` come from splice-compatible sense exonic transcripts (not the
+    /// intronic gene-body fallback).
+    pub exonic_compatible: bool,
 }
 
 #[derive(Debug, Default, Serialize)]
 pub struct Metrics {
     #[serde(skip)]
-    pub per_barcode: crate::barcode_metrics::BarcodeTable<10>,
+    pub per_barcode: crate::barcode_metrics::BarcodeTable<11>,
     pub input_bam: String,
     pub output_bam: String,
     pub gtf: String,
@@ -171,6 +192,7 @@ pub struct Metrics {
     pub three_prime: bool,
     pub unordered: bool,
     pub multimap_tags: bool,
+    pub confident_mapq: u8,
     pub elapsed_secs: f64,
     pub records: u64,
     pub primary: u64,
@@ -196,6 +218,8 @@ pub struct Metrics {
     pub terminal_resolved_gene_collision: u64,
     pub terminal_unresolved_gene_collision: u64,
     pub terminal_unsupported_gene_collision: u64,
+    /// Primary reads below --confident-mapq tagged `mm:i:1`.
+    pub rescued: u64,
     pub genes_loaded: usize,
     pub transcripts_loaded: usize,
     pub gtf_exons_seen: u64,
@@ -229,6 +253,7 @@ impl Metrics {
         self.terminal_resolved_gene_collision += value.terminal_resolved_gene_collision;
         self.terminal_unresolved_gene_collision += value.terminal_unresolved_gene_collision;
         self.terminal_unsupported_gene_collision += value.terminal_unsupported_gene_collision;
+        self.rescued += value.rescued;
     }
 }
 
@@ -258,4 +283,8 @@ pub struct RecordMetrics {
     pub terminal_resolved_gene_collision: u64,
     pub terminal_unresolved_gene_collision: u64,
     pub terminal_unsupported_gene_collision: u64,
+    pub rescued: u64,
+    /// The record's genes are exonic-compatible (`Call::exonic_compatible`);
+    /// read by the query-group rescue, not a counter.
+    pub exonic_compatible: bool,
 }

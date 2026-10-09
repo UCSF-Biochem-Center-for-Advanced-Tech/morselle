@@ -166,6 +166,7 @@ fn unordered_annotation_matches_ordered_tags_and_counts() {
             unordered,
             batch_size: 17,
             multimap_tags: false,
+            confident_mapq: 60,
             metrics: Some(metrics.clone()),
             barcode_metrics: true,
             genes_mtx: None,

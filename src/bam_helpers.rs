@@ -131,7 +131,7 @@ pub enum AuxValue<'a> {
     Other,
 }
 
-fn decode(type_code: u8, value: &[u8]) -> Option<AuxValue<'_>> {
+pub(crate) fn decode(type_code: u8, value: &[u8]) -> Option<AuxValue<'_>> {
     Some(match type_code {
         // `record.aux` fails on invalid UTF-8; the helpers treat that as absent.
         b'Z' | b'H' => AuxValue::Str(std::str::from_utf8(&value[..value.len() - 1]).ok()?),

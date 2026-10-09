@@ -1,5 +1,5 @@
 use super::types::Evidence;
-use crate::bam_helpers::for_each_aux;
+use crate::bam_helpers::{decode, for_each_aux, AuxValue};
 use rust_htslib::bam::{self, record::Aux};
 use std::collections::HashMap;
 
@@ -128,6 +128,9 @@ pub struct MoleculeTags<'a> {
     pub gn: Option<&'a str>,
     pub zg: Option<&'a str>,
     pub pb: Option<&'a str>,
+    /// Integer `NH` (reported hits) and `mm` (MAPQ rescue) from `annotate`.
+    pub nh: Option<i64>,
+    pub mm: Option<i64>,
     /// Any tag `molecules` itself writes (`xf`/`XV`/`XW`/`ZW`) is already
     /// present, e.g. when re-running on a molecules BAM. Lets the writer skip
     /// four `remove_aux` calls -- each a full aux scan -- in the common case.
@@ -136,15 +139,29 @@ pub struct MoleculeTags<'a> {
 
 impl<'a> MoleculeTags<'a> {
     /// One bounds-checked walk over the raw aux bytes. Only the seven wanted
-    /// tags are decoded (and UTF-8-checked); every other field is skipped by
-    /// its type length, the way htslib's `bam_aux_get` walks. For each wanted
-    /// tag the FIRST occurrence decides, matching `record.aux(tag)`: a first
-    /// occurrence that is not a valid `Z`/`H` string yields `None` (later
-    /// duplicates are not consulted). Malformed aux data ends the walk.
+    /// string tags (and the integer `NH`/`mm`) are decoded; every other field
+    /// is skipped by its type length, the way htslib's `bam_aux_get` walks.
+    /// For each wanted tag the FIRST occurrence decides, matching
+    /// `record.aux(tag)`: a first occurrence of the wrong type yields `None`
+    /// (later duplicates are not consulted). Malformed aux data ends the walk.
     pub fn read(record: &'a bam::Record) -> Self {
         let mut tags = Self::default();
-        let mut seen = 0u8;
+        let mut seen = 0u16;
         for_each_aux(record, |tag, type_code, value| {
+            let (bit, int_slot) = match &tag {
+                b"NH" => (7, &mut tags.nh),
+                b"mm" => (8, &mut tags.mm),
+                _ => (0, &mut None),
+            };
+            if bit != 0 {
+                if seen & (1 << bit) == 0 {
+                    seen |= 1 << bit;
+                    if let Some(AuxValue::Int(v)) = decode(type_code, value) {
+                        *int_slot = Some(v);
+                    }
+                }
+                return;
+            }
             let (index, slot) = match &tag {
                 b"CB" => (0, &mut tags.cb),
                 b"UR" => (1, &mut tags.ur),

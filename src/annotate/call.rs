@@ -22,6 +22,7 @@ impl Annotation {
                 antisense: vec![],
                 terminal_genes: vec![],
                 terminal_tx: vec![],
+                exonic_compatible: false,
             };
         };
         if blocks.is_empty() {
@@ -32,6 +33,7 @@ impl Annotation {
                 antisense: vec![],
                 terminal_genes: vec![],
                 terminal_tx: vec![],
+                exonic_compatible: false,
             };
         }
         let span = Interval {
@@ -102,6 +104,9 @@ impl Annotation {
         }
 
         let exonic = any_exon_overlap;
+        // Cell Ranger's `tx_align`: the genes come from splice-compatible
+        // sense exonic transcripts, the only hits its MAPQ rescue considers.
+        let exonic_compatible = !sense_exon_genes.is_empty();
         let intronic = !exonic && (!sense_body.is_empty() || !antisense_body.is_empty());
         let mut genes: Vec<usize> = if !sense_exon_genes.is_empty() {
             sense_exon_genes.into_iter().collect()
@@ -143,6 +148,7 @@ impl Annotation {
             antisense: antisense_tx,
             terminal_genes,
             terminal_tx,
+            exonic_compatible,
         }
     }
 }

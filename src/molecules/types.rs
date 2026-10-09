@@ -175,8 +175,18 @@ pub struct Metrics {
     /// Policy flags this run used (see `sbx10x-molecules --help`).
     pub fractional_collisions: bool,
     pub position_aware_umis: bool,
+    /// --min-mapq this run used (0 = no mapping filter).
+    pub min_mapq: u8,
     pub records: u64,
     pub eligible_records: u64,
+    /// Eligible records below --min-mapq counted because `annotate` tagged
+    /// them `mm:i:1` (Cell Ranger's exonic rescue).
+    pub rescued_records: u64,
+    /// Otherwise-eligible records dropped below --min-mapq: no rescue, and
+    /// `NH` absent or 1 (`low_mapq_records`) or `NH` > 1
+    /// (`multimapper_records`). Not part of `eligible_records`.
+    pub low_mapq_records: u64,
+    pub multimapper_records: u64,
     /// Otherwise-eligible (mapped, valid CB+UMI+gene) records dropped for
     /// missing/empty `PB` under --flex. Never counted as a molecule:
     /// `probe-demux` requires the same non-empty `PB`, and letting them share
@@ -213,6 +223,9 @@ pub fn merge_metrics(target: &mut Metrics, source: &Metrics) {
     super::barcode_metrics::merge_rows(&mut target.barcode_rows, &source.barcode_rows, |s| s);
     target.records += source.records;
     target.eligible_records += source.eligible_records;
+    target.rescued_records += source.rescued_records;
+    target.low_mapq_records += source.low_mapq_records;
+    target.multimapper_records += source.multimapper_records;
     target.no_sample_records += source.no_sample_records;
     target.raw_cell_gene_umis += source.raw_cell_gene_umis;
     target.corrected_umi_nodes += source.corrected_umi_nodes;

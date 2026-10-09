@@ -5,10 +5,12 @@ mod collision_tests;
 pub mod collisions;
 pub mod dedup;
 pub mod evidence;
+mod evidence_indexed;
 mod evidence_merge;
 pub mod helpers;
 #[cfg(test)]
 mod helpers_tests;
+pub mod mapping_gate;
 pub mod pipeline;
 #[cfg(test)]
 mod realistic_tests;

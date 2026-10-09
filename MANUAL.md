@@ -36,8 +36,8 @@ reproduces the corresponding run-wide JSON counter.
 |---|---|
 | `illumina` | `reads`, `barcode_exact`, `barcode_corrected`, `emitted`, `failed_merged_too_short`, `failed_no_cdna`, `failed_short_r1`, `failed_r2_polya_short`, `failed_cb_invalid`, `failed_cb_unmatched` |
 | `extract` | `reads`, `cb_on_whitelist`, `cb_within1`, `emitted`, `class_full`, `class_partial`, `class_unparseable`, `pb_located`, `pb_hit` |
-| `annotate` | `records`, `primary`, `unmapped`, `exonic`, `intronic`, `intergenic`, `antisense`, `gene_assigned`, `unique_gene`, `multi_gene` |
-| `molecules` | `eligible_reads`, `raw_cell_gene_umis`, `molecules_counted`, `collision_groups`, `representatives_tagged` |
+| `annotate` | `records`, `primary`, `unmapped`, `exonic`, `intronic`, `intergenic`, `antisense`, `gene_assigned`, `unique_gene`, `multi_gene`, `rescued` |
+| `molecules` | `eligible_reads`, `raw_cell_gene_umis`, `molecules_counted`, `collision_groups`, `representatives_tagged`, `rescued_reads`, `low_mapq_reads`, `multimapper_reads` |
 
 `__no_barcode__` groups reads without a located or usable barcode;
 `__unresolved_barcode__` groups reads with a raw barcode that did not resolve
@@ -58,6 +58,36 @@ except in `extract`, where the table holds one row per observed
 barcode/sample pair: +375 MB on one CAT06 Flex chunk (~43 M reads), growing
 with the number of distinct barcodes in the run. Without the flag no stage
 does any per-barcode work.
+
+## Confident mapping and multimapper rescue
+
+`sbxpress molecules` counts a read only if it is confidently mapped, the rule
+Cell Ranger uses: MAPQ of at least `--min-mapq` (default 60, minimap2's unique
+placement; STAR's 255 also passes), or rescued by `sbxpress annotate`. Without
+it, reads that fit many places in the genome are counted wherever minimap2
+happened to put them; on DZEC05 poly-G reads placed in LINC00486 gave that gene
+22% of all reads, and the rule takes it to 0.01%.
+
+`sbxpress annotate` marks a rescue with `mm:i:1` and keeps minimap2's MAPQ. A
+primary read below `--confident-mapq` (default 60) is rescued when its genes
+come from splice-compatible, sense, exonic transcripts of exactly one gene.
+Intronic placements are never rescued, even with `--include-introns`, because
+they carry no transcript evidence. With `--multimap-tags`, the rule spans the
+read's reported hits as in Cell Ranger: no rescue if any hit is confidently
+mapped; otherwise the exonic-compatible hits must name one gene and the
+primary must be one of them. `NH` (reported hits) is written only with
+`--multimap-tags`.
+
+The molecules metrics count each outcome: `rescued_records` (counted through
+`mm:i:1`), and, for dropped reads, `low_mapq_records` or `multimapper_records`
+(`NH` > 1). A confidently mapped read is counted even when `NH` > 1, as in
+Cell Ranger. Dropped reads are not in `eligible_records` and get no molecule
+tags. `annotate` reports `rescued`.
+
+On a normal library (DZEC04, four chromosomes sampled) 78% of single-gene
+reads have MAPQ 60, 19% are rescued and 3% are dropped. The dropped reads are
+intronic and mostly inside repeats. `molecules --min-mapq 0` and
+`annotate --confident-mapq 0` restore the pre-0.6.2 counts.
 
 ## 1. Inputs shared by both paths
 
@@ -126,7 +156,8 @@ Use `--multimap-tags` when the downstream comparison needs reported-hit tags:
 
 This retains the primary plus up to ten secondary alignments (`NH` therefore
 ranges through the top-coded `11+` audit bucket) and emits `NH`, `HI`, and the
-single-gene multimap rescue tag `mm`. It uses query-grouped streaming annotation,
+single-gene multimap rescue tag `mm` (see "Confident mapping and multimapper
+rescue"). It uses query-grouped streaming annotation,
 so it trades the default unordered annotation parallelism for complete per-read
 hit accounting. Omit it for the fastest production count path.
 

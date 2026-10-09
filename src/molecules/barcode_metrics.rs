@@ -9,20 +9,36 @@ use super::types::{Dna, Metrics, RawKey};
 use crate::barcode_metrics::BarcodeTable;
 use rustc_hash::FxHashMap;
 
-pub const COLUMNS: [&str; 5] = [
+pub const COLUMNS: [&str; 8] = [
     "eligible_reads",
     "raw_cell_gene_umis",
     "molecules_counted",
     "collision_groups",
     "representatives_tagged",
+    "rescued_reads",
+    "low_mapq_reads",
+    "multimapper_reads",
 ];
+
+/// Column of a record's `MappingGate` outcome, if it has one.
+pub(super) fn gate_column(gate: super::mapping_gate::MappingGate) -> Option<usize> {
+    use super::mapping_gate::MappingGate::*;
+    match gate {
+        Confident => None,
+        Rescued => Some(5),
+        LowMapq => Some(6),
+        Multimapper => Some(7),
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct BarcodeRow {
     pub barcode: String,
     pub sample: String,
-    pub counts: [u64; 5],
+    pub counts: [u64; N],
 }
+
+const N: usize = COLUMNS.len();
 
 pub type BarcodeRows = FxHashMap<(Dna, u32), BarcodeRow>;
 
@@ -32,13 +48,13 @@ pub(super) fn row<'a>(
     sample: u32,
     cb: &str,
     pb: Option<&str>,
-) -> &'a mut [u64; 5] {
+) -> &'a mut [u64; N] {
     &mut rows
         .entry((cell, sample))
         .or_insert_with(|| BarcodeRow {
             barcode: cb.to_owned(),
             sample: pb.unwrap_or(".").to_owned(),
-            counts: [0; 5],
+            counts: [0; N],
         })
         .counts
 }
@@ -67,7 +83,7 @@ pub(super) fn merge_rows(
         let dst = target
             .entry((cell, remap(sample)))
             .or_insert_with(|| BarcodeRow {
-                counts: [0; 5],
+                counts: [0; N],
                 ..src.clone()
             });
         for (d, s) in dst.counts.iter_mut().zip(src.counts) {
@@ -87,7 +103,7 @@ pub(super) fn merge_region(metrics: &mut Metrics, part: &RegionEvidence, sample_
 }
 
 /// The CB/PB-keyed table written with `--barcode-metrics`.
-pub fn table(rows: &BarcodeRows, enabled: bool) -> BarcodeTable<5> {
+pub fn table(rows: &BarcodeRows, enabled: bool) -> BarcodeTable<N> {
     let mut table = BarcodeTable::new(enabled);
     if enabled {
         for row in rows.values() {

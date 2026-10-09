@@ -307,7 +307,14 @@ fn indexed_representative_is_the_best_physical_occurrence() {
     writer.write(&record).unwrap();
     drop(writer);
     bam::index::build(&input, None, bam::index::Type::Bai, 1).unwrap();
-    count_chain(dir.path(), &input, "indexed", &["--evidence-workers", "2"]);
+    // --min-mapq 0: this pins representative choice among MAPQs, so the
+    // MAPQ-20 occurrence must stay eligible rather than be gated out.
+    count_chain(
+        dir.path(),
+        &input,
+        "indexed",
+        &["--evidence-workers", "2", "--min-mapq", "0"],
+    );
     let records = read_bam(&dir.path().join("indexed.molecules.bam"));
     assert_eq!(
         records.iter().map(xf).collect::<Vec<_>>(),

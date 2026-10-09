@@ -25,11 +25,13 @@ fn tag(record: &rust_htslib::bam::Record, name: &[u8]) -> Option<String> {
 }
 
 /// (barcode, gene) -> number of distinct source molecules with a countable
-/// read (mapped, with CB; gene = the single GX or the ZG-resolved one).
+/// read (mapped, MAPQ >= 60 as `molecules --min-mapq` requires -- the fixture
+/// writes no `mm` rescues -- with CB; gene = the single GX or the ZG-resolved
+/// one).
 fn truth(bam: &std::path::Path) -> BTreeMap<(String, String), f64> {
     let mut molecules: BTreeMap<(String, String), BTreeSet<u64>> = BTreeMap::new();
     for r in read_bam(bam) {
-        if r.is_unmapped() {
+        if r.is_unmapped() || r.mapq() < 60 {
             continue;
         }
         let Some(cb) = tag(&r, b"CB") else { continue };

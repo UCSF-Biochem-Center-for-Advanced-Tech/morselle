@@ -3,7 +3,6 @@
 //! This stage performs feature assignment only. It deliberately does not correct
 //! UMIs or set `xf`: those require evidence aggregated across all reads sharing a
 //! cell/gene/UMI neighborhood and belong in the subsequent molecule-calling stage.
-use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -16,7 +15,8 @@ use tracing::info;
 use super::barcode_metrics::observe;
 use super::call::alignment_blocks;
 use super::index::establish_genes_mtx;
-use super::types::{Annotation, Call, Cli, Metrics, RecordMetrics};
+use super::multimap::write_multimap_group;
+use super::types::{Annotation, Call, Cli, Metrics, RecordMetrics, RecordOptions};
 
 fn replace_string_tag(record: &mut bam::Record, tag: &[u8; 2], value: Option<&str>) -> Result<()> {
     let _ = record.remove_aux(tag);
@@ -26,7 +26,11 @@ fn replace_string_tag(record: &mut bam::Record, tag: &[u8; 2], value: Option<&st
     Ok(())
 }
 
-fn replace_i32_tag(record: &mut bam::Record, tag: &[u8; 2], value: Option<i32>) -> Result<()> {
+pub(super) fn replace_i32_tag(
+    record: &mut bam::Record,
+    tag: &[u8; 2],
+    value: Option<i32>,
+) -> Result<()> {
     let _ = record.remove_aux(tag);
     if let Some(value) = value {
         record.push_aux(tag, Aux::I32(value))?;
@@ -106,13 +110,36 @@ fn increment_degree(
     }
 }
 
+/// [`annotate_record_with`] without the `mm` rescue (pre-0.6.2 behaviour).
 pub fn annotate_record(
-    mut record: bam::Record,
+    record: bam::Record,
     annotation: &Annotation,
     contig_names: &[Vec<u8>],
     include_introns: bool,
     three_prime: bool,
 ) -> Result<(bam::Record, RecordMetrics)> {
+    let opts = RecordOptions {
+        include_introns,
+        three_prime,
+        confident_mapq: 0,
+    };
+    annotate_record_with(record, annotation, contig_names, &opts)
+}
+
+/// Annotate one record. With `opts.confident_mapq > 0`, a primary read below
+/// it whose genes are one exonic-compatible gene gets `mm:i:1` (Cell
+/// Ranger's `rescue_alignments_se` for a read with a single reported hit).
+pub fn annotate_record_with(
+    mut record: bam::Record,
+    annotation: &Annotation,
+    contig_names: &[Vec<u8>],
+    opts: &RecordOptions,
+) -> Result<(bam::Record, RecordMetrics)> {
+    let RecordOptions {
+        include_introns,
+        three_prime,
+        confident_mapq,
+    } = *opts;
     let mut metrics = RecordMetrics {
         records: 1,
         ..Default::default()
@@ -191,6 +218,16 @@ pub fn annotate_record(
         }
     }
     tag_record(&mut record, &call, annotation, three_prime)?;
+    metrics.exonic_compatible = call.exonic_compatible;
+    if confident_mapq > 0 {
+        let rescued = !record.is_secondary()
+            && !record.is_supplementary()
+            && record.mapq() < confident_mapq
+            && call.exonic_compatible
+            && call.genes.len() == 1;
+        replace_i32_tag(&mut record, b"mm", rescued.then_some(1))?;
+        metrics.rescued = rescued as u64;
+    }
     Ok((record, metrics))
 }
 
@@ -199,8 +236,7 @@ fn write_unordered_batch(
     pool: &rayon::ThreadPool,
     annotation: &Annotation,
     contig_names: &[Vec<u8>],
-    include_introns: bool,
-    three_prime: bool,
+    opts: &RecordOptions,
     writer: &mut bam::Writer,
     metrics: &mut Metrics,
 ) -> Result<()> {
@@ -210,13 +246,7 @@ fn write_unordered_batch(
             .into_par_iter()
             .for_each_with(sender, |sender, record| {
                 // The receiver is alive until every worker finishes this batch.
-                let _ = sender.send(annotate_record(
-                    record,
-                    annotation,
-                    contig_names,
-                    include_introns,
-                    three_prime,
-                ));
+                let _ = sender.send(annotate_record_with(record, annotation, contig_names, opts));
             });
     });
     for result in receiver {
@@ -224,64 +254,6 @@ fn write_unordered_batch(
         writer.write(&record)?;
         observe(metrics, &record, &record_metrics);
         metrics.add_record_metrics(record_metrics);
-    }
-    Ok(())
-}
-
-/// Annotate one consecutive minimap2 query group and add mapper/annotation
-/// ambiguity tags without a name sort or an intermediate BAM. `NH` is the number
-/// of *reported* primary+secondary hits, bounded by minimap2's `-N` setting.
-fn write_multimap_group(
-    group: Vec<bam::Record>,
-    annotation: &Annotation,
-    contig_names: &[Vec<u8>],
-    include_introns: bool,
-    three_prime: bool,
-    writer: &mut bam::Writer,
-    metrics: &mut Metrics,
-) -> Result<()> {
-    let mut records = Vec::with_capacity(group.len());
-    for record in group {
-        let (record, record_metrics) = annotate_record(
-            record,
-            annotation,
-            contig_names,
-            include_introns,
-            three_prime,
-        )?;
-        observe(metrics, &record, &record_metrics);
-        metrics.add_record_metrics(record_metrics);
-        records.push(record);
-    }
-    let hits = records
-        .iter()
-        .enumerate()
-        .filter_map(|(index, record)| {
-            (!record.is_unmapped() && !record.is_supplementary()).then_some(index)
-        })
-        .collect::<Vec<_>>();
-    let nh = hits.len() as i32;
-    let mut genes = HashSet::new();
-    for &index in &hits {
-        if let Ok(Aux::String(gx)) = records[index].aux(b"GX") {
-            genes.extend(
-                gx.split(';')
-                    .filter(|gene| !gene.is_empty())
-                    .map(str::to_owned),
-            );
-        }
-    }
-    // The reference-pipeline `mm` convention additionally records a MAPQ promotion. We deliberately
-    // retain minimap2's native MAPQ; here `mm=1` means the compatible-gene rescue
-    // condition alone: multiple reported hits and exactly one compatible gene.
-    let rescued = nh > 1 && genes.len() == 1;
-    for (hi, &index) in hits.iter().enumerate() {
-        replace_i32_tag(&mut records[index], b"NH", Some(nh))?;
-        replace_i32_tag(&mut records[index], b"HI", Some((hi + 1) as i32))?;
-        replace_i32_tag(&mut records[index], b"mm", rescued.then_some(1))?;
-    }
-    for record in records {
-        writer.write(&record)?;
     }
     Ok(())
 }
@@ -337,6 +309,11 @@ pub fn run(cli: &Cli) -> Result<()> {
     };
     writer.set_threads(cli.threads)?;
 
+    let opts = RecordOptions {
+        include_introns: cli.include_introns,
+        three_prime: cli.three_prime,
+        confident_mapq: cli.confident_mapq,
+    };
     let mut metrics = Metrics {
         input_bam: cli.bam.display().to_string(),
         output_bam: cli.output.display().to_string(),
@@ -351,6 +328,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         three_prime: cli.three_prime,
         unordered: cli.unordered,
         multimap_tags: cli.multimap_tags,
+        confident_mapq: cli.confident_mapq,
         genes_loaded: annotation.genes.len(),
         transcripts_loaded: annotation.transcripts.len(),
         gtf_exons_seen: annotation.exons_seen,
@@ -369,8 +347,7 @@ pub fn run(cli: &Cli) -> Result<()> {
                     std::mem::take(&mut group),
                     &annotation,
                     &contig_names,
-                    cli.include_introns,
-                    cli.three_prime,
+                    &opts,
                     &mut writer,
                     &mut metrics,
                 )?;
@@ -385,8 +362,7 @@ pub fn run(cli: &Cli) -> Result<()> {
                 group,
                 &annotation,
                 &contig_names,
-                cli.include_introns,
-                cli.three_prime,
+                &opts,
                 &mut writer,
                 &mut metrics,
             )?;
@@ -405,8 +381,7 @@ pub fn run(cli: &Cli) -> Result<()> {
                     &pool,
                     &annotation,
                     &contig_names,
-                    cli.include_introns,
-                    cli.three_prime,
+                    &opts,
                     &mut writer,
                     &mut metrics,
                 )?;
@@ -419,8 +394,7 @@ pub fn run(cli: &Cli) -> Result<()> {
                 &pool,
                 &annotation,
                 &contig_names,
-                cli.include_introns,
-                cli.three_prime,
+                &opts,
                 &mut writer,
                 &mut metrics,
             )?;
@@ -428,13 +402,8 @@ pub fn run(cli: &Cli) -> Result<()> {
     } else {
         for result in reader.records() {
             let record = result.context("reading BAM record")?;
-            let (record, record_metrics) = annotate_record(
-                record,
-                &annotation,
-                &contig_names,
-                cli.include_introns,
-                cli.three_prime,
-            )?;
+            let (record, record_metrics) =
+                annotate_record_with(record, &annotation, &contig_names, &opts)?;
             writer.write(&record)?;
             observe(&mut metrics, &record, &record_metrics);
             metrics.add_record_metrics(record_metrics);
@@ -460,6 +429,7 @@ pub fn run(cli: &Cli) -> Result<()> {
             "gene_assigned",
             "unique_gene",
             "multi_gene",
+            "rescued",
         ],
     )?;
     info!(records = metrics.records, elapsed = format!("{:.1}s", metrics.elapsed_secs), output = %cli.output.display(), "RUN SUMMARY");

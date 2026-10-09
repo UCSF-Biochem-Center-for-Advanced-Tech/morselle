@@ -167,3 +167,41 @@ fn raw_scan_matches_per_tag_aux_lookups() {
         );
     }
 }
+
+#[test]
+fn molecule_tags_read_integer_nh_and_mm() {
+    let record = record_with(vec![
+        (b"NH", Aux::U8(3)),
+        (b"CB", Aux::String("AAAC-1")),
+        (b"mm", Aux::I32(1)),
+    ]);
+    let tags = MoleculeTags::read(&record);
+    assert_eq!((tags.nh, tags.mm), (Some(3), Some(1)));
+    // A string-typed NH is not an integer hit count.
+    let record = record_with(vec![(b"NH", Aux::String("2"))]);
+    assert_eq!(MoleculeTags::read(&record).nh, None);
+}
+
+#[test]
+fn mapping_gate_follows_cell_ranger_counting_rule() {
+    use super::mapping_gate::{mapping_gate, MappingGate::*};
+    let gate = |mapq: u8, tags: Vec<(&[u8], Aux)>, min_mapq: u8| {
+        let mut record = record_with(tags);
+        record.set_mapq(mapq);
+        mapping_gate(&record, &MoleculeTags::read(&record), min_mapq)
+    };
+    assert_eq!(gate(60, vec![], 60), Confident);
+    assert_eq!(gate(255, vec![], 60), Confident); // STAR's unique MAPQ
+                                                  // Confidently mapped reads count whatever their other hits (NH).
+    assert_eq!(gate(60, vec![(b"NH", Aux::U8(2))], 60), Confident);
+    assert_eq!(gate(5, vec![(b"mm", Aux::U8(1))], 60), Rescued);
+    assert_eq!(
+        gate(5, vec![(b"NH", Aux::U8(2)), (b"mm", Aux::U8(1))], 60),
+        Rescued
+    );
+    assert_eq!(gate(5, vec![(b"NH", Aux::U8(2))], 60), Multimapper);
+    assert_eq!(gate(5, vec![(b"NH", Aux::U8(1))], 60), LowMapq);
+    assert_eq!(gate(59, vec![(b"mm", Aux::U8(0))], 60), LowMapq);
+    // --min-mapq 0: no gate.
+    assert_eq!(gate(0, vec![(b"NH", Aux::U8(4))], 0), Confident);
+}

@@ -6,6 +6,49 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- **Counts change:** `molecules` now counts only confidently mapped reads,
+  as Cell Ranger does: MAPQ >= `--min-mapq` (default 60) or rescued by
+  `annotate` (`mm:i:1`). On DZEC05 this removes the poly-G LINC00486
+  artifact (22% of reads -> 0.01%); on a normal library (DZEC04 subset) it
+  drops ~3% of single-gene reads, all low-MAPQ intronic placements.
+  `--min-mapq 0` restores the old counts. See MANUAL "Confident mapping and
+  multimapper rescue".
+- `annotate` writes `mm:i:1` on a primary read below `--confident-mapq`
+  (default 60) whose genes are one splice-compatible sense exonic gene
+  (Cell Ranger's `rescue_alignments_se`), keeping minimap2's MAPQ. Intronic
+  hits are never rescued. With `--multimap-tags` the rule now spans the
+  query group like Cell Ranger's (no rescue if any hit is confident; only
+  exonic-compatible hits count; `mm` on the primary only). The old looser
+  group rule (every hit tagged when all hits' genes were one gene, intronic
+  included) remains under `--confident-mapq 0`.
+- Before this, `molecules` never read `NH` or `mm`, so `--multimap-tags`
+  had no effect on counts. The earlier CAT02 match to Cell Ranger came from
+  `cr-bam-to-mtx` on Cell Ranger's own BAM, not from `molecules`.
+- `annotate::Cli` gains `confident_mapq`, `annotate::Call` gains
+  `exonic_compatible`, and `molecules::MoleculeOptions` gains `min_mapq`;
+  struct literals must set them.
+
+### Added
+- Counters: `annotate` `rescued`; `molecules` `rescued_records`,
+  `low_mapq_records`, `multimapper_records` and `min_mapq`, with matching
+  per-barcode columns (`rescued`; `rescued_reads`, `low_mapq_reads`,
+  `multimapper_reads`).
+- `annotate_record_with` / `RecordOptions`, and `collect_evidence_with`,
+  `collect_region_with`, `collect_evidence_indexed_with` / `RecordFilter`.
+  The existing functions keep their signatures and apply no MAPQ rule.
+- Tests: SAM -> annotate -> molecules -> matrix chain tests for both routes
+  (`tests/regressions/mapping_quality.rs`) and unit tests for the gate and
+  `NH`/`mm` parsing.
+
+### Notes
+- Golden outputs regenerated: the fixtures give 1 in 5 reads MAPQ 3, and
+  those are no longer eligible (`eligible_records` 11,491 -> 9,182 in the
+  Flex mode, for example). The tag-seq ground-truth tests now count only
+  MAPQ >= 60 reads as true molecules, and the indexed-representative
+  regression runs with `--min-mapq 0` because it tests representative
+  choice across MAPQs.
+
 ## [0.6.1] — 2026-10-08
 
 ### Added

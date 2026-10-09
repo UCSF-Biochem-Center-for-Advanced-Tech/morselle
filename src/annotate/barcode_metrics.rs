@@ -31,6 +31,7 @@ pub(super) fn observe(metrics: &mut Metrics, record: &Record, value: &RecordMetr
         value.gene_assigned,
         value.unique_gene,
         value.multi_gene,
+        value.rescued,
     ]) {
         *dst += src;
     }

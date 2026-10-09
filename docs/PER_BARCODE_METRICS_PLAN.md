@@ -3,8 +3,9 @@
 ## Implementation checkpoint (2026-10-08)
 
 Part 1 is committed on `feat/per-barcode-metrics` as 0.6.1 (not tagged or
-pushed). Part 2 has not been started; its Layer B design was revised after
-reading Cell Ranger's rescue code (see the session notes in the PR).
+pushed). Part 2 has not been started. Its Layer B design was revised after
+reading Cell Ranger's rescue code and measuring the rule on DZEC04/DZEC05,
+and a read-end overhang tolerance was added (Layer E); see Part 2 below.
 
 Changed from the brief below: the tables are **opt-in** (`--barcode-metrics`
 on every stage and both pipeline scripts), because the first implementation
@@ -265,18 +266,118 @@ metrics.
    homopolymer; report `failed_by_reason.umi_invalid`. Leave a UMI
    base-quality threshold as an option, off by default.
 
-**Layer B: gene-aware mapping uniqueness at counting** (`annotate` → `molecules`).
-Replaces "MAPQ ≥ X" with the Cell Ranger rule.
-1. Keep secondary alignments (minimap2 `-N`; `annotate --multimap-tags`
-   already handles query-grouped multi-hits and NH/HI tags).
-2. A read is countable if its best-scoring alignments resolve to exactly one
-   gene, giving exonic hits priority over intronic and intronic over
-   intergenic. If they tie across genes, or the only hits are intronic on
-   more than one locus, mark it ambiguous and don't count it.
-3. Keep `--min-mapq N` as an explicit option (default off) for users who
-   want the simple rule.
-4. Counters: `ambiguous_multigene`, `rescued_multimapper`, `low_mapq` (when
-   the option is on).
+**Layer B: Cell Ranger MAPQ rule with exonic rescue** (`annotate` → `molecules`).
+Agreed design (2026-10-09), replacing "MAPQ ≥ X" and the loose 0.3.5
+`--multimap-tags` rule.
+
+What Cell Ranger does (10.0.0, `tx_annotation/src/read.rs`): a read is
+counted if it is not secondary, has CB and UB, is confidently mapped
+(MAPQ == 255 for STAR, 60 for minimap2) and GX names exactly one gene.
+`rescue_alignments_se` only runs when no alignment is confidently mapped:
+of the alignments that are splice-compatible, sense and exonic (`tx_align`),
+if they name exactly one gene the first is made primary with MAPQ = high
+confidence and `mm:1`; the rest become secondary with MAPQ 0. Intronic
+hits are never rescued, even with `include-introns`. NH is not read; HI is
+a STAR pass-through.
+
+1. **Default route first** (`--secondary=no`, one record per read; no
+   sorting or grouping change). `annotate` sets `mm:i:1` on a primary read
+   with MAPQ below the cutoff whose GX names one gene from a compatible
+   sense exonic transcript (TX of the form `ENST…,+pos,cigar`). Annotate's
+   GX is already splice-compatible (`compatible_position`), equivalent to
+   Cell Ranger's `tx_align`, so no new check is needed. Intronic GX is never
+   rescued, regardless of `--include-introns`.
+2. **Keep minimap2's MAPQ** and flags unchanged; `mm:1` marks the rescue
+   (Cell Ranger rewrites MAPQ to 255/60; we keep the original visible).
+3. **Grouped route later** (`-N` with `--multimap-tags`, query-grouped):
+   one record per read is written. Secondaries are dropped (or written to a
+   `--secondary-output` file); the rescued hit is promoted to primary with
+   `mm:1`; `NH` records the number of hits as a diagnostic. HI is not
+   written (not meaningful outside STAR).
+4. **`molecules` uses the tags** (next edit, see below).
+5. Counters: `rescued_multimapper` (mm:1), `low_mapq_intronic` /
+   `low_mapq_unrescued` (dropped), `multimapper_ambiguous` (NH > 1 without
+   mm, grouped route), in stage metrics and Part 1's per-barcode tables.
+
+**`molecules` uses NH and mm** (next edit). Today `molecules` and the matrix
+never read NH or mm, so the 0.3.5 tags have no effect on counts (the CAT02
+"exact copy of Cell Ranger" check ran `cr-bam-to-mtx` on Cell Ranger's own
+BAM, using its `xf` decisions, not our molecules path).
+- A record is countable if it is primary, has CB and UB, GX names one gene,
+  and **MAPQ ≥ `--min-mapq` (default 60) or `mm:i:1`**.
+- `NH` names the reason a low-MAPQ read is dropped (`NH` > 1:
+  multimapper) but never vetoes a confidently mapped read: Cell Ranger
+  counts MAPQ 60 whatever its other hits (decided 2026-10-09).
+- `--min-mapq 0` restores today's behaviour (flag for comparison runs).
+- New counters in molecules metrics and per-barcode table:
+  `rescued_records`, `low_mapq_records`, `multimapper_records`.
+- Golden outputs change; regenerate in a separate commit. Chain test in
+  `tests/pipeline_chain_e2e.rs`: annotate a minimap2-style BAM with a
+  MAPQ-60 read, a low-MAPQ compatible exonic read (rescued), a low-MAPQ
+  intronic read (dropped) and an NH:2 read without mm (dropped), through
+  molecules and matrix. **Implemented** (annotate flag `--confident-mapq`,
+  molecules `--min-mapq`; `tests/regressions/mapping_quality.rs`).
+
+Measured with the default-route rule (DZEC04 = normal library, DZEC05 30 min
+= poly-G library; chr1/2/11/17, 25% sample, primary reads with CB/UB):
+
+| | DZEC04 | DZEC05 |
+|---|---|---|
+| single-gene reads | 45.9 M | 1.18 M |
+| MAPQ 60, counted | 78.3% | 26.5% |
+| MAPQ < 60, compatible exonic, rescued | 19.0% | 22.5% |
+| MAPQ < 60, intronic, dropped | 2.8% | 51.0% |
+| LINC00486 share before → after | 0.245% → 0.000% | 48.5% → 0.05% |
+
+The rescue is what makes a 60 cutoff usable (without it ~22% of DZEC04
+would be lost; cf. MAPQ ≥ 30 above). Reads dropped in DZEC04 are intronic
+and mostly not low-complexity (0–7% fail the Layer A test) but carry longer
+homopolymers (longest run 10–15% of the read vs 3–5% kept): intronic
+repeat / internal-priming reads, also dropped by Cell Ranger. Largest real
+genes affected: AMBRA1 34%, NBEAL1 88%, PLEKHA7 64%, ZMYM4 49%; highly
+expressed exonic genes lose almost nothing (SFTPB 2 reads). The 2.8% read
+loss is near the < 2% molecule target; measure molecules, which Layer E
+more than offsets.
+
+**Layer E: read-end exon overhang tolerance** (`annotate`, separate commit).
+7.0% of DZEC04 records (3.7 M in the subset) are `RE:E` with no gene: they
+overlap an exon but fail `compatible_position`. Split by cause:
+
+| cause | share | MAPQ 60 |
+|---|---|---|
+| straddles exon/intron, unspliced | 42.5% | 85% |
+| straddles exon/intron, spliced | 20.4% | 80% |
+| runs past gene 3' end | 11.4% | 69% |
+| runs past gene 5' end | 0.6% | 52% |
+| inside exons, junction mismatch | 6.1% | 84% |
+| exon of an antisense gene only | 16.5% | 73% |
+| antisense exon inside a sense gene body | 2.4% | 67% |
+
+55% overhang an exon by only 1–3 bp. In a 3% sample (157 K reads with
+≤ 10 bp overhang) 98.8% of overhangs are at a read end, not an internal
+junction; at ≤ 3 bp the overhanging bases match the intron 100% and also
+match the adjacent exon in 98.1% (minimap2 extends rather than splice a
+1–3 bp anchor). These are mature-mRNA reads. At 4–10 bp only 68% match the
+adjacent exon and 54% have no adjacent exon (transcript-end extensions).
+
+1. In `compatible_position`, let the **first and last block** overhang their
+   exon by ≤ `--max-end-overhang` bases (default 3; 0 = today's behaviour),
+   treating the overhang as soft-clipped. Clamp the transcript position to
+   the exon start so TX positions never go negative. No junction tolerance
+   (junction wobble is 1% of cases).
+2. Expected gain: ~2.0 M reads in the DZEC04 subset (~4% of records, 85%
+   MAPQ 60), more than offsetting Layer B's loss.
+3. Counter `end_overhang_rescued`. Golden outputs change (separate commit);
+   unit tests in `src/annotate/tests.rs` (1, 3 and 4 bp overhangs, plus and
+   minus strand, position clamp) and a chain case.
+4. Later, optional: Cell Ranger-style intronic fallback for sense reads that
+   overlap an exon but stay incompatible (> 3 bp straddles, 3' extensions,
+   junction mismatches, antisense exon inside a sense gene body) when
+   `--include-introns` is on. Antisense-exon-only reads stay uncounted, as in
+   Cell Ranger.
+
+**Build order:** Layer B on the default route (annotate `mm` + molecules
+NH/mm rule) → Layer E → Layer A/C/D → grouped route.
 
 **Layer C: alignment sanity, cheap, per read** (`annotate`).
 1. Minimum aligned fraction of the read (e.g. ≥ 50%; soft-clipped
@@ -300,8 +401,11 @@ Replaces "MAPQ ≥ X" with the Cell Ranger rule.
   for paralogous genes such as HBG1/HBG2, as Cell Ranger does); C.2 and C.3
   flag-only at first.
 - Thresholds for low complexity and aligned fraction.
-- Layer B needs secondaries from minimap2, which makes annotation slower and
-  the BAM larger. Measure both before making it the default.
+- Layer B (default route) needs no secondaries; decided: keep MAPQ, add
+  `mm`, cutoff 60. The grouped route (`-N`) needs secondaries, which makes
+  annotation slower and the BAM larger; measure before adding it.
+- Layer E default overhang (3 bp proposed) and whether to add the intronic
+  fallback.
 
 ## Tests
 

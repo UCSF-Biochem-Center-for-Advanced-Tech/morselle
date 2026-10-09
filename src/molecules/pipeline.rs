@@ -20,8 +20,9 @@ use rust_htslib::bam::{self, Read};
 
 use super::aux_write::{append_char, append_f32, append_i32, append_u32, remove_tag, replace_str};
 use super::dedup::{build_decisions_with, DedupPolicy};
-use super::evidence::{collate, collect_evidence};
+use super::evidence::{collate, collect_evidence_with, RecordFilter};
 use super::helpers::{require_bam_offsets, umi_key, MoleculeTags};
+use super::mapping_gate::{mapping_gate, MappingGate};
 use super::types::{merge_metrics, Decision, Dna, Metrics, RawKey, NO_SAMPLE};
 
 /// Settings shared by the unsharded and sharded write paths.
@@ -35,8 +36,22 @@ pub struct MoleculeOptions {
     /// Key molecules on (cell, gene, UMI, read 5' position); see
     /// `helpers::position_tag`.
     pub position_aware: bool,
+    /// Count only reads with MAPQ >= this or `mm:i:1` (see `mapping_gate`);
+    /// 0 counts every MAPQ.
+    pub min_mapq: u8,
     /// BGZF level (0-9) for the output BAM; `None` keeps htslib's default.
     pub compression_level: Option<u32>,
+}
+
+impl MoleculeOptions {
+    /// The evidence-pass filter these options imply.
+    pub fn record_filter(&self) -> RecordFilter {
+        RecordFilter {
+            require_pb: self.flex,
+            position_aware: self.position_aware,
+            min_mapq: self.min_mapq,
+        }
+    }
 }
 
 fn apply_compression(writer: &mut bam::Writer, opts: &MoleculeOptions) -> Result<()> {
@@ -61,6 +76,13 @@ fn record_key(
     tables: &KeyTables,
 ) -> Option<RawKey> {
     if record.is_unmapped() || record.is_secondary() || record.is_supplementary() {
+        return None;
+    }
+    // Match evidence collection: a gated record is not eligible.
+    if matches!(
+        mapping_gate(record, tags, opts.min_mapq),
+        MappingGate::LowMapq | MappingGate::Multimapper
+    ) {
         return None;
     }
     let cell = tags.cb.and_then(Dna::pack)?;
@@ -283,11 +305,10 @@ pub fn run_sharded(
             .par_iter()
             .map(|shard_path| -> Result<Metrics> {
                 let mut local = Metrics::default();
-                let (evidence, genes, gene_ids, _samples, sample_ids) = collect_evidence(
+                let (evidence, genes, gene_ids, _samples, sample_ids) = collect_evidence_with(
                     shard_path,
                     opts.threads,
-                    opts.flex,
-                    opts.position_aware,
+                    &opts.record_filter(),
                     &mut local,
                 )?;
                 let (decisions, _) = build_decisions_with(
