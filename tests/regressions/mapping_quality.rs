@@ -20,7 +20,10 @@ chr1\ttest\texon\t601\t700\t.\t+\t.\tgene_id \"GENEB\"; transcript_id \"TXB\"; g
 /// (flag, 1-based position, MAPQ) of one reported hit.
 type Hit = (u16, u32, u8);
 
-const READS: [(&str, &str, &[Hit]); 5] = [
+/// (name, UMI, hits) of one read.
+type Read = (&'static str, &'static str, &'static [Hit]);
+
+const READS: [Read; 5] = [
     // Unique exonic hit: counted.
     ("confident", "AAAAAAAAAAAA", &[(0, 111, 60)]),
     // Low MAPQ; the only other hit is intergenic: rescued as gene A.
@@ -37,9 +40,9 @@ const READS: [(&str, &str, &[Hit]); 5] = [
     ),
 ];
 
-fn sam(secondaries: bool) -> String {
+fn sam(reads: &[Read], secondaries: bool) -> String {
     let mut text = String::from("@HD\tVN:1.6\tSO:unsorted\tGO:query\n@SQ\tSN:chr1\tLN:1000\n");
-    for (name, umi, hits) in READS {
+    for &(name, umi, hits) in reads {
         for &(flag, pos, mapq) in hits.iter().filter(|h| secondaries || h.0 == 0) {
             let (seq, qual) = if flag & 256 == 0 {
                 ("A".repeat(50), "I".repeat(50))
@@ -62,6 +65,7 @@ fn json(path: &Path) -> serde_json::Value {
 fn chain(
     dir: &Path,
     name: &str,
+    reads: &[Read],
     annotate_args: &[&str],
     molecule_args: &[&str],
 ) -> (Vec<bam::Record>, serde_json::Value, f64) {
@@ -69,7 +73,7 @@ fn chain(
     std::fs::write(&gtf, GTF).unwrap();
     let secondaries = annotate_args.contains(&"--multimap-tags");
     let mapped = dir.join(format!("{name}.sam"));
-    std::fs::write(&mapped, sam(secondaries)).unwrap();
+    std::fs::write(&mapped, sam(reads, secondaries)).unwrap();
     let annotated = dir.join(format!("{name}.annotated.bam"));
     let mut args = vec![
         mapped.to_str().unwrap(),
@@ -132,7 +136,7 @@ fn int_tag(records: &[bam::Record], name: &str, tag: &[u8]) -> Option<i64> {
 #[test]
 fn grouped_route_counts_confident_and_rescued_reads_only() {
     let dir = tempfile::tempdir().unwrap();
-    let (records, metrics, total) = chain(dir.path(), "grouped", &["--multimap-tags"], &[]);
+    let (records, metrics, total) = chain(dir.path(), "grouped", &READS, &["--multimap-tags"], &[]);
     assert_eq!(int_tag(&records, "rescued", b"mm"), Some(1));
     assert_eq!(int_tag(&records, "rescued", b"NH"), Some(2));
     assert_eq!(int_tag(&records, "two_genes", b"mm"), None);
@@ -151,7 +155,7 @@ fn grouped_route_counts_confident_and_rescued_reads_only() {
 #[test]
 fn default_route_rescues_single_gene_exonic_reads() {
     let dir = tempfile::tempdir().unwrap();
-    let (records, metrics, total) = chain(dir.path(), "default", &[], &[]);
+    let (records, metrics, total) = chain(dir.path(), "default", &READS, &[], &[]);
     // Without secondaries a low-MAPQ exonic read naming one gene is rescued,
     // as Cell Ranger does with one reported alignment; NH is never written.
     assert_eq!(int_tag(&records, "rescued", b"mm"), Some(1));
@@ -170,6 +174,7 @@ fn min_mapq_zero_and_confident_mapq_zero_restore_unfiltered_counts() {
     let (_, metrics, total) = chain(
         dir.path(),
         "unfiltered",
+        &READS,
         &["--multimap-tags"],
         &["--min-mapq", "0"],
     );
@@ -178,9 +183,37 @@ fn min_mapq_zero_and_confident_mapq_zero_restore_unfiltered_counts() {
     assert_eq!(metrics["multimapper_records"], 0);
     assert_eq!(total, 5.0);
     // annotate --confident-mapq 0: no rescue tag, so only MAPQ-60 reads count.
-    let (records, metrics, total) = chain(dir.path(), "no_rescue", &["--confident-mapq", "0"], &[]);
+    let (records, metrics, total) = chain(
+        dir.path(),
+        "no_rescue",
+        &READS,
+        &["--confident-mapq", "0"],
+        &[],
+    );
     assert_eq!(int_tag(&records, "rescued", b"mm"), None);
     assert_eq!(metrics["rescued_records"], 0);
     assert_eq!(metrics["low_mapq_records"], 3);
     assert_eq!(total, 2.0);
+}
+
+#[test]
+fn read_end_overhang_gets_its_gene_and_is_counted() {
+    // Exon 1 of gene A ends at 200; this read covers 153-202, 2 bp past it.
+    const OVERHANG: [Read; 1] = [("overhang", "GAGAGAGAGAGA", &[(0, 153, 60)])];
+    let dir = tempfile::tempdir().unwrap();
+    let gene = |records: &[bam::Record]| s(&records[0], b"GX");
+    let (records, _, total) = chain(dir.path(), "overhang", &OVERHANG, &[], &[]);
+    assert_eq!(gene(&records).as_deref(), Some("GENEA"));
+    assert_eq!(total, 1.0);
+    // --max-end-overhang 0: exonic (RE:E) with no gene, so nothing counts.
+    let (records, _, total) = chain(
+        dir.path(),
+        "exact_ends",
+        &OVERHANG,
+        &["--max-end-overhang", "0"],
+        &[],
+    );
+    assert_eq!(gene(&records), None);
+    assert_eq!(records[0].aux(b"RE").ok(), Some(Aux::Char(b'E')));
+    assert_eq!(total, 0.0);
 }

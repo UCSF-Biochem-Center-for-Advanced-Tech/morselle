@@ -122,6 +122,7 @@ pub fn annotate_record(
         include_introns,
         three_prime,
         confident_mapq: 0,
+        max_end_overhang: 0,
     };
     annotate_record_with(record, annotation, contig_names, &opts)
 }
@@ -136,9 +137,9 @@ pub fn annotate_record_with(
     opts: &RecordOptions,
 ) -> Result<(bam::Record, RecordMetrics)> {
     let RecordOptions {
-        include_introns,
         three_prime,
         confident_mapq,
+        ..
     } = *opts;
     let mut metrics = RecordMetrics {
         records: 1,
@@ -170,13 +171,12 @@ pub fn annotate_record_with(
         .with_context(|| format!("record has invalid target id {tid}"))?;
     let contig = std::str::from_utf8(contig)?;
     let blocks = alignment_blocks(&record);
-    let call = annotation.call(
+    let call = annotation.call_with(
         contig,
         &blocks,
         record.is_reverse(),
         &record.cigar().to_string(),
-        include_introns,
-        three_prime,
+        opts,
     );
     match call.region {
         b'E' => metrics.exonic = 1,
@@ -219,6 +219,7 @@ pub fn annotate_record_with(
     }
     tag_record(&mut record, &call, annotation, three_prime)?;
     metrics.exonic_compatible = call.exonic_compatible;
+    metrics.end_overhang = call.end_overhang as u64;
     if confident_mapq > 0 {
         let rescued = !record.is_secondary()
             && !record.is_supplementary()
@@ -313,6 +314,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         include_introns: cli.include_introns,
         three_prime: cli.three_prime,
         confident_mapq: cli.confident_mapq,
+        max_end_overhang: cli.max_end_overhang,
     };
     let mut metrics = Metrics {
         input_bam: cli.bam.display().to_string(),
@@ -329,6 +331,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         unordered: cli.unordered,
         multimap_tags: cli.multimap_tags,
         confident_mapq: cli.confident_mapq,
+        max_end_overhang: cli.max_end_overhang,
         genes_loaded: annotation.genes.len(),
         transcripts_loaded: annotation.transcripts.len(),
         gtf_exons_seen: annotation.exons_seen,
@@ -430,6 +433,7 @@ pub fn run(cli: &Cli) -> Result<()> {
             "unique_gene",
             "multi_gene",
             "rescued",
+            "end_overhang",
         ],
     )?;
     info!(records = metrics.records, elapsed = format!("{:.1}s", metrics.elapsed_secs), output = %cli.output.display(), "RUN SUMMARY");

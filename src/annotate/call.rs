@@ -2,9 +2,10 @@ use rust_htslib::bam::{self, record::Cigar};
 use std::collections::HashSet;
 
 use super::index::collect_bins;
-use super::types::{Annotation, Call, Interval, Strand, Transcript};
+use super::types::{Annotation, Call, Interval, RecordOptions, Strand, Transcript};
 
 impl Annotation {
+    /// [`Annotation::call_with`] with exact exon boundaries (no end overhang).
     pub fn call(
         &self,
         contig_name: &str,
@@ -14,6 +15,29 @@ impl Annotation {
         include_introns: bool,
         three_prime: bool,
     ) -> Call {
+        let opts = RecordOptions {
+            include_introns,
+            three_prime,
+            confident_mapq: 0,
+            max_end_overhang: 0,
+        };
+        self.call_with(contig_name, blocks, reverse, cigar, &opts)
+    }
+
+    pub fn call_with(
+        &self,
+        contig_name: &str,
+        blocks: &[Interval],
+        reverse: bool,
+        cigar: &str,
+        opts: &RecordOptions,
+    ) -> Call {
+        let RecordOptions {
+            include_introns,
+            three_prime,
+            max_end_overhang,
+            ..
+        } = *opts;
         let Some(&contig) = self.contig_ids.get(contig_name) else {
             return Call {
                 region: b'I',
@@ -23,6 +47,7 @@ impl Annotation {
                 terminal_genes: vec![],
                 terminal_tx: vec![],
                 exonic_compatible: false,
+                end_overhang: false,
             };
         };
         if blocks.is_empty() {
@@ -34,6 +59,7 @@ impl Annotation {
                 terminal_genes: vec![],
                 terminal_tx: vec![],
                 exonic_compatible: false,
+                end_overhang: false,
             };
         }
         let span = Interval {
@@ -43,6 +69,8 @@ impl Annotation {
         let mut tx_candidates = HashSet::new();
         collect_bins(&self.indexes[contig].exon_bins, span, &mut tx_candidates);
         let mut sense_exon_genes = HashSet::new();
+        // Some sense transcript fits with exact exon ends (no overhang used).
+        let mut exact_sense = false;
         let mut any_exon_overlap = false;
         let mut sense_tx = Vec::new();
         let mut antisense_tx = Vec::new();
@@ -59,7 +87,9 @@ impl Annotation {
             {
                 any_exon_overlap = true;
             }
-            if let Some(pos) = compatible_position(tx, blocks) {
+            if let Some((pos, overhang)) =
+                compatible_position_with(tx, blocks, max_end_overhang as i64)
+            {
                 let entry = format!(
                     "{},{}{},{}",
                     tx.id,
@@ -68,6 +98,7 @@ impl Annotation {
                     transcript_cigar(cigar, tx.strand)
                 );
                 if sense {
+                    exact_sense |= !overhang;
                     sense_exon_genes.insert(tx.gene);
                     if three_prime && overlaps_terminal_exon(tx, blocks) {
                         terminal_genes.insert(tx.gene);
@@ -149,14 +180,38 @@ impl Annotation {
             terminal_genes,
             terminal_tx,
             exonic_compatible,
+            end_overhang: exonic_compatible && !exact_sense,
         }
     }
 }
 
 pub fn compatible_position(tx: &Transcript, blocks: &[Interval]) -> Option<i64> {
+    compatible_position_with(tx, blocks, 0).map(|(pos, _)| pos)
+}
+
+/// Transcript position of a read whose blocks fit `tx`'s exons with exact
+/// internal junctions, plus whether an end overhang was needed. The read's
+/// first block may start, and its last block end, up to `max_end_overhang`
+/// bases outside its exon; those bases count as soft-clipped (the position
+/// is clamped to the exon). On DZEC04, 55% of reads that overlap an exon
+/// without fitting overhang it by 1-3 bp at a read end, and in 98% of those
+/// the overhanging bases also match the adjacent exon: minimap2 extends an
+/// alignment rather than splice a 1-3 bp anchor.
+pub fn compatible_position_with(
+    tx: &Transcript,
+    blocks: &[Interval],
+    max_end_overhang: i64,
+) -> Option<(i64, bool)> {
+    let last_block = blocks.len().checked_sub(1)?;
     let mut exon_indexes = Vec::with_capacity(blocks.len());
-    for &block in blocks {
-        exon_indexes.push(tx.exons.iter().position(|&exon| exon.contains(block))?);
+    for (i, &block) in blocks.iter().enumerate() {
+        let left = if i == 0 { max_end_overhang } else { 0 };
+        let right = if i == last_block { max_end_overhang } else { 0 };
+        exon_indexes.push(tx.exons.iter().position(|&exon| {
+            block.start >= exon.start - left
+                && block.end <= exon.end + right
+                && block.start.max(exon.start) < block.end.min(exon.end)
+        })?);
     }
     for (pair, exon_pair) in blocks.windows(2).zip(exon_indexes.windows(2)) {
         if exon_pair[1] != exon_pair[0] + 1
@@ -168,13 +223,16 @@ pub fn compatible_position(tx: &Transcript, blocks: &[Interval]) -> Option<i64> 
     }
     let first = exon_indexes[0];
     let last = *exon_indexes.last()?;
-    Some(match tx.strand {
+    let start = blocks[0].start.max(tx.exons[first].start);
+    let end = blocks[last_block].end.min(tx.exons[last].end);
+    let overhang = start != blocks[0].start || end != blocks[last_block].end;
+    let pos = match tx.strand {
         Strand::Plus => {
             tx.exons[..first]
                 .iter()
                 .map(|e| e.end - e.start)
                 .sum::<i64>()
-                + blocks[0].start
+                + start
                 - tx.exons[first].start
         }
         Strand::Minus => {
@@ -183,9 +241,10 @@ pub fn compatible_position(tx: &Transcript, blocks: &[Interval]) -> Option<i64> 
                 .map(|e| e.end - e.start)
                 .sum::<i64>()
                 + tx.exons[last].end
-                - blocks.last()?.end
+                - end
         }
-    })
+    };
+    Some((pos, overhang))
 }
 
 pub fn overlaps_terminal_exon(tx: &Transcript, blocks: &[Interval]) -> bool {

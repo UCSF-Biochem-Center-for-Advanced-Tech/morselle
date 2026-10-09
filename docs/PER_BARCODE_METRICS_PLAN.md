@@ -367,7 +367,8 @@ adjacent exon and 54% have no adjacent exon (transcript-end extensions).
    (junction wobble is 1% of cases).
 2. Expected gain: ~2.0 M reads in the DZEC04 subset (~4% of records, 85%
    MAPQ 60), more than offsetting Layer B's loss.
-3. Counter `end_overhang_rescued`. Golden outputs change (separate commit);
+3. **Implemented** as `annotate --max-end-overhang` (default 3), counter
+   `end_overhang`. Golden outputs change (separate commit);
    unit tests in `src/annotate/tests.rs` (1, 3 and 4 bp overhangs, plus and
    minus strand, position clamp) and a chain case.
 4. Later, optional: Cell Ranger-style intronic fallback for sense reads that

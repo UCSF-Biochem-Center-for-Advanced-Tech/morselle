@@ -7,7 +7,7 @@ use rust_htslib::bam::{
 use std::fs;
 use std::io::Read as IoRead;
 
-use super::call::{compatible_position, transcript_cigar};
+use super::call::{compatible_position, compatible_position_with, transcript_cigar};
 use super::pipeline::run;
 use super::types::{Cli, Interval, Strand, Transcript};
 
@@ -59,6 +59,62 @@ fn spliced_transcript_compatibility_and_position() {
                 }
             ]
         ),
+        None
+    );
+}
+
+fn iv(start: i64, end: i64) -> Interval {
+    Interval { start, end }
+}
+
+fn two_exon_tx(strand: Strand) -> Transcript {
+    Transcript {
+        id: "tx".into(),
+        gene: 0,
+        contig: 0,
+        strand,
+        exons: vec![iv(100, 150), iv(200, 260)],
+    }
+}
+
+#[test]
+fn read_end_overhang_is_soft_clipped_up_to_the_limit() {
+    let plus = two_exon_tx(Strand::Plus);
+    // Exact ends need no allowance.
+    assert_eq!(
+        compatible_position_with(&plus, &[iv(110, 140)], 3),
+        Some((10, false))
+    );
+    // 2 bp before exon 1: compatible only with the allowance, position clamped.
+    assert_eq!(compatible_position_with(&plus, &[iv(98, 140)], 0), None);
+    assert_eq!(
+        compatible_position_with(&plus, &[iv(98, 140)], 3),
+        Some((0, true))
+    );
+    // 3 bp is the limit; 4 bp is not compatible.
+    assert_eq!(
+        compatible_position_with(&plus, &[iv(97, 140)], 3),
+        Some((0, true))
+    );
+    assert_eq!(compatible_position_with(&plus, &[iv(96, 140)], 3), None);
+    // Spliced read running 3 bp past the end of exon 2.
+    assert_eq!(
+        compatible_position_with(&plus, &[iv(120, 150), iv(200, 263)], 3),
+        Some((20, true))
+    );
+    // Internal junctions stay exact: exon 1 end overshot by 1 bp.
+    assert_eq!(
+        compatible_position_with(&plus, &[iv(120, 151), iv(200, 230)], 3),
+        None
+    );
+    // Minus strand: position counts from the clamped high end.
+    let minus = two_exon_tx(Strand::Minus);
+    assert_eq!(
+        compatible_position_with(&minus, &[iv(120, 150), iv(200, 262)], 3),
+        Some((0, true))
+    );
+    assert_eq!(
+        compatible_position(&minus, &[iv(120, 150), iv(200, 262)]),
         None
     );
 }
@@ -167,6 +223,7 @@ fn unordered_annotation_matches_ordered_tags_and_counts() {
             batch_size: 17,
             multimap_tags: false,
             confident_mapq: 60,
+            max_end_overhang: 3,
             metrics: Some(metrics.clone()),
             barcode_metrics: true,
             genes_mtx: None,

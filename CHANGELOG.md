@@ -22,6 +22,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   exonic-compatible hits count; `mm` on the primary only). The old looser
   group rule (every hit tagged when all hits' genes were one gene, intronic
   included) remains under `--confident-mapq 0`.
+- **Counts change:** `annotate --max-end-overhang` (default 3) lets a read's
+  first and last aligned block extend up to 3 bases past their exon and
+  still be transcript-compatible (soft-clipped; `TX` position clamped;
+  internal junctions stay exact). minimap2 extends rather than splices a
+  1-3 base end anchor, which left such reads exonic with no gene: about 4%
+  of DZEC04 records (55% of the 7% exonic-without-gene reads), 85% of them
+  MAPQ 60. New `end_overhang` counter and per-barcode column. `0` restores
+  exact ends. `annotate::Call` gains `end_overhang`, `RecordOptions` gains
+  `max_end_overhang`; `Annotation::call_with` and
+  `call::compatible_position_with` are added, and `call` /
+  `compatible_position` keep exact ends.
 - Before this, `molecules` never read `NH` or `mm`, so `--multimap-tags`
   had no effect on counts. The earlier CAT02 match to Cell Ranger came from
   `cr-bam-to-mtx` on Cell Ranger's own BAM, not from `molecules`.

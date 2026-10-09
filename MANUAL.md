@@ -36,7 +36,7 @@ reproduces the corresponding run-wide JSON counter.
 |---|---|
 | `illumina` | `reads`, `barcode_exact`, `barcode_corrected`, `emitted`, `failed_merged_too_short`, `failed_no_cdna`, `failed_short_r1`, `failed_r2_polya_short`, `failed_cb_invalid`, `failed_cb_unmatched` |
 | `extract` | `reads`, `cb_on_whitelist`, `cb_within1`, `emitted`, `class_full`, `class_partial`, `class_unparseable`, `pb_located`, `pb_hit` |
-| `annotate` | `records`, `primary`, `unmapped`, `exonic`, `intronic`, `intergenic`, `antisense`, `gene_assigned`, `unique_gene`, `multi_gene`, `rescued` |
+| `annotate` | `records`, `primary`, `unmapped`, `exonic`, `intronic`, `intergenic`, `antisense`, `gene_assigned`, `unique_gene`, `multi_gene`, `rescued`, `end_overhang` |
 | `molecules` | `eligible_reads`, `raw_cell_gene_umis`, `molecules_counted`, `collision_groups`, `representatives_tagged`, `rescued_reads`, `low_mapq_reads`, `multimapper_reads` |
 
 `__no_barcode__` groups reads without a located or usable barcode;
@@ -88,6 +88,20 @@ On a normal library (DZEC04, four chromosomes sampled) 78% of single-gene
 reads have MAPQ 60, 19% are rescued and 3% are dropped. The dropped reads are
 intronic and mostly inside repeats. `molecules --min-mapq 0` and
 `annotate --confident-mapq 0` restore the pre-0.6.2 counts.
+
+### Read-end exon overhang
+
+`sbxpress annotate` gives a read a gene only if its aligned blocks fit a
+transcript's exons with exact splice junctions. minimap2 often extends a
+read's alignment 1-3 bases past an exon end instead of splicing such a short
+anchor, and the read is then exonic (`RE:A:E`) with no gene. On DZEC04 this
+was 7% of records; 55% of them overhung by 1-3 bases, almost all at a read
+end, and those bases also matched the next exon in 98% of cases.
+`--max-end-overhang` (default 3) lets the first and last aligned block extend
+that many bases past their exon. The overhang is treated as soft-clipped, and
+the `TX` position is clamped to the exon. Internal junctions must still match
+exactly. The `end_overhang` counter reports records that got genes this way;
+`--max-end-overhang 0` restores exact ends.
 
 ## 1. Inputs shared by both paths
 

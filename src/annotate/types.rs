@@ -56,6 +56,14 @@ pub struct Cli {
     #[arg(long, default_value_t = 60)]
     pub confident_mapq: u8,
 
+    /// Bases a read's first or last aligned block may extend past its exon and
+    /// still be transcript-compatible (treated as soft-clipped). minimap2
+    /// extends rather than splices a 1-3 base end anchor, which otherwise
+    /// leaves the read exonic with no gene. Junctions must still match
+    /// exactly. 0 requires exact exon ends (pre-0.6.2 behaviour).
+    #[arg(long, default_value_t = 3)]
+    pub max_end_overhang: u32,
+
     /// Optional JSON metrics path (default: OUTPUT.metrics.json).
     #[arg(long)]
     pub metrics: Option<PathBuf>,
@@ -91,6 +99,8 @@ pub struct RecordOptions {
     pub three_prime: bool,
     /// `Cli::confident_mapq`; 0 disables the per-record `mm` rescue.
     pub confident_mapq: u8,
+    /// `Cli::max_end_overhang`; 0 requires exact exon ends.
+    pub max_end_overhang: u32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -176,12 +186,14 @@ pub struct Call {
     /// `genes` come from splice-compatible sense exonic transcripts (not the
     /// intronic gene-body fallback).
     pub exonic_compatible: bool,
+    /// Exonic-compatible only because of the end-overhang allowance.
+    pub end_overhang: bool,
 }
 
 #[derive(Debug, Default, Serialize)]
 pub struct Metrics {
     #[serde(skip)]
-    pub per_barcode: crate::barcode_metrics::BarcodeTable<11>,
+    pub per_barcode: crate::barcode_metrics::BarcodeTable<12>,
     pub input_bam: String,
     pub output_bam: String,
     pub gtf: String,
@@ -193,6 +205,7 @@ pub struct Metrics {
     pub unordered: bool,
     pub multimap_tags: bool,
     pub confident_mapq: u8,
+    pub max_end_overhang: u32,
     pub elapsed_secs: f64,
     pub records: u64,
     pub primary: u64,
@@ -220,6 +233,8 @@ pub struct Metrics {
     pub terminal_unsupported_gene_collision: u64,
     /// Primary reads below --confident-mapq tagged `mm:i:1`.
     pub rescued: u64,
+    /// Records given genes only through --max-end-overhang.
+    pub end_overhang: u64,
     pub genes_loaded: usize,
     pub transcripts_loaded: usize,
     pub gtf_exons_seen: u64,
@@ -254,6 +269,7 @@ impl Metrics {
         self.terminal_unresolved_gene_collision += value.terminal_unresolved_gene_collision;
         self.terminal_unsupported_gene_collision += value.terminal_unsupported_gene_collision;
         self.rescued += value.rescued;
+        self.end_overhang += value.end_overhang;
     }
 }
 
@@ -284,6 +300,7 @@ pub struct RecordMetrics {
     pub terminal_unresolved_gene_collision: u64,
     pub terminal_unsupported_gene_collision: u64,
     pub rescued: u64,
+    pub end_overhang: u64,
     /// The record's genes are exonic-compatible (`Call::exonic_compatible`);
     /// read by the query-group rescue, not a counter.
     pub exonic_compatible: bool,
