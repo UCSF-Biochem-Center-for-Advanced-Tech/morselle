@@ -48,6 +48,8 @@ Options:
   --audit                  Also emit comparison audit JSON and molecule sample.
   --audit-label TEXT       Audit label; default SBX_SAMPLE.
   --molecule-sample N      Audit 1-in-N molecule sample; default 64.
+  --barcode-metrics        Also write per-barcode .barcodes.tsv.gz tables next to
+                           each stage's metrics (adds run time and memory).
   --help                   Show this help.
 
 The output counts are OUT/SAMPLE/outs/raw_feature_bc_matrix.h5 and
@@ -81,6 +83,7 @@ EXPECT_CELLS=
 THREE_PRIME=1
 MULTIMAP_TAGS=0
 AUDIT=0
+BARCODE_METRICS=()
 AUDIT_LABEL=
 MOLECULE_SAMPLE=64
 
@@ -115,6 +118,7 @@ while (( $# > 0 )); do
         --no-three-prime) THREE_PRIME=0; shift ;;
         --multimap-tags) MULTIMAP_TAGS=1; shift ;;
         --audit) AUDIT=1; shift ;;
+        --barcode-metrics) BARCODE_METRICS=(--barcode-metrics); shift ;;
         --audit-label) AUDIT_LABEL=${2:?missing value for --audit-label}; shift 2 ;;
         --molecule-sample) MOLECULE_SAMPLE=${2:?missing value for --molecule-sample}; shift 2 ;;
         --help|-h) usage; exit 0 ;;
@@ -174,6 +178,7 @@ if [[ ! -s "$EXTRACT_DIR/metrics_summary.json" ]]; then
         --split "$SPLIT" \
         --lenient \
         --minimap2 \
+        ${BARCODE_METRICS[@]+"${BARCODE_METRICS[@]}"} \
         2> "$LOG_DIR/extract.log"
 else
     echo "[1/5] extraction already complete; reusing $EXTRACT_DIR"
@@ -185,7 +190,7 @@ CDNA_FASTQS=("$EXTRACT_DIR/${SAMPLE}_S"*_R2_*.fastq.gz)
 
 if [[ ! -s "$ANNOTATED_BAM.bai" ]]; then
     echo "[2/5] mapping, annotation, and one coordinate sort"
-    ANNOTATE_ARGS=(--gtf "$GTF" --output - --metrics "$ANNOTATION_DIR/$SAMPLE.annotation.metrics.json" --genes-mtx "$GENES_MTX" --threads "$ANNOTATE_THREADS")
+    ANNOTATE_ARGS=(--gtf "$GTF" --output - --metrics "$ANNOTATION_DIR/$SAMPLE.annotation.metrics.json" --genes-mtx "$GENES_MTX" --threads "$ANNOTATE_THREADS" ${BARCODE_METRICS[@]+"${BARCODE_METRICS[@]}"})
     if (( MULTIMAP_TAGS )); then
         ANNOTATE_ARGS+=(--multimap-tags)
         # Primary + ten secondary alignments gives NH values 1..11, matching
@@ -216,6 +221,7 @@ if [[ ! -s "$MOLECULE_BAM.bai" ]]; then
         --output "$MOLECULE_BAM" \
         --metrics "$MOLECULES_DIR/$SAMPLE.molecules.metrics.json" \
         --threads "$MOLECULE_THREADS" \
+        ${BARCODE_METRICS[@]+"${BARCODE_METRICS[@]}"} \
         2> "$LOG_DIR/molecules.log"
     samtools index -@ "$SORT_THREADS" "$MOLECULE_BAM"
     samtools quickcheck -v "$MOLECULE_BAM"

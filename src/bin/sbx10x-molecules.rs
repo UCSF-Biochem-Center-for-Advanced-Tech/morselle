@@ -5,8 +5,8 @@ use std::time::Instant;
 use anyhow::{bail, Result};
 use clap::{CommandFactory, FromArgMatches, Parser};
 use sbx10x::molecules::{
-    build_decisions_with, collect_evidence, collect_evidence_indexed, run_sharded, write_output,
-    DedupPolicy, KeyTables, Metrics, MoleculeOptions,
+    barcode_metrics, build_decisions_with, collect_evidence, collect_evidence_indexed, run_sharded,
+    write_output, DedupPolicy, KeyTables, Metrics, MoleculeOptions,
 };
 use tracing::info;
 
@@ -32,6 +32,11 @@ struct Cli {
     /// JSON metrics output (default: <output>.metrics.json).
     #[arg(long)]
     metrics: Option<PathBuf>,
+
+    /// Also write per-barcode counters to `<metrics>.barcodes.tsv.gz` (MANUAL
+    /// "Per-barcode read metrics"). Off by default; it adds run time and memory.
+    #[arg(long)]
+    barcode_metrics: bool,
     /// BAM compression/decompression threads.
     #[arg(long, default_value_t = 4)]
     threads: usize,
@@ -140,6 +145,8 @@ fn write_metrics(cli: &Cli, metrics: &Metrics) -> Result<()> {
         .clone()
         .unwrap_or_else(|| PathBuf::from(format!("{}.metrics.json", cli.output.display())));
     fs::write(&metrics_path, serde_json::to_string_pretty(metrics)?)?;
+    barcode_metrics::table(&metrics.barcode_rows, cli.barcode_metrics)
+        .write(&metrics_path, &barcode_metrics::COLUMNS)?;
     info!(
         records = metrics.records,
         molecules = metrics.molecules_counted,

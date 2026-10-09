@@ -11,12 +11,36 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use rust_htslib::bam::{
     self, header::HeaderRecord, record::Aux, record::Cigar, record::CigarString, Read as _,
 };
+
+/// Read a stage's gzip TSV into named integer counters without hiding sample rows.
+pub fn barcode_table(path: &Path) -> BTreeMap<(String, String), BTreeMap<String, u64>> {
+    let mut text = String::new();
+    flate2::read::MultiGzDecoder::new(std::fs::File::open(path).unwrap())
+        .read_to_string(&mut text)
+        .unwrap();
+    let mut lines = text.lines();
+    let header: Vec<&str> = lines.next().unwrap().split('\t').collect();
+    assert_eq!(&header[..2], &["barcode", "sample"]);
+    lines
+        .map(|line| {
+            let fields: Vec<&str> = line.split('\t').collect();
+            assert_eq!(fields.len(), header.len());
+            let counters = header[2..]
+                .iter()
+                .zip(&fields[2..])
+                .map(|(&name, value)| (name.to_owned(), value.parse().unwrap()))
+                .collect();
+            ((fields[0].to_owned(), fields[1].to_owned()), counters)
+        })
+        .collect()
+}
 
 /// Small xorshift64 RNG: deterministic across platforms and Rust versions.
 pub struct Rng(u64);

@@ -159,6 +159,12 @@ pub struct Params {
     #[arg(long)]
     pub failed_output: Option<PathBuf>,
 
+    /// Also write per-barcode counters to `metrics_summary.barcodes.tsv.gz`.
+    /// Off by default: on Flex data the table holds millions of
+    /// barcode/sample rows (see MANUAL "Per-barcode read metrics" for the cost).
+    #[arg(long)]
+    pub barcode_metrics: bool,
+
     /// Trim the template-switch oligo when it sits between the cDNA and the 3'
     /// read-through adapter. A fragment carries the TSO only when it reached the
     /// cDNA's 5' end, so it is enriched in short fragments. Off by default:

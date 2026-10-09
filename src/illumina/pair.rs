@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::anchors::revcomp;
 use crate::barcode::{encode16, Whitelist};
+use crate::barcode_metrics::{NO_BARCODE, UNRESOLVED_BARCODE};
 use crate::extract::{extract, ExtractCfg};
 use crate::gzin::open_fastx;
 use crate::homopolymer;
@@ -27,6 +28,37 @@ pub fn convert_pair(
     r2_polya_min_run: Option<usize>,
     failed_paths: &[(PathBuf, PathBuf)],
 ) -> Result<PairMetrics> {
+    convert_pair_with(
+        r1_path,
+        r2_path,
+        output_paths,
+        whitelist,
+        gem_group,
+        overlap_cfg,
+        extract_cfg,
+        emit_yc,
+        r2_polya_min_run,
+        failed_paths,
+        false,
+    )
+}
+
+/// [`convert_pair`] that also fills `PairMetrics::per_barcode` when
+/// `barcode_metrics` is set (`--barcode-metrics`).
+#[allow(clippy::too_many_arguments)]
+pub fn convert_pair_with(
+    r1_path: &Path,
+    r2_path: &Path,
+    output_paths: &[PathBuf],
+    whitelist: &Whitelist,
+    gem_group: u32,
+    overlap_cfg: Option<&OverlapCfg>,
+    extract_cfg: &ExtractCfg,
+    emit_yc: bool,
+    r2_polya_min_run: Option<usize>,
+    failed_paths: &[(PathBuf, PathBuf)],
+    barcode_metrics: bool,
+) -> Result<PairMetrics> {
     let writers = output_paths
         .iter()
         .map(|p| AsyncWriter::create(p))
@@ -46,13 +78,17 @@ pub fn convert_pair(
             )
         })
         .collect::<Vec<_>>();
-    let mut metrics = PairMetrics::default();
+    let mut metrics = PairMetrics {
+        per_barcode: crate::barcode_metrics::BarcodeTable::new(barcode_metrics),
+        ..PairMetrics::default()
+    };
     let mut r1 =
         open_fastx(r1_path).with_context(|| format!("cannot open R1 {}", r1_path.display()))?;
     let mut r2 =
         open_fastx(r2_path).with_context(|| format!("cannot open R2 {}", r2_path.display()))?;
     let mut pair_number = 0u64;
     let mut scratch = Scratch::default();
+    let gem_suffix = format!("-{gem_group}");
     loop {
         let a = r1.next();
         let b = r2.next();
@@ -69,6 +105,7 @@ pub fn convert_pair(
                 let b = b.with_context(|| format!("invalid FASTQ in {}", r2_path.display()))?;
                 pair_number += 1;
                 metrics.records_read += 1;
+                let mut barcode_row = NO_BARCODE;
                 if canonical_id(a.id()) != canonical_id(b.id()) {
                     bail!(
                         "R1/R2 name mismatch at pair {}: '{}' versus '{}'",
@@ -97,6 +134,18 @@ pub fn convert_pair(
                             .failed_by_reason
                             .entry(reason.to_string())
                             .or_insert(0) += 1;
+                        let row = metrics.per_barcode.row(&barcode_row, ".");
+                        row[0] += 1;
+                        let failure_index = match reason {
+                            "merged_too_short" => 4,
+                            "no_cdna" => 5,
+                            "short_r1" => 6,
+                            "r2_polya_short" => 7,
+                            "cb_invalid" => 8,
+                            "cb_unmatched" => 9,
+                            _ => unreachable!("new failure reason needs a barcode column"),
+                        };
+                        row[failure_index] += 1;
                         if !failed_writers.is_empty() {
                             let shard =
                                 (metrics.records_failed as usize - 1) % failed_writers.len();
@@ -179,6 +228,7 @@ pub fn convert_pair(
                         Some(range) => range,
                         None => {
                             metrics.merged_without_cdna += 1;
+                            barcode_row = UNRESOLVED_BARCODE;
                             fail_pair!("no_cdna");
                         }
                     };
@@ -228,6 +278,7 @@ pub fn convert_pair(
                             r2_trim_end = run.start;
                             if r2_trim_end < extract_cfg.min_cdna_len {
                                 metrics.r2_polya_discarded += 1;
+                                barcode_row = UNRESOLVED_BARCODE;
                                 fail_pair!("r2_polya_short");
                             }
                             metrics.r2_polya_trimmed += 1;
@@ -258,9 +309,10 @@ pub fn convert_pair(
                 };
 
                 let cb_invalid = encode16(raw_cb).is_none();
+                let cb_exact = !cb_invalid && whitelist.contains(raw_cb);
                 let corrected = if cb_invalid {
                     None
-                } else if whitelist.contains(raw_cb) {
+                } else if cb_exact {
                     metrics.barcode_exact += 1;
                     whitelist.correct_within1(raw_cb)
                 } else {
@@ -274,6 +326,7 @@ pub fn convert_pair(
                     Some(value) => value,
                     None => {
                         metrics.barcode_rejected += 1;
+                        barcode_row = UNRESOLVED_BARCODE;
                         fail_pair!(if cb_invalid {
                             "cb_invalid"
                         } else {
@@ -281,6 +334,16 @@ pub fn convert_pair(
                         });
                     }
                 };
+                let mut corrected_barcode = [0u8; CB_LEN + 11];
+                corrected_barcode[..CB_LEN].copy_from_slice(&corrected);
+                corrected_barcode[CB_LEN..CB_LEN + gem_suffix.len()]
+                    .copy_from_slice(gem_suffix.as_bytes());
+                let barcode = std::str::from_utf8(&corrected_barcode[..CB_LEN + gem_suffix.len()])?;
+                let row = metrics.per_barcode.row(barcode, ".");
+                row[0] += 1;
+                row[1] += u64::from(cb_exact);
+                row[2] += u64::from(!cb_exact);
+                row[3] += 1;
 
                 let shard = metrics.records_emitted as usize % writers.len();
                 write_record(

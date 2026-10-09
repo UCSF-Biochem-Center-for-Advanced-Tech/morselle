@@ -167,6 +167,8 @@ pub struct Decision {
 
 #[derive(Default, Serialize)]
 pub struct Metrics {
+    #[serde(skip)]
+    pub barcode_rows: super::barcode_metrics::BarcodeRows,
     pub input_bam: String,
     pub output_bam: String,
     pub tagseq: bool,
@@ -208,6 +210,7 @@ pub struct Metrics {
 /// `elapsed_secs` are set once at the top level, not per-shard, so they're
 /// deliberately left alone here.
 pub fn merge_metrics(target: &mut Metrics, source: &Metrics) {
+    super::barcode_metrics::merge_rows(&mut target.barcode_rows, &source.barcode_rows, |s| s);
     target.records += source.records;
     target.eligible_records += source.eligible_records;
     target.no_sample_records += source.no_sample_records;

@@ -51,6 +51,11 @@ pub struct Cli {
     #[arg(long)]
     pub metrics: Option<PathBuf>,
 
+    /// Also write per-barcode counters to `<metrics>.barcodes.tsv.gz` (MANUAL
+    /// "Per-barcode read metrics"). Off by default; it adds run time and memory.
+    #[arg(long)]
+    pub barcode_metrics: bool,
+
     /// Canonical gene feature manifest. Creates it from the filtered GTF when
     /// absent; when present, verifies byte-for-byte identity. Pass the same file
     /// to `sbxpress matrix --features` for stable rows across experiments.
@@ -154,6 +159,8 @@ pub struct Call {
 
 #[derive(Debug, Default, Serialize)]
 pub struct Metrics {
+    #[serde(skip)]
+    pub per_barcode: crate::barcode_metrics::BarcodeTable<10>,
     pub input_bam: String,
     pub output_bam: String,
     pub gtf: String,

@@ -75,9 +75,11 @@ pub(crate) fn resolve_collisions(
         if degree == 1 {
             set(molecules, claimants[0], Resolved::new(Outcome::Unique, 1));
             metrics.molecules_counted += 1;
+            super::barcode_metrics::bump(metrics, claimants[0].cell, claimants[0].sample, 2);
             continue;
         }
         metrics.collision_groups += 1;
+        super::barcode_metrics::bump(metrics, claimants[0].cell, claimants[0].sample, 3);
         pending.clear();
         if fractional {
             resolve_fractional(claimants, molecules, metrics, &mut pending);
@@ -89,6 +91,7 @@ pub(crate) fn resolve_collisions(
                 pending.push((root, Resolved::new(Outcome::Shared, degree)));
                 metrics.collision_molecules_shared += 1;
                 metrics.molecules_counted += 1;
+                super::barcode_metrics::bump(metrics, root.cell, root.sample, 2);
             }
         } else {
             resolve_winner_take_all(claimants, molecules, metrics, &mut pending);
@@ -133,6 +136,7 @@ fn resolve_winner_take_all(
                 out.push((root, Resolved::new(Outcome::Won, degree)));
                 metrics.collision_molecules_won += 1;
                 metrics.molecules_counted += 1;
+                super::barcode_metrics::bump(metrics, root.cell, root.sample, 2);
             } else {
                 out.push((root, Resolved::new(Outcome::Lost, degree)));
                 metrics.collision_molecules_lost += 1;
@@ -172,4 +176,5 @@ fn resolve_fractional(
     }
     // The group's weights sum to 1.0: it is one molecule split across genes.
     metrics.molecules_counted += 1;
+    super::barcode_metrics::bump(metrics, claimants[0].cell, claimants[0].sample, 2);
 }

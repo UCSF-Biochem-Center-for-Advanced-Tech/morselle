@@ -1,3 +1,4 @@
+mod barcode_metrics;
 pub mod call;
 pub mod index;
 pub mod pipeline;

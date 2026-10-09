@@ -6,6 +6,40 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-10-08
+
+### Added
+- `--barcode-metrics` on `illumina`, `extract`, `annotate` and `molecules`
+  (and on `sbxpress-pipeline.sh` / `sbxpress-gex-pipeline.sh`, which pass it
+  to every stage) writes a per-barcode gzip TSV next to the stage's metrics
+  JSON (`<metrics>.barcodes.tsv.gz`). Each count column sums exactly to the
+  matching run-wide counter; `__no_barcode__` and `__unresolved_barcode__`
+  collect reads without a usable barcode. See MANUAL "Per-barcode read
+  metrics" for the columns and how to join the tables into a per-cell funnel.
+- Off by default. Measured on real-data subsets, a run without the flag is
+  unchanged in time and memory versus 0.6.0. With it: `annotate` +7% and SBX
+  `extract` +12% wall time; `extract` also holds one row per observed
+  barcode/sample pair (+375 MB on one CAT06 Flex chunk).
+- `illumina::pair::convert_pair_with` (takes the flag); `convert_pair` keeps
+  its signature and writes no table.
+- Tests: an Illumina -> annotate -> molecules chain test reconciling every
+  stage's table with its pool metrics and with the next stage
+  (`tests/annotate_chain_e2e.rs`), a Flex probe-route chain test
+  (`tests/per_barcode_chain_e2e.rs`), and a check that no table is written
+  without the flag.
+
+### Changed
+- `illumina::Cli` and `annotate::Cli` gain a public `barcode_metrics` field;
+  code constructing them with struct literals must set it.
+
+### Notes
+- Count matrices, BAMs and FASTQs are unchanged (golden outputs untouched).
+- A first implementation kept one table per worker thread; on 5 CAT06 chunks
+  with 64 threads `extract` peaked at 11.8 GB (0.83 GB without). `extract`
+  now shares one sharded table across workers, and `molecules` keys its
+  counters by the packed (cell, sample) identity it already groups on
+  (a string-keyed table had cost it ~5% wall time).
+
 ## [0.6.0] — 2026-10-07
 
 Correctness review of the 0.5.6–0.5.9 refactoring and repairs, with

@@ -1,9 +1,11 @@
 mod aux_write;
+pub mod barcode_metrics;
 #[cfg(test)]
 mod collision_tests;
 pub mod collisions;
 pub mod dedup;
 pub mod evidence;
+mod evidence_merge;
 pub mod helpers;
 #[cfg(test)]
 mod helpers_tests;

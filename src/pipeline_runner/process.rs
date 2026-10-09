@@ -7,6 +7,7 @@ use crate::gzin::open_fastx_scan;
 use crate::orient::{orient, OrientCfg};
 use crate::pipeline::{CbStatus, Orientation, ReadClass};
 
+use super::barcode_metrics::{bump, observe};
 use super::formatting::{
     append_probe_tags, append_processing_tags, flush_failed_buf, minimap2_header, push_fastq,
     push_fastq_r2_rc, FLUSH_BYTES, MIN_POLYT_FLANK,
@@ -224,6 +225,22 @@ pub(crate) fn process_one(
             ReadClass::Partial => stats.class_partial += 1,
             ReadClass::Unparseable => stats.class_unparseable += 1,
         }
+        let sample = early_outcome
+            .and_then(|outcome| outcome.sample)
+            .and_then(|i| sh.demuxer.and_then(|d| d.sample_ids().get(i)))
+            .map(String::as_str)
+            .unwrap_or(".");
+        let barcode_row = observe(
+            sh.barcodes,
+            &o.seq,
+            e.r1.map(|(s, _)| s),
+            corrected_r1.as_ref().map(|(s, _)| s.as_slice()),
+            sh.cb_len,
+            cb_status,
+            sh.cb_gate,
+            class,
+            sample,
+        );
 
         // Emit the ORIGINAL read (pre-orientation, untrimmed) to the side
         // channel on every path that does not produce a pair, so no input read
@@ -367,8 +384,10 @@ pub(crate) fn process_one(
             if let Some(wl) = sh.probe_wl {
                 if let Some(hit) = e.polyt_end.and_then(|pts| wl.locate(&o.seq, pts)) {
                     stats.probe_located += 1;
+                    bump(sh.barcodes, &barcode_row, sample, 7);
                     if hit.id.is_some() {
                         stats.probe_hit += 1;
+                        bump(sh.barcodes, &barcode_row, sample, 8);
                         if sample_assigned {
                             stats.probe_hit_sample_assigned += 1;
                         }
@@ -402,6 +421,7 @@ pub(crate) fn process_one(
         }
 
         stats.pairs_emitted += 1;
+        bump(sh.barcodes, &barcode_row, sample, 3);
         if e.adapter_trimmed {
             stats.adapter_trimmed += 1;
         }

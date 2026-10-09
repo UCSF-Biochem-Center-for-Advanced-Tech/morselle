@@ -34,7 +34,12 @@ fn subset(dir: &Path, name: &str, pb: bool, duplicate: bool) -> std::path::PathB
 
 fn count_chain(dir: &Path, input: &Path, name: &str, args: &[&str]) -> BTreeMap<String, u64> {
     let output = dir.join(format!("{name}.molecules.bam"));
-    let mut flags = vec![input.to_str().unwrap(), "-o", output.to_str().unwrap()];
+    let mut flags = vec![
+        input.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+        "--barcode-metrics",
+    ];
     flags.extend(args);
     run(&molecules(), &flags);
     let counters = molecule_counters(&std::path::PathBuf::from(format!(
@@ -72,13 +77,25 @@ fn count_chain(dir: &Path, input: &Path, name: &str, args: &[&str]) -> BTreeMap<
 fn probe_barcode_records_count_outside_flex_in_every_execution_path() {
     let dir = tempfile::tempdir().unwrap();
     let input = subset(dir.path(), "pb", true, false);
+    let mut baseline = None;
     for (name, args) in [
         ("serial", vec![]),
         ("indexed", vec!["--evidence-workers", "2"]),
+        ("indexed4", vec!["--evidence-workers", "4"]),
         ("sharded", vec!["--shards", "3"]),
+        ("sharded4", vec!["--shards", "4"]),
         ("flex", vec!["--flex"]),
     ] {
         count_chain(dir.path(), &input, name, &args);
+        let rows = barcode_table(
+            &dir.path()
+                .join(format!("{name}.molecules.bam.metrics.barcodes.tsv.gz")),
+        );
+        if let Some(expected) = &baseline {
+            assert_eq!(&rows, expected, "{name} per-barcode counters");
+        } else {
+            baseline = Some(rows);
+        }
     }
 }
 
@@ -93,6 +110,22 @@ fn repeated_record_identity_counts_once_in_serial_indexed_and_sharded_chains() {
     ] {
         let counters = count_chain(dir.path(), &input, name, &args);
         assert_eq!(counters["eligible_records"], 2);
+        let rows = barcode_table(
+            &dir.path()
+                .join(format!("{name}.molecules.bam.metrics.barcodes.tsv.gz")),
+        );
+        let only = rows.values().next().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            (
+                only["eligible_reads"],
+                only["raw_cell_gene_umis"],
+                only["molecules_counted"],
+                only["collision_groups"],
+                only["representatives_tagged"]
+            ),
+            (2, 1, 1, 0, 1)
+        );
     }
 }
 

@@ -36,6 +36,8 @@ pub(crate) struct Shared<'a> {
     pub cb_len: usize,
     pub umi_len: usize,
     pub cb_gate: bool,
+    /// Per-barcode counters (`--barcode-metrics`); `None` skips them.
+    pub barcodes: Option<&'a crate::barcode_metrics::SharedBarcodeTable<9>>,
     pub realign: bool,
     pub cb_reframe: bool,
     pub reframe_window: usize,

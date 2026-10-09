@@ -3,6 +3,7 @@
 //! See `sbx10x_implementation_plan.md` for the milestone-phased design. M0 wires
 //! up the crate, CLI, logging, and a FASTQ read->write passthrough; subsequent
 //! milestones fill in orientation, demux, extraction, gating, and realignment.
+pub(crate) mod barcode_metrics;
 pub(crate) mod engine;
 pub(crate) mod formatting;
 pub(crate) mod process;

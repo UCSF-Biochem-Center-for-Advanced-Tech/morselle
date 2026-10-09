@@ -16,7 +16,7 @@ for f in wl.txt.gz sheet.csv ref.mmi genes.gtf junc.bed probes.csv pbwl.txt conf
     : > "$WORK/ref/$f"
 done
 R="$WORK/ref"
-COMMON=(--sample S1 --whitelist "$R/wl.txt.gz")
+COMMON=(--sample S1 --whitelist "$R/wl.txt.gz" --barcode-metrics)
 SBX=(--fastqs "$WORK/fastqs" --bclconvert-samplesheet "$R/sheet.csv")
 ILL=(--r1 "$R/r1.fq.gz" --r2 "$R/r2.fq.gz")
 GEX=(--mmi "$R/ref.mmi" --gtf "$R/genes.gtf" --junctions "$R/junc.bed")
@@ -30,6 +30,11 @@ check() {
         echo "FAIL $name"; cat "$WORK/$name.out"; exit 1
     fi
     grep -q "Pipeline complete" "$WORK/$name.out" || { echo "FAIL $name: incomplete"; cat "$WORK/$name.out"; exit 1; }
+    local expected=3
+    [[ $name != *flex* ]] || expected=2
+    local actual
+    actual=$(find "$WORK/$name" -name '*.barcodes.tsv.gz' | wc -l)
+    [[ $actual -ge $expected ]] || { echo "FAIL $name: expected $expected barcode tables, got $actual"; exit 1; }
     echo "ok   $name"
 }
 expect_call() { grep -qE -- "$2" "$WORK/$1.calls" || { echo "FAIL $1: expected call matching: $2"; cat "$WORK/$1.calls"; exit 1; }; }

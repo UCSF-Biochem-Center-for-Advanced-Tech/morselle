@@ -14,6 +14,7 @@ pub mod annotate_bam {
 pub mod bam_audit;
 pub mod bam_helpers;
 pub mod barcode;
+pub mod barcode_metrics;
 pub mod cell_calling;
 pub mod config;
 pub mod cr_bam_to_mtx;

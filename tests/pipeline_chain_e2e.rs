@@ -13,7 +13,9 @@ mod common;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use common::{bin, molecule_counters, read_bam, read_mex, run, write_fixture, FixtureSpec};
+use common::{
+    barcode_table, bin, molecule_counters, read_bam, read_mex, run, write_fixture, FixtureSpec,
+};
 use rust_htslib::bam::{self, record::Aux};
 
 fn molecules() -> std::path::PathBuf {
@@ -151,7 +153,12 @@ fn molecules_matrix(
     std::path::PathBuf,
 ) {
     let out = dir.join(format!("{name}.molecules.bam"));
-    let mut a = vec![input.to_str().unwrap(), "-o", out.to_str().unwrap()];
+    let mut a = vec![
+        input.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--barcode-metrics",
+    ];
     a.extend_from_slice(args);
     run(&molecules(), &a);
     let metrics = molecule_counters(&dir.join(format!("{name}.molecules.bam.metrics.json")));
@@ -167,6 +174,35 @@ fn molecules_matrix(
         ],
     );
     let (counts, is_real) = read_mex(&outs.join("raw_feature_bc_matrix"));
+    let table_path = dir.join(format!("{name}.molecules.bam.metrics.barcodes.tsv.gz"));
+    let rows = barcode_table(&table_path);
+    for (column, metric) in [
+        ("eligible_reads", "eligible_records"),
+        ("raw_cell_gene_umis", "raw_cell_gene_umis"),
+        ("molecules_counted", "molecules_counted"),
+        ("collision_groups", "collision_groups"),
+        ("representatives_tagged", "representatives_tagged"),
+    ] {
+        assert_eq!(
+            rows.values().map(|r| r[column]).sum::<u64>(),
+            metrics[metric],
+            "{column}"
+        );
+    }
+    let mut per_cb = BTreeMap::<String, u64>::new();
+    for ((cb, _sample), row) in &rows {
+        *per_cb.entry(cb.clone()).or_default() += row["molecules_counted"];
+    }
+    let mut matrix_by_cb = BTreeMap::<String, f64>::new();
+    for ((cb, _gene), value) in &counts {
+        *matrix_by_cb.entry(cb.clone()).or_default() += value;
+    }
+    for (cb, molecules) in per_cb {
+        assert!(
+            (matrix_by_cb.get(&cb).copied().unwrap_or(0.0) - molecules as f64).abs() < 1e-3,
+            "{cb}"
+        );
+    }
     (metrics, counts, is_real, outs)
 }
 

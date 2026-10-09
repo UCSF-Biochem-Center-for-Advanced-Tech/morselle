@@ -142,6 +142,10 @@ pub fn run(cli: &Cli) -> Result<()> {
         .map(|path| ShardWriter::create(path, glevel))
         .transpose()?;
     let chunk_counter = AtomicUsize::new(0);
+    let barcodes = cli
+        .params
+        .barcode_metrics
+        .then(|| crate::barcode_metrics::SharedBarcodeTable::<9>::new(256));
     let shared = Shared {
         orient_cfg,
         orient_mode: cli.params.orientation,
@@ -153,6 +157,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         cb_len,
         umi_len,
         cb_gate: cli.params.cb_gate,
+        barcodes: barcodes.as_ref(),
         realign: cli.params.realign,
         cb_reframe: cli.params.cb_reframe,
         reframe_window: cli.params.reframe_window,
@@ -250,6 +255,22 @@ pub fn run(cli: &Cli) -> Result<()> {
     );
     let metrics_path = cli.out_dir.join("metrics_summary.json");
     metrics.write_json(&metrics_path)?;
+    drop(shared);
+    let per_barcode = barcodes.map(|table| table.into_table()).unwrap_or_default();
+    per_barcode.write(
+        &metrics_path,
+        &[
+            "reads",
+            "cb_on_whitelist",
+            "cb_within1",
+            "emitted",
+            "class_full",
+            "class_partial",
+            "class_unparseable",
+            "pb_located",
+            "pb_hit",
+        ],
+    )?;
     info!(out = %metrics_path.display(), "wrote metrics summary");
     Ok(())
 }

@@ -308,6 +308,9 @@ pub fn build_decisions_with<S: BuildHasher + Sync>(
     // `+=`, not `=`: the sharded path calls build_decisions() once per shard
     // against the same accumulating Metrics.
     metrics.raw_cell_gene_umis += evidence.len() as u64;
+    for key in evidence.keys() {
+        super::barcode_metrics::bump(metrics, key.cell, key.sample, 1);
+    }
     metrics.umi_nodes_collapsed += roots
         .iter()
         .filter(|(key, root)| key.umi != root.umi)

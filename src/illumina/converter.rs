@@ -10,7 +10,7 @@ use crate::extract::ExtractCfg;
 use crate::gzin::backend_description;
 use crate::overlap::OverlapCfg;
 
-use super::pair::convert_pair;
+use super::pair::convert_pair_with;
 use super::types::{failed_paths, metrics_path, shard_allocation, shard_path, Cli, Metrics};
 
 pub fn run(cli: Cli) -> Result<()> {
@@ -127,6 +127,7 @@ pub fn run(cli: Cli) -> Result<()> {
             .collect(),
         ..Metrics::default()
     };
+    let mut per_barcode = crate::barcode_metrics::BarcodeTable::<10>::new(cli.barcode_metrics);
     let workers = if cli.threads == 0 {
         cli.r1.len()
     } else {
@@ -152,7 +153,7 @@ pub fn run(cli: Cli) -> Result<()> {
             .zip(cli.r2.par_iter())
             .enumerate()
             .map(|(index, (r1, r2))| {
-                let result = convert_pair(
+                let result = convert_pair_with(
                     r1,
                     r2,
                     &per_input_outputs[index],
@@ -166,6 +167,7 @@ pub fn run(cli: Cli) -> Result<()> {
                         .get(index)
                         .map(Vec::as_slice)
                         .unwrap_or(&[]),
+                    cli.barcode_metrics,
                 );
                 if let Ok(value) = &result {
                     eprintln!(
@@ -186,6 +188,7 @@ pub fn run(cli: Cli) -> Result<()> {
             .collect::<Result<Vec<_>>>()
     })?;
     for value in pair_metrics {
+        per_barcode.merge(value.per_barcode);
         metrics.records_read += value.records_read;
         metrics.records_emitted += value.records_emitted;
         metrics.barcode_exact += value.barcode_exact;
@@ -217,6 +220,21 @@ pub fn run(cli: Cli) -> Result<()> {
     let metrics_file = File::create(&metrics_path)
         .with_context(|| format!("cannot create {}", metrics_path.display()))?;
     serde_json::to_writer_pretty(BufWriter::new(metrics_file), &metrics)?;
+    per_barcode.write(
+        &metrics_path,
+        &[
+            "reads",
+            "barcode_exact",
+            "barcode_corrected",
+            "emitted",
+            "failed_merged_too_short",
+            "failed_no_cdna",
+            "failed_short_r1",
+            "failed_r2_polya_short",
+            "failed_cb_invalid",
+            "failed_cb_unmatched",
+        ],
+    )?;
     eprintln!(
         "[sbxpress illumina] read={} emitted={} rejected={} metrics={}",
         metrics.records_read,

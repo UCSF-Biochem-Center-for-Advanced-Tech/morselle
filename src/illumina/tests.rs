@@ -23,6 +23,7 @@ fn base_cli(root: &Path, output: PathBuf) -> Cli {
         whitelist: root.join("tests/fixtures/illumina_whitelist.txt"),
         output,
         metrics: None,
+        barcode_metrics: true,
         gem_group: 1,
         threads: 1,
         split: 1,
@@ -51,6 +52,19 @@ fn read_gz(path: &Path) -> String {
     text
 }
 
+fn table_sums(table: &str) -> std::collections::BTreeMap<String, u64> {
+    let mut lines = table.lines();
+    let header: Vec<&str> = lines.next().unwrap().split('\t').collect();
+    let mut sums = std::collections::BTreeMap::new();
+    for line in lines {
+        let fields: Vec<&str> = line.split('\t').collect();
+        for (&column, value) in header[2..].iter().zip(&fields[2..]) {
+            *sums.entry(column.to_owned()).or_insert(0) += value.parse::<u64>().unwrap();
+        }
+    }
+    sums
+}
+
 #[test]
 fn converts_exact_and_hamming1_and_gates_failure() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -67,6 +81,24 @@ fn converts_exact_and_hamming1_and_gates_failure() {
     assert!(!text.contains("read_rejected"));
     // Overlap is off by default, so nothing about the output may change.
     assert!(!text.contains("YC:Z:"));
+    let table_path = crate::barcode_metrics::barcode_path(&metrics_path(&output));
+    let table = read_gz(&table_path);
+    assert!(table.contains("AAACCCAAGAAACACT-1\t.\t2\t1\t1\t2\t0\t0\t0\t0\t0\t0"));
+    assert!(table.contains("__unresolved_barcode__\t.\t1\t0\t0\t0\t0\t0\t0\t0\t0\t1"));
+    let sums = table_sums(&table);
+    let metrics: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(metrics_path(&output)).unwrap()).unwrap();
+    for (column, field) in [
+        ("reads", "records_read"),
+        ("barcode_exact", "barcode_exact"),
+        ("barcode_corrected", "barcode_hamming1_corrected"),
+        ("emitted", "records_emitted"),
+    ] {
+        assert_eq!(sums[column], metrics[field].as_u64().unwrap());
+    }
+    for (reason, count) in metrics["failed_by_reason"].as_object().unwrap() {
+        assert_eq!(sums[&format!("failed_{reason}")], count.as_u64().unwrap());
+    }
 }
 
 #[test]
@@ -77,7 +109,8 @@ fn converts_multiple_pairs_to_numbered_shards() {
     let mut cli = base_cli(&root, output.clone());
     cli.r1 = vec![cli.r1[0].clone(), cli.r1[0].clone()];
     cli.r2 = vec![cli.r2[0].clone(), cli.r2[0].clone()];
-    cli.threads = 2;
+    cli.threads = 8;
+    cli.gem_group = 2;
     run(cli).unwrap();
 
     assert!(!output.exists());
@@ -86,6 +119,21 @@ fn converts_multiple_pairs_to_numbered_shards() {
     let metrics = std::fs::read_to_string(metrics_path(&output)).unwrap();
     assert!(metrics.contains("tagged.shard-001.fastq.gz"));
     assert!(metrics.contains("\"records_read\": 6"));
+    let table = read_gz(&crate::barcode_metrics::barcode_path(&metrics_path(
+        &output,
+    )));
+    assert!(table.contains("AAACCCAAGAAACACT-2\t.\t4\t2\t2\t4"));
+    assert!(table.contains("__unresolved_barcode__\t.\t2"));
+    let serial_output = temp.path().join("serial.fastq.gz");
+    let mut serial = base_cli(&root, serial_output.clone());
+    serial.r1 = vec![serial.r1[0].clone(), serial.r1[0].clone()];
+    serial.r2 = vec![serial.r2[0].clone(), serial.r2[0].clone()];
+    serial.gem_group = 2;
+    run(serial).unwrap();
+    let serial_table = read_gz(&crate::barcode_metrics::barcode_path(&metrics_path(
+        &serial_output,
+    )));
+    assert_eq!(table, serial_table);
 }
 
 /// A long-R1 pair that merges: R1 100 bp, R2 150 bp reading past the CB into

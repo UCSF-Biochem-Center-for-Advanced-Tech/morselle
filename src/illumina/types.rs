@@ -1,3 +1,4 @@
+use crate::barcode_metrics::BarcodeTable;
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use crossbeam_channel::{bounded, Sender};
@@ -37,6 +38,11 @@ pub struct Cli {
     /// JSON metrics path. Defaults to <output>.metrics.json.
     #[arg(long)]
     pub metrics: Option<PathBuf>,
+
+    /// Also write per-barcode counters to `<metrics>.barcodes.tsv.gz` (MANUAL
+    /// "Per-barcode read metrics"). Off by default; it adds run time and memory.
+    #[arg(long)]
+    pub barcode_metrics: bool,
 
     /// GEM-group suffix placed on corrected CB tags.
     #[arg(long, default_value_t = 1)]
@@ -157,6 +163,7 @@ pub struct Metrics {
 
 #[derive(Debug, Default)]
 pub struct PairMetrics {
+    pub per_barcode: BarcodeTable<10>,
     pub records_read: u64,
     pub records_emitted: u64,
     pub barcode_exact: u64,

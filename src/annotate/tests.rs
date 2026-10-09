@@ -5,6 +5,7 @@ use rust_htslib::bam::{
     Read,
 };
 use std::fs;
+use std::io::Read as IoRead;
 
 use super::call::{compatible_position, transcript_cigar};
 use super::pipeline::run;
@@ -140,6 +141,15 @@ fn unordered_annotation_matches_ordered_tags_and_counts() {
         );
         record.set_tid(0);
         record.set_pos(if index % 2 == 0 { 110 } else { 300 });
+        record.unset_unmapped();
+        if index < 127 {
+            let cb = if index % 2 == 0 {
+                "AAAAAAAAAAAAAAAA-1"
+            } else {
+                "CCCCCCCCCCCCCCCC-1"
+            };
+            record.push_aux(b"CB", Aux::String(cb)).unwrap();
+        }
         writer.write(&record).unwrap();
     }
     drop(writer);
@@ -157,6 +167,7 @@ fn unordered_annotation_matches_ordered_tags_and_counts() {
             batch_size: 17,
             multimap_tags: false,
             metrics: Some(metrics.clone()),
+            barcode_metrics: true,
             genes_mtx: None,
             reference_filter: true,
             strip_id_versions: true,
@@ -180,14 +191,44 @@ fn unordered_annotation_matches_ordered_tags_and_counts() {
             })
             .collect::<Vec<_>>();
         tags.sort_unstable();
+        let mut table = String::new();
+        flate2::read::MultiGzDecoder::new(
+            fs::File::open(crate::barcode_metrics::barcode_path(&metrics)).unwrap(),
+        )
+        .read_to_string(&mut table)
+        .unwrap();
         let metrics: serde_json::Value =
             serde_json::from_slice(&fs::read(metrics).unwrap()).unwrap();
-        (tags, metrics)
+        (tags, metrics, table)
     };
 
-    let (ordered_tags, ordered_metrics) = run_mode(false, "ordered");
-    let (unordered_tags, unordered_metrics) = run_mode(true, "unordered");
+    let (ordered_tags, ordered_metrics, ordered_table) = run_mode(false, "ordered");
+    let (unordered_tags, unordered_metrics, unordered_table) = run_mode(true, "unordered");
     assert_eq!(ordered_tags, unordered_tags);
+    assert_eq!(ordered_table, unordered_table);
+    assert!(ordered_table.contains("__no_barcode__\t.\t1\t1\t0"));
+    let mut lines = ordered_table.lines();
+    let header: Vec<&str> = lines.next().unwrap().split('\t').collect();
+    let rows: Vec<Vec<&str>> = lines.map(|line| line.split('\t').collect()).collect();
+    for field in [
+        "records",
+        "primary",
+        "unmapped",
+        "exonic",
+        "intronic",
+        "intergenic",
+        "antisense",
+        "gene_assigned",
+        "unique_gene",
+        "multi_gene",
+    ] {
+        let index = header.iter().position(|&column| column == field).unwrap();
+        let sum: u64 = rows
+            .iter()
+            .map(|row| row[index].parse::<u64>().unwrap())
+            .sum();
+        assert_eq!(sum, ordered_metrics[field].as_u64().unwrap(), "{field}");
+    }
     for field in [
         "records",
         "primary",

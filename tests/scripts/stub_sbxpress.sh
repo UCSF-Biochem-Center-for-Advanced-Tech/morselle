@@ -43,3 +43,13 @@ case "$sub" in
     audit) echo stub > "$(value --output -o)"; m=$(value --molecules); [[ -z $m ]] || echo stub > "$m" ;;
     *) echo "stub: no behavior for $sub" >&2; exit 2 ;;
 esac
+if [[ $sub == extract || $sub == illumina || $sub == annotate || $sub == molecules ]]; then
+    metrics=$(value --metrics || true)
+    if [[ $sub == extract ]]; then metrics="$(value --out-dir -o)/metrics_summary.json"; fi
+    [[ -n $metrics ]] || { echo "stub: missing metrics path for $sub" >&2; exit 2; }
+    mkdir -p "$(dirname "$metrics")"
+    echo '{}' > "$metrics"
+    if [[ " $* " == *" --barcode-metrics "* ]]; then
+        printf 'barcode\tsample\n' | gzip > "${metrics%.json}.barcodes.tsv.gz"
+    fi
+fi

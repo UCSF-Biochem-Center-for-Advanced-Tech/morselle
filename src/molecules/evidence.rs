@@ -11,6 +11,8 @@ use std::sync::{
 };
 use tracing::info;
 
+use super::barcode_metrics::{eligible, BarcodeRows};
+pub use super::evidence_merge::{merge_evidence_maps, merge_item};
 use super::helpers::{
     aligned_bases, better, intern_sample, read_hash, require_bam_offsets, shard_hash, umi_key,
     MoleculeTags,
@@ -172,6 +174,12 @@ pub fn collect_evidence(
             gene,
             umi,
         };
+        eligible(
+            metrics,
+            key,
+            tags.cb.expect("packed CB"),
+            tags.pb.filter(|v| !v.is_empty()),
+        );
         let ordinal = ordinal as u64;
         evidence
             .entry(key)
@@ -202,44 +210,13 @@ pub fn collect_evidence(
 }
 
 pub struct RegionEvidence {
+    pub barcode_rows: BarcodeRows,
     pub evidence: HashMap<RawKey, Evidence>,
     pub genes: Vec<String>,
     pub samples: Vec<String>,
     pub records: u64,
     pub eligible_records: u64,
     pub no_sample_records: u64,
-}
-
-pub fn merge_item(target: &mut Evidence, source: Evidence) {
-    target.reads += source.reads;
-    target.min_read_hash = target.min_read_hash.min(source.min_read_hash);
-    if source.best_mapq > target.best_mapq
-        || (source.best_mapq == target.best_mapq
-            && (source.best_aligned > target.best_aligned
-                || (source.best_aligned == target.best_aligned
-                    && source.best_ordinal < target.best_ordinal)))
-    {
-        target.best_ordinal = source.best_ordinal;
-        target.best_mapq = source.best_mapq;
-        target.best_aligned = source.best_aligned;
-    }
-}
-
-pub fn merge_evidence_maps(
-    mut left: HashMap<RawKey, Evidence>,
-    mut right: HashMap<RawKey, Evidence>,
-) -> HashMap<RawKey, Evidence> {
-    // Keeping the larger allocation avoids repeated hash-table growth during
-    // the parallel reduction tree.
-    if left.len() < right.len() {
-        std::mem::swap(&mut left, &mut right);
-    }
-    for (key, item) in right {
-        left.entry(key)
-            .and_modify(|current| merge_item(current, item))
-            .or_insert(item);
-    }
-    left
 }
 
 pub fn collect_region(
@@ -261,6 +238,7 @@ pub fn collect_region(
     let mut gene_ids = HashMap::<String, u32>::default();
     let mut samples = Vec::<String>::new();
     let mut sample_ids = HashMap::<String, u32>::default();
+    let mut barcode_rows = BarcodeRows::default();
     let mut records = 0_u64;
     let mut eligible_records = 0_u64;
     let mut no_sample_records = 0_u64;
@@ -313,6 +291,13 @@ pub fn collect_region(
             id
         };
         eligible_records += 1;
+        super::barcode_metrics::row(
+            &mut barcode_rows,
+            cell,
+            sample,
+            tags.cb.expect("packed CB"),
+            tags.pb.filter(|v| !v.is_empty()),
+        )[0] += 1;
         let key = RawKey {
             cell,
             sample,
@@ -332,6 +317,7 @@ pub fn collect_region(
             .or_insert(candidate);
     }
     Ok(RegionEvidence {
+        barcode_rows,
         evidence,
         genes,
         samples,
@@ -448,6 +434,7 @@ pub fn collect_evidence_indexed(
             })
             .collect();
         sample_remaps.push(sample_remap);
+        super::barcode_metrics::merge_region(metrics, part, sample_remaps.last().unwrap());
     }
     eprintln!(
         "[sbxpress molecules] phase=evidence_remap start regions={} records={} eligible={}",

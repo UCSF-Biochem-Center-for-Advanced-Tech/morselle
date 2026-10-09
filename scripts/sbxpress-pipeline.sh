@@ -82,6 +82,8 @@ Options:
   --audit                  Also emit comparison audit JSON and molecule sample.
   --audit-label TEXT       Audit label; default SBX_SAMPLE / ILLUMINA_SAMPLE.
   --molecule-sample N      Audit 1-in-N molecule sample; default 64.
+  --barcode-metrics        Also write per-barcode .barcodes.tsv.gz tables next to
+                           each stage's metrics (adds run time and memory).
   --help                   Show this help.
 
 Outputs: OUT/SAMPLE/outs/{raw,filtered}_feature_bc_matrix.h5 and MEX directories
@@ -115,6 +117,7 @@ SORT_THREADS='' MOLECULE_THREADS=''
 SPLIT=16 SORT_MEM=1G TMP_DIR='' EXPECT_CELLS=''
 THREE_PRIME=1 MULTIMAP_TAGS=0 FRACTIONAL=0 POSITION_AWARE=0 EXTRACT_NO_GZIP=0
 AUDIT=0 AUDIT_LABEL='' MOLECULE_SAMPLE=64 MOLECULE_COMPRESSION=''
+BARCODE_METRICS=()
 
 while (( $# > 0 )); do
     case "$1" in
@@ -163,6 +166,7 @@ while (( $# > 0 )); do
         --tmp-dir) TMP_DIR=${2:?missing value for $1}; shift 2 ;;
         --expect-cells) EXPECT_CELLS=${2:?missing value for $1}; shift 2 ;;
         --audit) AUDIT=1; shift ;;
+        --barcode-metrics) BARCODE_METRICS=(--barcode-metrics); shift ;;
         --audit-label) AUDIT_LABEL=${2:?missing value for $1}; shift 2 ;;
         --molecule-sample) MOLECULE_SAMPLE=${2:?missing value for $1}; shift 2 ;;
         --help|-h) usage; exit 0 ;;
@@ -270,7 +274,7 @@ if [[ $INPUT_MODE == sbx ]]; then
         echo "[1/5] extracting and demultiplexing raw SBX data"
         EXTRACT_ARGS=(--fastqs "${FASTQS[@]}" --bclconvert-samplesheet "$SAMPLE_SHEET"
             --whitelist "$WHITELIST" --out-dir "$EXTRACT_DIR" --threads "$EXTRACT_THREADS"
-            --split "$SPLIT" --lenient --minimap2)
+            --split "$SPLIT" --lenient --minimap2 ${BARCODE_METRICS[@]+"${BARCODE_METRICS[@]}"})
         [[ $ANALYSIS_MODE != flex ]] || EXTRACT_ARGS+=(--flex --probe-barcode-whitelist "$PROBE_BARCODE_WL")
         (( EXTRACT_NO_GZIP == 0 )) || EXTRACT_ARGS+=(--no-gzip)
         run "$LOG_DIR/extract.log" sbxpress extract "${EXTRACT_ARGS[@]}"
@@ -291,7 +295,8 @@ else
         # for a finished one by the -s check above.
         run "$LOG_DIR/illumina.log" sbxpress illumina "${ILLUMINA_ARGS[@]}" \
             --whitelist "$WHITELIST" --output "$TAGGED_FASTQ.partial.fastq.gz" \
-            --metrics "$EXTRACT_DIR/$SAMPLE.illumina.metrics.json" --threads "$EXTRACT_THREADS"
+            --metrics "$EXTRACT_DIR/$SAMPLE.illumina.metrics.json" --threads "$EXTRACT_THREADS" \
+            ${BARCODE_METRICS[@]+"${BARCODE_METRICS[@]}"}
         [[ ${SBXPRESS_PIPELINE_DRY_RUN:-0} == 1 ]] || mv "$TAGGED_FASTQ.partial.fastq.gz" "$TAGGED_FASTQ"
     else
         echo "[1/5] Illumina conversion already complete; reusing $TAGGED_FASTQ"
@@ -332,7 +337,7 @@ if [[ ! -s "$ANNOTATED_BAM.bai" ]]; then
     else
         echo "[2/5] mapping, annotation, and one coordinate sort"
         ANNOTATE_ARGS=(--gtf "$GTF" --output - --metrics "$ANNOTATION_DIR/$SAMPLE.annotation.metrics.json"
-            --genes-mtx "$GENES_MTX" --threads "$ANNOTATE_THREADS")
+            --genes-mtx "$GENES_MTX" --threads "$ANNOTATE_THREADS" ${BARCODE_METRICS[@]+"${BARCODE_METRICS[@]}"})
         if (( MULTIMAP_TAGS )); then
             ANNOTATE_ARGS+=(--multimap-tags)
             # Primary + ten secondary alignments gives NH values 1..11, matching
@@ -366,7 +371,7 @@ fi
 if [[ ! -s "$MOLECULE_BAM.bai" ]]; then
     echo "[3/5] correcting UMIs and resolving gene collisions"
     MOLECULE_ARGS=(--output "$MOLECULE_BAM" --metrics "$MOLECULES_DIR/$SAMPLE.molecules.metrics.json"
-        --threads "$MOLECULE_THREADS")
+        --threads "$MOLECULE_THREADS" ${BARCODE_METRICS[@]+"${BARCODE_METRICS[@]}"})
     [[ -z $MOLECULE_COMPRESSION ]] || MOLECULE_ARGS+=(--compression-level "$MOLECULE_COMPRESSION")
     (( POSITION_AWARE == 0 )) || MOLECULE_ARGS+=(--position-aware-umis)
     case "$ANALYSIS_MODE" in

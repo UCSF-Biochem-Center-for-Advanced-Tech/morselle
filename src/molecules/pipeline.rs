@@ -136,6 +136,7 @@ fn tag_record(
     }
     if representative {
         metrics.representatives_tagged += 1;
+        super::barcode_metrics::bump(metrics, key.cell, key.sample, 4);
     }
     Ok(())
 }

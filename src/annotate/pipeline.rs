@@ -13,6 +13,7 @@ use rayon::prelude::*;
 use rust_htslib::bam::{self, record::Aux, Read};
 use tracing::info;
 
+use super::barcode_metrics::observe;
 use super::call::alignment_blocks;
 use super::index::establish_genes_mtx;
 use super::types::{Annotation, Call, Cli, Metrics, RecordMetrics};
@@ -221,6 +222,7 @@ fn write_unordered_batch(
     for result in receiver {
         let (record, record_metrics) = result?;
         writer.write(&record)?;
+        observe(metrics, &record, &record_metrics);
         metrics.add_record_metrics(record_metrics);
     }
     Ok(())
@@ -247,6 +249,7 @@ fn write_multimap_group(
             include_introns,
             three_prime,
         )?;
+        observe(metrics, &record, &record_metrics);
         metrics.add_record_metrics(record_metrics);
         records.push(record);
     }
@@ -353,6 +356,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         gtf_exons_seen: annotation.exons_seen,
         gtf_exons_filtered_biotype: annotation.exons_filtered_biotype,
         gtf_exons_filtered_tag: annotation.exons_filtered_tag,
+        per_barcode: crate::barcode_metrics::BarcodeTable::new(cli.barcode_metrics),
         ..Default::default()
     };
     if cli.multimap_tags {
@@ -432,6 +436,7 @@ pub fn run(cli: &Cli) -> Result<()> {
                 cli.three_prime,
             )?;
             writer.write(&record)?;
+            observe(&mut metrics, &record, &record_metrics);
             metrics.add_record_metrics(record_metrics);
         }
     }
@@ -442,6 +447,21 @@ pub fn run(cli: &Cli) -> Result<()> {
         .clone()
         .unwrap_or_else(|| PathBuf::from(format!("{}.metrics.json", cli.output.display())));
     fs::write(&metrics_path, serde_json::to_string_pretty(&metrics)?)?;
+    metrics.per_barcode.write(
+        &metrics_path,
+        &[
+            "records",
+            "primary",
+            "unmapped",
+            "exonic",
+            "intronic",
+            "intergenic",
+            "antisense",
+            "gene_assigned",
+            "unique_gene",
+            "multi_gene",
+        ],
+    )?;
     info!(records = metrics.records, elapsed = format!("{:.1}s", metrics.elapsed_secs), output = %cli.output.display(), "RUN SUMMARY");
     Ok(())
 }

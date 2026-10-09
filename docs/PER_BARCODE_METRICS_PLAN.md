@@ -1,4 +1,24 @@
-# sbxpress 0.6.1 — per-barcode metrics and read-quality filtering (implementation brief)
+# sbxpress 0.6.1 per-barcode metrics; 0.6.2 read-quality filtering
+
+## Implementation checkpoint (2026-10-08)
+
+Part 1 is committed on `feat/per-barcode-metrics` as 0.6.1 (not tagged or
+pushed). Part 2 has not been started; its Layer B design was revised after
+reading Cell Ranger's rescue code (see the session notes in the PR).
+
+Changed from the brief below: the tables are **opt-in** (`--barcode-metrics`
+on every stage and both pipeline scripts), because the first implementation
+cost `extract` 11.8 GB peak RSS on Flex (one table per worker thread) and
+`molecules` ~5% wall time. `extract` now shares one sharded table and
+`molecules` keys counters by packed (cell, sample). Measured on real-data
+subsets (3 alternating runs): flag off, no measurable change from 0.6.0;
+flag on, `annotate` +7%, `extract` +12% and +375 MB on one CAT06 chunk.
+
+Not yet validated on real data (run before tagging): table sums against pool
+metrics for every stage; identical tables across repeat runs and across
+thread/shard settings; flag-off outputs byte-identical to 0.6.0; the DZEC05
+one-barcode cross-check; full 5-chunk Flex `extract` memory with the flag;
+one real pipeline-script run with `--barcode-metrics`.
 
 Two tasks. Do **Part 1 first**: Part 2 reports its filter counts in Part 1's
 per-barcode tables, and Part 1's reconciliation tests guard Part 2's changes.
@@ -42,8 +62,16 @@ outputs must not change.
   First columns: `barcode` (as written to `CB`, including `-1` where the
   stage adds it), then `sample` (sample-sheet sample for SBX `extract`, `PB`
   for Flex in `molecules`, `.` otherwise), then the stage's counters.
-- Reads that never got a barcode go in one aggregate row with
-  `barcode = __no_barcode__`, so every column sums to the pool-level metric.
+- Reads whose barcode could not be located go in `__no_barcode__`. Reads
+  whose raw barcode was located but cannot be uniquely corrected go in
+  `__unresolved_barcode__`. Both are aggregate rows; neither denotes a cell.
+  A stage may use `__no_barcode__` for records with no usable `CB` tag.
+  Every input read contributes to exactly one row's input counter.
+- Join identified rows on `(barcode, sample)` when the sample identity is
+  consistent across stages. For SBX/Flex, sample-sheet assignment and `PB`
+  identify different things: retain both as distinct fields where needed,
+  and join within a single routed sample/library using `CB` plus `PB` for
+  Flex molecules. Never merge Flex `PB` groups sharing the same `CB`.
 - Integers only; no derived ratios (reports compute those).
 
 ### Columns per stage
@@ -63,12 +91,10 @@ Each stage already accumulates counters on worker-local structs that are
 merged at the end. Add a barcode-keyed map to that same struct and merge it
 in the same place. Don't add locks, channels or a second pass.
 
-- **Key.** Pack the corrected 16-bp barcode to `u32` (2 bits/base; reuse
-  `Dna::pack` or the barcode module's packing if present). Use
-  `FxHashMap<u32, Counters>`; the crate already uses FxHash. `Counters` is a
-  small `#[derive(Default, Clone, Copy)]` struct of `u64`s. SBX needs
-  `(sample_index, cb)`; Flex in molecules needs `(cell, sample)`, the same
-  scoping as `RawKey`.
+- **Key.** Preserve the emitted `CB` spelling, including the GEM suffix, and
+  scope SBX by the routed sample and Flex molecules by `PB`, as `RawKey` does.
+  A packed 16-bp barcode can be used internally where it preserves those
+  identities. Avoid per-read string allocations in the hot path.
 - **`illumina`:** `src/illumina/pair.rs::convert_pair` increments
   `PairMetrics` per pair (`records_read`, `records_failed`,
   `failed_by_reason`). Add `per_barcode` to `PairMetrics`
@@ -117,10 +143,17 @@ metrics path is set so the tables land in the run directory, and add the
 3. **Parallel = serial.** `illumina --threads 1` vs `--threads 8`, annotate
    unordered vs streaming, molecules `--evidence-workers 1` vs `4` vs
    `--shards 4`: identical tables.
-4. **Chain test.** In `tests/pipeline_chain_e2e.rs`, joining the four tables
-   on the barcode gives a monotone non-increasing funnel per barcode
-   (`reads ≥ emitted ≥ … ≥ molecules_counted`), and `molecules_counted` per
-   barcode equals that barcode's column sum in the raw matrix.
+4. **Chain tests.** Test the Illumina → annotate → molecules and SBX extract
+   → annotate → molecules routes separately. Flex uses probeset-align instead
+   of annotate, so test extract → molecules there. Join using the identity
+   rules above. On the default `--secondary=no` route, compare primary read
+   counts: `reads ≥ emitted ≥ primary ≥ eligible_reads ≥ molecules_counted`.
+   In multimap mode, `annotate` currently includes secondary hits in its
+   `primary` metric, so test its table against its pool metrics without that
+   cross-stage inequality. Supplementary alignments are additional BAM
+   records, not additional input reads. The per-barcode molecule count
+   must agree with the raw matrix column sum within the matrix's existing
+   floating-point tolerance when fractional collisions are enabled.
 5. **Golden outputs unchanged.** `tests/golden_outputs.rs` must pass
    untouched; this change adds files and changes no records.
 6. Add new tests to `tests/test_inventory.txt` by inserting lines only.
@@ -295,9 +328,15 @@ and report:
   (`compare_tagseq_modes.py`).
 - Runtime and peak memory per stage, before and after.
 
+Part 2 is a separate 0.6.2 release. Its behavior-changing defaults and
+golden-output update must not be included in the Part 1 metrics release.
+Multi-mapper rescue must be validated specifically on intronic artifacts;
+the per-gene artifact list can only attribute reads after they reach gene
+annotation, unless a separate diagnostic mapping pass is specified.
+
 ## Part 2 done means
 
 Bad-read classes are removed or flagged with counts in every run's metrics
 and per-barcode tables, LINC00486-type artifacts can't dominate a library,
 normal libraries change only where the rules intend, and the defaults chosen
-at the decision points are documented in MANUAL.md and CHANGELOG 0.6.1.
+at the decision points are documented in MANUAL.md and CHANGELOG 0.6.2.

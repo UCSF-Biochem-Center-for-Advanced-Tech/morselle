@@ -21,6 +21,44 @@ outs/
 `sbxpress` is responsible for these outputs; the input paths differ only before
 alignment.
 
+## Per-barcode read metrics
+
+With `--barcode-metrics`, each read-processing stage (`illumina`, `extract`,
+`annotate`, `molecules`) also writes a gzip TSV beside its metrics JSON; the
+pipeline scripts accept the same flag and pass it to every stage. It is off by
+default because it costs run time and memory (see below). Replace
+`.json` in the metrics path with `.barcodes.tsv.gz` to find it. Rows are sorted
+by `barcode`, then `sample`. The first columns are `barcode` and `sample`;
+all other columns are integer counts. Summing each count column over all rows
+reproduces the corresponding run-wide JSON counter.
+
+| Stage | Count columns |
+|---|---|
+| `illumina` | `reads`, `barcode_exact`, `barcode_corrected`, `emitted`, `failed_merged_too_short`, `failed_no_cdna`, `failed_short_r1`, `failed_r2_polya_short`, `failed_cb_invalid`, `failed_cb_unmatched` |
+| `extract` | `reads`, `cb_on_whitelist`, `cb_within1`, `emitted`, `class_full`, `class_partial`, `class_unparseable`, `pb_located`, `pb_hit` |
+| `annotate` | `records`, `primary`, `unmapped`, `exonic`, `intronic`, `intergenic`, `antisense`, `gene_assigned`, `unique_gene`, `multi_gene` |
+| `molecules` | `eligible_reads`, `raw_cell_gene_umis`, `molecules_counted`, `collision_groups`, `representatives_tagged` |
+
+`__no_barcode__` groups reads without a located or usable barcode;
+`__unresolved_barcode__` groups reads with a raw barcode that did not resolve
+to a cell (including reads rejected before correction). Neither row is a
+cell. For an Illumina GEX run, join the `illumina`, `annotate`, and `molecules`
+tables by `barcode` to inspect one cell's read funnel. An SBX GEX run uses
+`extract` in place of `illumina`. Flex molecules use `PB` in `sample` to keep
+shared cell barcodes from different probe samples separate; `extract` uses
+the outer sample-sheet assignment, so these two sample fields have different
+meanings. Annotation counts BAM records, including extra alignments when
+secondary hits are retained; its historical `primary` counter includes mapped
+secondary records. Molecule eligibility counts primary reads only.
+
+Cost of `--barcode-metrics`, measured against the same build without it on
+subsets of real data (3 runs each): `illumina` and `molecules` within 1%,
+`annotate` +7% wall time, SBX `extract` +12% wall time. Memory is unchanged
+except in `extract`, where the table holds one row per observed
+barcode/sample pair: +375 MB on one CAT06 Flex chunk (~43 M reads), growing
+with the number of distinct barcodes in the run. Without the flag no stage
+does any per-barcode work.
+
 ## 1. Inputs shared by both paths
 
 Prepare one consistent reference set:
@@ -337,5 +375,3 @@ sbxpress cells "$OUT/outs/raw_feature_bc_matrix.h5" \
   --tagseq-barcodes "$REF/known_gex_cells.txt" \
   --output "$OUT/outs"
 ```
-
-

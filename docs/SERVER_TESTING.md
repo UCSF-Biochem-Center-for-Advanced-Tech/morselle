@@ -1,5 +1,12 @@
 # v0.6.0 server acceptance: 0.5.6 vs 0.6.0 on real data
 
+For 0.6.1 per-barcode metrics acceptance, compare each new
+`*.barcodes.tsv.gz` table between the candidate builds after sorting rows,
+and sum every count column against its stage's JSON metric. Test `illumina`,
+`extract`, `annotate` and `molecules` on the data and execution modes listed
+in `docs/PER_BARCODE_METRICS_PLAN.md`. The 0.6.0 baseline has no barcode
+tables; compare its BAM, FASTQ and matrix outputs as before.
+
 Server real-data acceptance was run with this procedure on 2026-10-08 and
 passed (results in CHANGELOG 0.6.0). The notes below include what that run
 showed needed changing.
