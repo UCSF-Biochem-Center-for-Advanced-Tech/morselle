@@ -111,6 +111,10 @@ pub struct Cli {
     /// Shortest poly-A run in R2 that counts as tail read-through.
     #[arg(long, default_value_t = 12)]
     pub r2_polya_min_run: usize,
+
+    /// Low-complexity cDNA check (flag-and-count by default).
+    #[command(flatten)]
+    pub complexity: crate::complexity::ComplexityCfg,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -152,6 +156,14 @@ pub struct Metrics {
     /// `r2_polya_short` in `failed_by_reason`).
     pub r2_polya_discarded: u64,
     pub r2_polya_bases_trimmed: u64,
+    /// Thresholds used for the low-complexity check.
+    pub low_complexity_base_fraction: f64,
+    pub low_complexity_run_fraction: f64,
+    pub drop_low_complexity: bool,
+    /// Barcode-passing pairs whose cDNA failed the low-complexity check
+    /// (emitted tagged `YL:i:1`, or failed as `low_complexity` with
+    /// `--drop-low-complexity`).
+    pub low_complexity: u64,
     /// Reads written to the failed-output side channel, by reason.
     pub records_failed: u64,
     pub failed_by_reason: BTreeMap<String, u64>,
@@ -163,7 +175,7 @@ pub struct Metrics {
 
 #[derive(Debug, Default)]
 pub struct PairMetrics {
-    pub per_barcode: BarcodeTable<10>,
+    pub per_barcode: BarcodeTable<12>,
     pub records_read: u64,
     pub records_emitted: u64,
     pub barcode_exact: u64,
@@ -182,6 +194,7 @@ pub struct PairMetrics {
     pub r2_polya_trimmed: u64,
     pub r2_polya_discarded: u64,
     pub r2_polya_bases_trimmed: u64,
+    pub low_complexity: u64,
     pub records_failed: u64,
     pub failed_by_reason: BTreeMap<String, u64>,
     pub insert_length_histogram: BTreeMap<usize, u64>,

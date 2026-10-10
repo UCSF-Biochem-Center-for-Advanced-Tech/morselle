@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::anchors::revcomp;
 use crate::barcode::{encode16, Whitelist};
 use crate::barcode_metrics::{NO_BARCODE, UNRESOLVED_BARCODE};
+use crate::complexity::ComplexityCfg;
 use crate::extract::{extract, ExtractCfg};
 use crate::gzin::open_fastx;
 use crate::homopolymer;
@@ -58,6 +59,39 @@ pub fn convert_pair_with(
     r2_polya_min_run: Option<usize>,
     failed_paths: &[(PathBuf, PathBuf)],
     barcode_metrics: bool,
+) -> Result<PairMetrics> {
+    convert_pair_full(
+        r1_path,
+        r2_path,
+        output_paths,
+        whitelist,
+        gem_group,
+        overlap_cfg,
+        extract_cfg,
+        emit_yc,
+        r2_polya_min_run,
+        failed_paths,
+        barcode_metrics,
+        &ComplexityCfg::default(),
+    )
+}
+
+/// [`convert_pair_with`] with explicit low-complexity settings
+/// (`--low-complexity-*`, `--drop-low-complexity`).
+#[allow(clippy::too_many_arguments)]
+pub fn convert_pair_full(
+    r1_path: &Path,
+    r2_path: &Path,
+    output_paths: &[PathBuf],
+    whitelist: &Whitelist,
+    gem_group: u32,
+    overlap_cfg: Option<&OverlapCfg>,
+    extract_cfg: &ExtractCfg,
+    emit_yc: bool,
+    r2_polya_min_run: Option<usize>,
+    failed_paths: &[(PathBuf, PathBuf)],
+    barcode_metrics: bool,
+    complexity: &ComplexityCfg,
 ) -> Result<PairMetrics> {
     let writers = output_paths
         .iter()
@@ -143,6 +177,7 @@ pub fn convert_pair_with(
                             "r2_polya_short" => 7,
                             "cb_invalid" => 8,
                             "cb_unmatched" => 9,
+                            "low_complexity" => 11,
                             _ => unreachable!("new failure reason needs a barcode column"),
                         };
                         row[failure_index] += 1;
@@ -339,6 +374,17 @@ pub fn convert_pair_with(
                 corrected_barcode[CB_LEN..CB_LEN + gem_suffix.len()]
                     .copy_from_slice(gem_suffix.as_bytes());
                 let barcode = std::str::from_utf8(&corrected_barcode[..CB_LEN + gem_suffix.len()])?;
+                // Checked after the barcode so the count is per cell; see
+                // crate::complexity for why (DZEC05 dead read 2).
+                let low_complexity = complexity.is_low(out_seq);
+                if low_complexity {
+                    metrics.low_complexity += 1;
+                    metrics.per_barcode.row(barcode, ".")[10] += 1;
+                    if complexity.drop_low_complexity {
+                        barcode_row = barcode;
+                        fail_pair!("low_complexity");
+                    }
+                }
                 let row = metrics.per_barcode.row(barcode, ".");
                 row[0] += 1;
                 row[1] += u64::from(cb_exact);
@@ -358,6 +404,7 @@ pub fn convert_pair_with(
                     out_seq,
                     out_qual,
                     merged_tag.as_ref(),
+                    low_complexity,
                 )?;
                 metrics.records_emitted += 1;
                 if buffers[shard].len() >= WRITER_BATCH_BYTES {

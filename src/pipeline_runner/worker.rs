@@ -15,7 +15,8 @@ use crate::pipeline::Orientation;
 use crate::probe_barcode::ProbeWhitelist;
 
 use super::formatting::{flush_failed_buf, flush_target_bufs, make_target_bufs};
-use super::process::{detect_orientation, process_one};
+use super::orientation_scan::detect_orientation;
+use super::process::process_one;
 use super::types::{Batch, Stats, BATCH_READS};
 
 /// Read-only context shared across the parallel per-file workers.
@@ -37,7 +38,9 @@ pub(crate) struct Shared<'a> {
     pub umi_len: usize,
     pub cb_gate: bool,
     /// Per-barcode counters (`--barcode-metrics`); `None` skips them.
-    pub barcodes: Option<&'a crate::barcode_metrics::SharedBarcodeTable<9>>,
+    pub barcodes: Option<&'a crate::barcode_metrics::SharedBarcodeTable<10>>,
+    /// Low-complexity cDNA check (`--low-complexity-*`).
+    pub complexity: crate::complexity::ComplexityCfg,
     pub realign: bool,
     pub cb_reframe: bool,
     pub reframe_window: usize,

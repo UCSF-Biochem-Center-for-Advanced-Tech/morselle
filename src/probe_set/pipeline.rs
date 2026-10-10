@@ -86,6 +86,11 @@ fn build_record(
             }
         }
     }
+    // Conversion's low-complexity flag (crate::complexity), for molecules'
+    // per-gene artifact report.
+    if comment.split('\t').any(|field| field == "YL:i:1") {
+        record.push_aux(b"YL", Aux::I32(1))?;
+    }
     Ok((record, matched_gene_idx))
 }
 

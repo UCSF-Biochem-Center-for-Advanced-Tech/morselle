@@ -41,6 +41,23 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   struct literals must set them.
 
 ### Added
+- Low-complexity cDNA check at conversion (`illumina`, `extract`): a read
+  where one base is >= 80% of the cDNA or the longest single-base run
+  covers >= 50% (`--low-complexity-base-fraction`,
+  `--low-complexity-run-fraction`) is emitted tagged `YL:i:1` and counted
+  (`low_complexity` in the metrics JSON and per-barcode tables), with a
+  warning above 5% of reads. `--drop-low-complexity` fails such reads
+  (reason `low_complexity`) instead. Normal reads are written exactly as
+  before. `sbxpress-probeset-align` copies `YL` into its BAM.
+- `molecules` metrics gain an `artifacts` report: gene-assigned reads, how
+  many are low-complexity (`YL:i:1`) or MAPQ < 60 without `mm:i:1`, and the
+  genes where at least half of >= 100 reads are flagged; a listed gene with
+  >= 1% of reads prints a warning. Nothing is dropped by it.
+- `illumina::pair::convert_pair_full` (takes the low-complexity settings);
+  `convert_pair` / `convert_pair_with` use the defaults. `illumina::Cli`
+  and `config::Params` gain `complexity` (`complexity::ComplexityCfg`),
+  `accounting::Metrics` and `molecules::Metrics` gain the new fields, and
+  `MoleculeTags` gains `yl`; struct literals must set them.
 - Counters: `annotate` `rescued`; `molecules` `rescued_records`,
   `low_mapq_records`, `multimapper_records` and `min_mapq`, with matching
   per-barcode columns (`rescued`; `rescued_reads`, `low_mapq_reads`,

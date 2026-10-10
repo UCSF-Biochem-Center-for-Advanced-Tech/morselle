@@ -1,3 +1,4 @@
+pub mod artifacts;
 mod aux_write;
 pub mod barcode_metrics;
 #[cfg(test)]

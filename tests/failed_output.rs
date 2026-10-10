@@ -169,3 +169,85 @@ fn barcode_table_is_written_only_with_barcode_metrics() {
     assert!(out_dir.join("metrics_summary.json").is_file());
     assert!(!out_dir.join("metrics_summary.barcodes.tsv.gz").exists());
 }
+
+/// Low-complexity check on the SBX arm (crate::complexity). A base-fraction
+/// threshold of 0.25 flags every read (some base is always >= 25%), so the
+/// tag, counter, per-barcode column and drop path are all exercised.
+#[test]
+fn low_complexity_reads_are_tagged_or_dropped_on_the_sbx_arm() {
+    let run = |extra: &[&str]| {
+        let temp = tempfile::tempdir().unwrap();
+        let out_dir = temp.path().join("out");
+        let failed = temp.path().join("failed.fastq.gz");
+        let mut args: Vec<String> = [
+            "sbxpress",
+            "--fastqs",
+            fixture("smoke.fastq.gz").to_str().unwrap(),
+            "--out-dir",
+            out_dir.to_str().unwrap(),
+            "--threads",
+            "1",
+            "--minimap2",
+            "--barcode-metrics",
+            "--failed-output",
+            failed.to_str().unwrap(),
+            "--low-complexity-base-fraction",
+            "0.25",
+        ]
+        .iter()
+        .map(|arg| arg.to_string())
+        .collect();
+        args.extend(extra.iter().map(|arg| arg.to_string()));
+        sbx10x::run(&Cli::parse_from(args)).unwrap();
+        let metrics: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(out_dir.join("metrics_summary.json")).unwrap(),
+        )
+        .unwrap();
+        let r2 = read_gz(&out_dir.join("sbxpress_S1_L001_R2_001.fastq.gz"));
+        let table = read_gz(&out_dir.join("metrics_summary.barcodes.tsv.gz"));
+        let header: Vec<String> = table
+            .lines()
+            .next()
+            .unwrap()
+            .split('\t')
+            .map(String::from)
+            .collect();
+        let column = header.iter().position(|c| c == "low_complexity").unwrap();
+        let flagged_in_table: u64 = table
+            .lines()
+            .skip(1)
+            .map(|line| {
+                line.split('\t')
+                    .nth(column)
+                    .unwrap()
+                    .parse::<u64>()
+                    .unwrap()
+            })
+            .sum();
+        (metrics, r2, flagged_in_table, read_gz(&failed), temp)
+    };
+
+    let (metrics, r2, flagged, _, _temp) = run(&[]);
+    let emitted = metrics["pairs_emitted"].as_u64().unwrap();
+    assert!(emitted > 0);
+    assert_eq!(metrics["low_complexity"].as_u64().unwrap(), emitted);
+    assert_eq!(flagged, emitted);
+    let headers: Vec<&str> = r2.lines().step_by(4).collect();
+    assert_eq!(headers.len() as u64, emitted);
+    assert!(headers.iter().all(|h| h.ends_with("\tYL:i:1")));
+
+    let (metrics, r2, flagged, failed, _temp) = run(&["--drop-low-complexity"]);
+    assert_eq!(metrics["pairs_emitted"], 0);
+    assert_eq!(metrics["drop_low_complexity"], true);
+    assert_eq!(metrics["low_complexity"].as_u64().unwrap(), emitted);
+    assert_eq!(flagged, emitted);
+    assert!(r2.is_empty());
+    assert_eq!(
+        failed.matches("XF:Z:low_complexity").count() as u64,
+        emitted
+    );
+    assert_eq!(
+        metrics["total_reads"].as_u64().unwrap(),
+        metrics["reads_failed"].as_u64().unwrap()
+    );
+}

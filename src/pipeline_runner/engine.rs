@@ -145,7 +145,7 @@ pub fn run(cli: &Cli) -> Result<()> {
     let barcodes = cli
         .params
         .barcode_metrics
-        .then(|| crate::barcode_metrics::SharedBarcodeTable::<9>::new(256));
+        .then(|| crate::barcode_metrics::SharedBarcodeTable::<10>::new(256));
     let shared = Shared {
         orient_cfg,
         orient_mode: cli.params.orientation,
@@ -158,6 +158,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         umi_len,
         cb_gate: cli.params.cb_gate,
         barcodes: barcodes.as_ref(),
+        complexity: cli.params.complexity,
         realign: cli.params.realign,
         cb_reframe: cli.params.cb_reframe,
         reframe_window: cli.params.reframe_window,
@@ -244,7 +245,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         threads,
     };
     report(&stats, demuxer.as_ref(), &timing);
-    let metrics = build_metrics(
+    let mut metrics = build_metrics(
         &stats,
         whitelist.as_ref(),
         demuxer.as_ref(),
@@ -252,6 +253,20 @@ pub fn run(cli: &Cli) -> Result<()> {
         &timing,
         cli.params.minimap2,
         cli.params.processing_tags,
+    );
+    metrics.low_complexity = stats.low_complexity;
+    metrics.low_complexity_base_fraction = cli.params.complexity.low_complexity_base_fraction;
+    metrics.low_complexity_run_fraction = cli.params.complexity.low_complexity_run_fraction;
+    metrics.drop_low_complexity = cli.params.complexity.drop_low_complexity;
+    let dropped = if cli.params.complexity.drop_low_complexity {
+        stats.low_complexity
+    } else {
+        0
+    };
+    crate::complexity::warn_if_high(
+        "sbxpress extract",
+        stats.low_complexity,
+        stats.pairs_emitted + dropped,
     );
     let metrics_path = cli.out_dir.join("metrics_summary.json");
     metrics.write_json(&metrics_path)?;
@@ -269,6 +284,7 @@ pub fn run(cli: &Cli) -> Result<()> {
             "class_unparseable",
             "pb_located",
             "pb_hit",
+            "low_complexity",
         ],
     )?;
     info!(out = %metrics_path.display(), "wrote metrics summary");

@@ -5,6 +5,7 @@ use rust_htslib::bam::{self, Read};
 use rustc_hash::FxHashMap as HashMap;
 use std::path::Path;
 
+use super::artifacts::GeneTally;
 use super::barcode_metrics::{eligible, gate_column, row, BarcodeRows};
 pub use super::evidence_indexed::{
     collect_evidence_indexed, collect_evidence_indexed_with, indexed_regions,
@@ -188,7 +189,7 @@ pub fn collect_evidence_with(
         let Some(umi) = tags.umi().and_then(|u| umi_key(&record, u, position_aware)) else {
             continue;
         };
-        let Some((gene, _name)) = tags.gene() else {
+        let Some((gene, name)) = tags.gene() else {
             continue;
         };
         // PB is a Flex-only identity component. Tag-seq (and ordinary
@@ -202,6 +203,7 @@ pub fn collect_evidence_with(
             metrics.no_sample_records += 1;
             continue;
         };
+        metrics.gene_tally.observe(gene, name, &record, &tags);
         let gate = mapping_gate(&record, &tags, min_mapq);
         if let Some(column) = gate_column(gate) {
             let pb = tags.pb.filter(|v| !v.is_empty());
@@ -276,6 +278,7 @@ pub struct RegionEvidence {
     pub eligible_records: u64,
     pub no_sample_records: u64,
     pub gate_counts: GateCounts,
+    pub gene_tally: GeneTally,
 }
 
 /// [`collect_region_with`] without the mapping-quality gate.
@@ -316,6 +319,7 @@ pub fn collect_region_with(
     let mut samples = Vec::<String>::new();
     let mut sample_ids = HashMap::<String, u32>::default();
     let mut barcode_rows = BarcodeRows::default();
+    let mut gene_tally = GeneTally::default();
     let mut records = 0_u64;
     let mut eligible_records = 0_u64;
     let mut no_sample_records = 0_u64;
@@ -348,7 +352,7 @@ pub fn collect_region_with(
         let Some(umi) = tags.umi().and_then(|u| umi_key(&record, u, position_aware)) else {
             continue;
         };
-        let Some((gene, _name)) = tags.gene() else {
+        let Some((gene, name)) = tags.gene() else {
             continue;
         };
         let sample = if let Some(pb) = tags.pb.filter(|v| !v.is_empty()) {
@@ -359,6 +363,7 @@ pub fn collect_region_with(
             no_sample_records += 1;
             continue;
         };
+        gene_tally.observe(gene, name, &record, &tags);
         let gate = mapping_gate(&record, &tags, min_mapq);
         if let Some(column) = gate_column(gate) {
             let pb = tags.pb.filter(|v| !v.is_empty());
@@ -416,5 +421,6 @@ pub fn collect_region_with(
         eligible_records,
         no_sample_records,
         gate_counts,
+        gene_tally,
     })
 }

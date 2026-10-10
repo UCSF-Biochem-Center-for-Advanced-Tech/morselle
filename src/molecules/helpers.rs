@@ -131,6 +131,8 @@ pub struct MoleculeTags<'a> {
     /// Integer `NH` (reported hits) and `mm` (MAPQ rescue) from `annotate`.
     pub nh: Option<i64>,
     pub mm: Option<i64>,
+    /// Integer `YL` (conversion's low-complexity flag, crate::complexity).
+    pub yl: Option<i64>,
     /// Any tag `molecules` itself writes (`xf`/`XV`/`XW`/`ZW`) is already
     /// present, e.g. when re-running on a molecules BAM. Lets the writer skip
     /// four `remove_aux` calls -- each a full aux scan -- in the common case.
@@ -139,7 +141,7 @@ pub struct MoleculeTags<'a> {
 
 impl<'a> MoleculeTags<'a> {
     /// One bounds-checked walk over the raw aux bytes. Only the seven wanted
-    /// string tags (and the integer `NH`/`mm`) are decoded; every other field
+    /// string tags (and the integer `NH`/`mm`/`YL`) are decoded; every other field
     /// is skipped by its type length, the way htslib's `bam_aux_get` walks.
     /// For each wanted tag the FIRST occurrence decides, matching
     /// `record.aux(tag)`: a first occurrence of the wrong type yields `None`
@@ -151,6 +153,7 @@ impl<'a> MoleculeTags<'a> {
             let (bit, int_slot) = match &tag {
                 b"NH" => (7, &mut tags.nh),
                 b"mm" => (8, &mut tags.mm),
+                b"YL" => (9, &mut tags.yl),
                 _ => (0, &mut None),
             };
             if bit != 0 {

@@ -115,6 +115,7 @@ pub fn collect_evidence_indexed_with(
         metrics.eligible_records += part.eligible_records;
         metrics.no_sample_records += part.no_sample_records;
         part.gate_counts.add_to(metrics);
+        metrics.gene_tally.merge_from(&part.gene_tally);
         let remap: Vec<u32> = part
             .genes
             .iter()

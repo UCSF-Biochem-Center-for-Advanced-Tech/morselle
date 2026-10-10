@@ -169,6 +169,8 @@ pub struct Decision {
 pub struct Metrics {
     #[serde(skip)]
     pub barcode_rows: super::barcode_metrics::BarcodeRows,
+    #[serde(skip)]
+    pub gene_tally: super::artifacts::GeneTally,
     pub input_bam: String,
     pub output_bam: String,
     pub tagseq: bool,
@@ -210,6 +212,9 @@ pub struct Metrics {
     pub collision_molecules_fractional: u64,
     pub representatives_tagged: u64,
     pub saturation: Option<SaturationMetrics>,
+    /// Per-gene artifact report (low-complexity / low-MAPQ reads), filled
+    /// from `gene_tally` when the metrics are written.
+    pub artifacts: super::artifacts::ArtifactReport,
     pub elapsed_secs: f64,
 }
 
@@ -221,6 +226,7 @@ pub struct Metrics {
 /// deliberately left alone here.
 pub fn merge_metrics(target: &mut Metrics, source: &Metrics) {
     super::barcode_metrics::merge_rows(&mut target.barcode_rows, &source.barcode_rows, |s| s);
+    target.gene_tally.merge_from(&source.gene_tally);
     target.records += source.records;
     target.eligible_records += source.eligible_records;
     target.rescued_records += source.rescued_records;

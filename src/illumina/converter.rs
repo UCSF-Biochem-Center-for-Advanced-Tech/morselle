@@ -10,7 +10,7 @@ use crate::extract::ExtractCfg;
 use crate::gzin::backend_description;
 use crate::overlap::OverlapCfg;
 
-use super::pair::convert_pair_with;
+use super::pair::convert_pair_full;
 use super::types::{failed_paths, metrics_path, shard_allocation, shard_path, Cli, Metrics};
 
 pub fn run(cli: Cli) -> Result<()> {
@@ -121,13 +121,16 @@ pub fn run(cli: Cli) -> Result<()> {
         split: cli.split,
         gem_group: cli.gem_group,
         overlap_enabled: cli.overlap,
+        low_complexity_base_fraction: cli.complexity.low_complexity_base_fraction,
+        low_complexity_run_fraction: cli.complexity.low_complexity_run_fraction,
+        drop_low_complexity: cli.complexity.drop_low_complexity,
         failed_outputs: failed_shards
             .iter()
             .flat_map(|(r1, r2)| [r1.clone(), r2.clone()])
             .collect(),
         ..Metrics::default()
     };
-    let mut per_barcode = crate::barcode_metrics::BarcodeTable::<10>::new(cli.barcode_metrics);
+    let mut per_barcode = crate::barcode_metrics::BarcodeTable::<12>::new(cli.barcode_metrics);
     let workers = if cli.threads == 0 {
         cli.r1.len()
     } else {
@@ -153,7 +156,7 @@ pub fn run(cli: Cli) -> Result<()> {
             .zip(cli.r2.par_iter())
             .enumerate()
             .map(|(index, (r1, r2))| {
-                let result = convert_pair_with(
+                let result = convert_pair_full(
                     r1,
                     r2,
                     &per_input_outputs[index],
@@ -168,6 +171,7 @@ pub fn run(cli: Cli) -> Result<()> {
                         .map(Vec::as_slice)
                         .unwrap_or(&[]),
                     cli.barcode_metrics,
+                    &cli.complexity,
                 );
                 if let Ok(value) = &result {
                     eprintln!(
@@ -207,6 +211,7 @@ pub fn run(cli: Cli) -> Result<()> {
         metrics.r2_polya_trimmed += value.r2_polya_trimmed;
         metrics.r2_polya_discarded += value.r2_polya_discarded;
         metrics.r2_polya_bases_trimmed += value.r2_polya_bases_trimmed;
+        metrics.low_complexity += value.low_complexity;
         metrics.records_failed += value.records_failed;
         for (reason, count) in value.failed_by_reason {
             *metrics.failed_by_reason.entry(reason).or_insert(0) += count;
@@ -233,6 +238,8 @@ pub fn run(cli: Cli) -> Result<()> {
             "failed_r2_polya_short",
             "failed_cb_invalid",
             "failed_cb_unmatched",
+            "low_complexity",
+            "failed_low_complexity",
         ],
     )?;
     eprintln!(
@@ -241,6 +248,11 @@ pub fn run(cli: Cli) -> Result<()> {
         metrics.records_emitted,
         metrics.barcode_rejected,
         metrics_path.display()
+    );
+    crate::complexity::warn_if_high(
+        "sbxpress illumina",
+        metrics.low_complexity,
+        metrics.records_emitted + metrics.failed_by_reason.get("low_complexity").unwrap_or(&0),
     );
     if !metrics.failed_outputs.is_empty() {
         let reasons = metrics

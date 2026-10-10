@@ -35,6 +35,7 @@ pub fn write_record(
     seq: &[u8],
     qual: &[u8],
     yc: Option<&YcTag>,
+    low_complexity: bool,
 ) -> std::io::Result<()> {
     // Illumina FASTQ identifiers commonly include a whitespace-delimited
     // mate/control/index comment (for example `2:N:0:...`). Minimap2 -y treats
@@ -57,6 +58,9 @@ pub fn write_record(
     output.write_all(umi_qual)?;
     if let Some(tag) = yc {
         write!(output, "\tYC:Z:{tag}")?;
+    }
+    if low_complexity {
+        output.write_all(crate::complexity::TAG)?;
     }
     output.write_all(b"\n")?;
     output.write_all(seq)?;

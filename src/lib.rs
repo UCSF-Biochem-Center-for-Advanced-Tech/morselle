@@ -16,6 +16,7 @@ pub mod bam_helpers;
 pub mod barcode;
 pub mod barcode_metrics;
 pub mod cell_calling;
+pub mod complexity;
 pub mod config;
 pub mod cr_bam_to_mtx;
 pub mod demux;

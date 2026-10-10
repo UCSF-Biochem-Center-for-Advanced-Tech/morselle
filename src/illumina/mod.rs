@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod complexity_tests;
 pub mod converter;
 pub mod pair;
 #[cfg(test)]

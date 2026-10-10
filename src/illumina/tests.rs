@@ -16,7 +16,7 @@ fn normalizes_common_mate_suffixes() {
 
 /// Clap's `default_value_t` does not feed `Default`, so mirror the defaults
 /// here; tests flip only what they are exercising.
-fn base_cli(root: &Path, output: PathBuf) -> Cli {
+pub(super) fn base_cli(root: &Path, output: PathBuf) -> Cli {
     Cli {
         r1: vec![root.join("tests/fixtures/illumina_R1.fastq")],
         r2: vec![root.join("tests/fixtures/illumina_R2.fastq")],
@@ -41,10 +41,11 @@ fn base_cli(root: &Path, output: PathBuf) -> Cli {
         trim_r2_polya: false,
         r2_polya_min_run: 12,
         failed_output: None,
+        complexity: Default::default(),
     }
 }
 
-fn read_gz(path: &Path) -> String {
+pub(super) fn read_gz(path: &Path) -> String {
     let mut text = String::new();
     MultiGzDecoder::new(File::open(path).unwrap())
         .read_to_string(&mut text)
@@ -52,7 +53,7 @@ fn read_gz(path: &Path) -> String {
     text
 }
 
-fn table_sums(table: &str) -> std::collections::BTreeMap<String, u64> {
+pub(super) fn table_sums(table: &str) -> std::collections::BTreeMap<String, u64> {
     let mut lines = table.lines();
     let header: Vec<&str> = lines.next().unwrap().split('\t').collect();
     let mut sums = std::collections::BTreeMap::new();

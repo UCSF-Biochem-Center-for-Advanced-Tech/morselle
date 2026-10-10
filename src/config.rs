@@ -264,6 +264,10 @@ pub struct Params {
     /// per-read jitter in the measured dT-run boundary.
     #[arg(long, default_value_t = 10)]
     pub probe_barcode_window: isize,
+
+    /// Low-complexity cDNA check (flag-and-count by default).
+    #[command(flatten)]
+    pub complexity: crate::complexity::ComplexityCfg,
 }
 
 /// R2 length cap accepted by the compatibility preset.

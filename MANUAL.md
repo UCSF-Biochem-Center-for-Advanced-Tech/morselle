@@ -34,8 +34,8 @@ reproduces the corresponding run-wide JSON counter.
 
 | Stage | Count columns |
 |---|---|
-| `illumina` | `reads`, `barcode_exact`, `barcode_corrected`, `emitted`, `failed_merged_too_short`, `failed_no_cdna`, `failed_short_r1`, `failed_r2_polya_short`, `failed_cb_invalid`, `failed_cb_unmatched` |
-| `extract` | `reads`, `cb_on_whitelist`, `cb_within1`, `emitted`, `class_full`, `class_partial`, `class_unparseable`, `pb_located`, `pb_hit` |
+| `illumina` | `reads`, `barcode_exact`, `barcode_corrected`, `emitted`, `failed_merged_too_short`, `failed_no_cdna`, `failed_short_r1`, `failed_r2_polya_short`, `failed_cb_invalid`, `failed_cb_unmatched`, `low_complexity`, `failed_low_complexity` |
+| `extract` | `reads`, `cb_on_whitelist`, `cb_within1`, `emitted`, `class_full`, `class_partial`, `class_unparseable`, `pb_located`, `pb_hit`, `low_complexity` |
 | `annotate` | `records`, `primary`, `unmapped`, `exonic`, `intronic`, `intergenic`, `antisense`, `gene_assigned`, `unique_gene`, `multi_gene`, `rescued`, `end_overhang` |
 | `molecules` | `eligible_reads`, `raw_cell_gene_umis`, `molecules_counted`, `collision_groups`, `representatives_tagged`, `rescued_reads`, `low_mapq_reads`, `multimapper_reads` |
 
@@ -102,6 +102,34 @@ that many bases past their exon. The overhang is treated as soft-clipped, and
 the `TX` position is clamped to the exon. Internal junctions must still match
 exactly. The `end_overhang` counter reports records that got genes this way;
 `--max-end-overhang 0` restores exact ends.
+
+## Low-complexity reads and the artifact report
+
+A library or sequencing fault can fill reads with one base. On DZEC05,
+28-56% of read 2s were dead (a two-colour sequencer calls "no signal" as G,
+at about Q25, so quality filters miss it), and the poly-G reads that mapped
+gave LINC00486 a fifth of all molecules. Two checks make this visible,
+without changing counts in a normal run:
+
+- **At conversion** (`sbxpress illumina`, `sbxpress extract`), each
+  barcode-passing read's cDNA is checked: it is low-complexity if one base
+  makes up at least `--low-complexity-base-fraction` of it (default 0.8) or
+  its longest single-base run covers at least `--low-complexity-run-fraction`
+  (default 0.5). Either test is off at 0. The read is still emitted, with
+  `YL:i:1` in its FASTQ comment (minimap2 `-y` and `sbxpress-probeset-align`
+  carry it into the BAM). The metrics JSON reports `low_complexity`, the
+  per-barcode table has a `low_complexity` column, and the stage prints a
+  warning when more than 5% of reads are flagged. `--drop-low-complexity`
+  fails these reads instead (reason `low_complexity`, written to
+  `--failed-output` when set). The check is one pass over bases already in
+  memory.
+- **In `sbxpress molecules`**, the metrics JSON has an `artifacts` section:
+  gene-assigned primary reads, how many carry `YL:i:1`, how many are below
+  MAPQ 60 without `mm:i:1` (counted whatever `--min-mapq` is), and up to 25
+  genes with at least 100 reads of which at least half are flagged. A listed
+  gene holding at least 1% of gene-assigned reads is printed as a warning.
+  In a normal library a few intronic-repeat genes are listed, each a small
+  share of reads; DZEC05's LINC00486 would be listed with a fifth of them.
 
 ## 1. Inputs shared by both paths
 

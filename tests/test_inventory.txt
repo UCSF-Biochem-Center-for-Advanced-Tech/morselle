@@ -1,8 +1,11 @@
 annotate_chain_e2e illumina_annotate_molecules_barcode_funnel
+complexity_chain_e2e annotate_keeps_yl_and_low_mapq_intronic_gene_is_listed
+complexity_chain_e2e illumina_flags_low_complexity_and_molecules_names_the_gene
 docs_commands documented_commands_use_real_flags
 failed_output barcode_table_is_written_only_with_barcode_metrics
 failed_output extract_per_barcode_values_include_barcode_less_reads
 failed_output failed_output_accounts_for_every_read
+failed_output low_complexity_reads_are_tagged_or_dropped_on_the_sbx_arm
 failed_output without_the_flag_no_side_channel_is_written
 golden_outputs molecules_and_matrix_outputs_match_golden
 illumina_modes_integration test_illumina_cat_tagseq_cell_calling_integration
@@ -64,6 +67,9 @@ src/lib.rs cell_calling::tests::fractional_raw_matrix_is_read_and_filtered_witho
 src/lib.rs cell_calling::tests::ordmag_threshold_uses_top_one_percent
 src/lib.rs cell_calling::tests::tagseq_barcodes_rejects_unknown_barcode
 src/lib.rs cell_calling::tests::tagseq_barcodes_selects_exact_list_ignoring_umi_rank
+src/lib.rs complexity::tests::ordinary_cdna_is_not_low_complexity
+src/lib.rs complexity::tests::poly_g_and_long_runs_are_low_complexity
+src/lib.rs complexity::tests::thresholds_of_zero_disable_each_test
 src/lib.rs config::tests::compat_preset_sets_r2_cap
 src/lib.rs config::tests::explicit_max_r2_len_overrides_preset
 src/lib.rs config::tests::flex_r2_boundary_is_driven_by_the_explicit_flex_flag_alone
@@ -107,11 +113,11 @@ src/lib.rs extract::flex_tests::flex_r2_boundary_search_is_bounded_past_the_real
 src/lib.rs extract::flex_tests::flex_r2_boundary_skips_search_for_known_non_gex_reads
 src/lib.rs extract::flex_tests::flex_r2_boundary_stops_exactly_at_the_anchor
 src/lib.rs extract::flex_tests::flex_r2_boundary_tolerates_mismatches_within_budget
-src/lib.rs extract::tests::a_fragment_that_is_only_tso_yields_no_cdna
 src/lib.rs extract::tests::adapter_absent_not_falsely_trimmed
 src/lib.rs extract::tests::adapter_exact_and_substitution
 src/lib.rs extract::tests::adapter_homopolymer_insertion
 src/lib.rs extract::tests::adapter_partial_at_end
+src/lib.rs extract::tests::a_fragment_that_is_only_tso_yields_no_cdna
 src/lib.rs extract::tests::does_not_trim_a_tso_buried_inside_the_cdna
 src/lib.rs extract::tests::extracts_r1_and_trimmed_r2
 src/lib.rs extract::tests::leaves_the_tso_alone_by_default
@@ -150,6 +156,8 @@ src/lib.rs homopolymer::tests::first_run_at_least_tolerates_isolated_mismatch
 src/lib.rs homopolymer::tests::none_when_absent
 src/lib.rs homopolymer::tests::picks_a_and_t
 src/lib.rs homopolymer::tests::tolerates_isolated_mismatch
+src/lib.rs illumina::complexity_tests::drop_low_complexity_fails_the_pair_with_its_reason
+src/lib.rs illumina::complexity_tests::low_complexity_read_is_tagged_and_counted_by_default
 src/lib.rs illumina::tests::a_non_overlapping_pair_falls_back_to_the_standard_path
 src/lib.rs illumina::tests::both_paths_emit_the_same_orientation
 src/lib.rs illumina::tests::converts_exact_and_hamming1_and_gates_failure
@@ -198,9 +206,9 @@ src/lib.rs overlap::realistic_tests::a_long_fragment_does_not_merge
 src/lib.rs overlap::realistic_tests::an_overlap_that_is_only_homopolymer_does_not_merge
 src/lib.rs overlap::realistic_tests::indel_between_mates_is_characterised
 src/lib.rs overlap::realistic_tests::indel_outside_the_overlap_is_harmless
+src/lib.rs overlap::realistic_tests::merges_across_four_homopolymer_runs
 src/lib.rs overlap::realistic_tests::merges_a_medium_fragment_into_the_whole_molecule
 src/lib.rs overlap::realistic_tests::merges_a_short_fragment_with_read_through_on_both_mates
-src/lib.rs overlap::realistic_tests::merges_across_four_homopolymer_runs
 src/lib.rs overlap::realistic_tests::merges_when_r1_is_sequenced_shorter_than_r2
 src/lib.rs overlap::realistic_tests::polya_tail_does_not_seed_a_false_merge
 src/lib.rs overlap::realistic_tests::read_through_is_removed_by_geometry_not_by_matching

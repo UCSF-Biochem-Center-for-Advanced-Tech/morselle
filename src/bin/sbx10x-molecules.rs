@@ -146,12 +146,14 @@ struct Cli {
     min_mapq: u8,
 }
 
-fn write_metrics(cli: &Cli, metrics: &Metrics) -> Result<()> {
+fn write_metrics(cli: &Cli, metrics: &mut Metrics) -> Result<()> {
+    metrics.artifacts = metrics.gene_tally.report();
+    metrics.artifacts.warn();
     let metrics_path = cli
         .metrics
         .clone()
         .unwrap_or_else(|| PathBuf::from(format!("{}.metrics.json", cli.output.display())));
-    fs::write(&metrics_path, serde_json::to_string_pretty(metrics)?)?;
+    fs::write(&metrics_path, serde_json::to_string_pretty(&*metrics)?)?;
     barcode_metrics::table(&metrics.barcode_rows, cli.barcode_metrics)
         .write(&metrics_path, &barcode_metrics::COLUMNS)?;
     info!(
@@ -239,7 +241,7 @@ fn main() -> Result<()> {
             &mut metrics,
         )?;
         metrics.elapsed_secs = started.elapsed().as_secs_f64();
-        return write_metrics(&cli, &metrics);
+        return write_metrics(&cli, &mut metrics);
     }
     // Validated above: cli.shards <= 1 requires exactly one input file.
     let single_bam = &cli.bam[0];
@@ -293,5 +295,5 @@ fn main() -> Result<()> {
         &mut metrics,
     )?;
     metrics.elapsed_secs = started.elapsed().as_secs_f64();
-    write_metrics(&cli, &metrics)
+    write_metrics(&cli, &mut metrics)
 }

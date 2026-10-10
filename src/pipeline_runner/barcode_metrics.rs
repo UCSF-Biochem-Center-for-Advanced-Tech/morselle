@@ -32,7 +32,7 @@ impl BarcodeId {
 }
 
 pub(super) fn observe(
-    table: Option<&SharedBarcodeTable<9>>,
+    table: Option<&SharedBarcodeTable<10>>,
     seq: &[u8],
     r1_start: Option<usize>,
     corrected_r1: Option<&[u8]>,
@@ -70,7 +70,7 @@ pub(super) fn observe(
 }
 
 pub(super) fn bump(
-    table: Option<&SharedBarcodeTable<9>>,
+    table: Option<&SharedBarcodeTable<10>>,
     barcode: &BarcodeId,
     sample: &str,
     column: usize,

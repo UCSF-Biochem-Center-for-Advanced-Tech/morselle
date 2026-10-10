@@ -266,6 +266,16 @@ metrics.
    homopolymer; report `failed_by_reason.umi_invalid`. Leave a UMI
    base-quality threshold as an option, off by default.
 
+**Layer A.2 + D implemented as flag-and-count (decided 2026-10-10).** The
+low-complexity test (one base >= 80% or longest run >= 50% of the cDNA) runs
+in `illumina` and `extract`; flagged reads are emitted with `YL:i:1` and
+counted (`low_complexity`, per-barcode column, warning above 5%), and
+`--drop-low-complexity` makes it a filter. `molecules` writes the per-gene
+`artifacts` report (YL and MAPQ < 60 without `mm`, independent of
+`--min-mapq`). Split by assay: 10x GEX follows Cell Ranger's rule (Layer B);
+the tag-seq default is decided after measuring how often the YL flag fires
+on normal libraries. Not done: poly-G tail trimming (A.1), UMI sanity (A.3).
+
 **Layer B: Cell Ranger MAPQ rule with exonic rescue** (`annotate` → `molecules`).
 Agreed design (2026-10-09), replacing "MAPQ ≥ X" and the loose 0.3.5
 `--multimap-tags` rule.

@@ -83,6 +83,13 @@ pub struct Metrics {
     pub r2_len_mean: u64,
     pub r2_len_max: u64,
 
+    /// Pairs whose cDNA failed the low-complexity check (`YL:i:1`, or
+    /// failed as `low_complexity` with `drop_low_complexity`).
+    pub low_complexity: u64,
+    pub low_complexity_base_fraction: f64,
+    pub low_complexity_run_fraction: f64,
+    pub drop_low_complexity: bool,
+
     /// `null` when no whitelist was provided.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub whitelist: Option<WhitelistMetrics>,
