@@ -117,9 +117,13 @@ without changing counts in a normal run:
   its longest single-base run covers at least `--low-complexity-run-fraction`
   (default 0.5). Either test is off at 0. The read is still emitted, with
   `YL:i:1` in its FASTQ comment (minimap2 `-y` and `sbxpress-probeset-align`
-  carry it into the BAM). The metrics JSON reports `low_complexity`, the
-  per-barcode table has a `low_complexity` column, and the stage prints a
-  warning when more than 5% of reads are flagged. `--drop-low-complexity`
+  carry it into the BAM). The metrics JSON reports `low_complexity` and
+  `low_complexity_by_base` (by the read's most frequent base), and the
+  per-barcode table has a `low_complexity` column. The stage warns when more
+  than 5% of reads are poly-G or poly-N (the dead-read signal). `illumina`
+  without `--trim-r2-polya` warns on all flagged reads instead: untrimmed R2
+  poly-A read-through is then expected (DZEC04 flagged 4.6%, 90% poly-A;
+  0.48%, 85% poly-G, with `--trim-r2-polya`). `--drop-low-complexity`
   fails these reads instead (reason `low_complexity`, written to
   `--failed-output` when set). The check is one pass over bases already in
   memory.

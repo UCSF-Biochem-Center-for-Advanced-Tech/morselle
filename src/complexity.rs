@@ -47,11 +47,16 @@ impl Default for ComplexityCfg {
 }
 
 impl ComplexityCfg {
-    /// Whether `seq` fails either test. Empty reads never do. One pass, no
-    /// allocation.
+    /// Whether `seq` fails either test. Empty reads never do.
     pub fn is_low(&self, seq: &[u8]) -> bool {
+        self.check(seq).is_some()
+    }
+
+    /// The read's most frequent base (index into [`BASES`]) when `seq` fails
+    /// either test, else `None`. One pass, no allocation.
+    pub fn check(&self, seq: &[u8]) -> Option<usize> {
         if seq.is_empty() {
-            return false;
+            return None;
         }
         let mut counts = [0usize; 5];
         let (mut run, mut longest) = (0usize, 0usize);
@@ -70,27 +75,86 @@ impl ComplexityCfg {
             previous = base;
         }
         let len = seq.len() as f64;
-        let top = *counts.iter().max().unwrap_or(&0) as f64;
+        let (top_index, &top) = counts
+            .iter()
+            .enumerate()
+            .max_by_key(|&(index, &count)| (count, std::cmp::Reverse(index)))?;
         let over = |count: f64, fraction: f64| fraction > 0.0 && count >= fraction * len;
-        over(top, self.low_complexity_base_fraction)
-            || over(longest as f64, self.low_complexity_run_fraction)
+        (over(top as f64, self.low_complexity_base_fraction)
+            || over(longest as f64, self.low_complexity_run_fraction))
+        .then_some(top_index)
     }
 }
 
-/// Share of barcode-passing reads above which conversion warns. Tentative:
-/// set from the 0.6.2 validation (normal libraries vs DZEC05).
+/// Base names for [`ComplexityCfg::check`] indices and [`ByBase`] slots.
+pub const BASES: [&str; 5] = ["A", "C", "G", "T", "N"];
+
+/// Low-complexity reads by most frequent base (`low_complexity_by_base` in
+/// the conversion metrics JSON).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ByBase(pub [u64; 5]);
+
+impl ByBase {
+    pub fn add(&mut self, other: &ByBase) {
+        for (a, b) in self.0.iter_mut().zip(other.0) {
+            *a += b;
+        }
+    }
+
+    /// G (two-colour "no signal") plus N (no call): the dead-read signal.
+    pub fn g_and_n(&self) -> u64 {
+        self.0[2] + self.0[4]
+    }
+}
+
+impl serde::Serialize for ByBase {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(5))?;
+        for (name, count) in BASES.iter().zip(self.0) {
+            map.serialize_entry(name, &count)?;
+        }
+        map.end()
+    }
+}
+
+/// Share of barcode-passing reads above which conversion warns. DZEC05 (dead
+/// read 2) flags ~51%; normal libraries flag <= 0.5% once poly-A read-through
+/// is trimmed (DZEC04 with --trim-r2-polya: 0.48%, 85% of it G).
 pub const WARN_FRACTION: f64 = 0.05;
 
-/// Print a warning when `flagged` is more than [`WARN_FRACTION`] of `total`.
-pub fn warn_if_high(stage: &str, flagged: u64, total: u64) {
-    if total > 0 && flagged as f64 > WARN_FRACTION * total as f64 {
-        eprintln!(
-            "[{stage}] WARNING: {flagged} of {total} reads ({:.1}%) have low-complexity cDNA \
-             (e.g. poly-G from a dead read 2); check the library or sequencing run. \
-             These reads are tagged YL:i:1 (--drop-low-complexity removes them).",
-            100.0 * flagged as f64 / total as f64
-        );
+/// Print a warning when the flagged reads are more than [`WARN_FRACTION`]
+/// of `total`. With `g_and_n_only`, only G- and N-dominated reads count:
+/// poly-A/T is expected wherever R2 read-through is not trimmed
+/// (`illumina` without `--trim-r2-polya`: DZEC04 flagged 4.6%, 90% A, with
+/// no fault), so it is warned on only then.
+pub fn warn_if_high(stage: &str, by_base: &ByBase, total: u64, g_and_n_only: bool) {
+    if let Some(text) = warning(stage, by_base, total, g_and_n_only) {
+        eprintln!("{text}");
     }
+}
+
+/// The text [`warn_if_high`] prints, if any.
+pub fn warning(stage: &str, by_base: &ByBase, total: u64, g_and_n_only: bool) -> Option<String> {
+    let (flagged, what) = if g_and_n_only {
+        (by_base.g_and_n(), "poly-G/N")
+    } else {
+        (by_base.0.iter().sum(), "low-complexity")
+    };
+    (total > 0 && flagged as f64 > WARN_FRACTION * total as f64).then(|| {
+        format!(
+            "[{stage}] WARNING: {flagged} of {total} reads ({:.1}%) have {what} cDNA \
+             (A {}, C {}, G {}, T {}, N {}; poly-G/N suggests a dead read 2, poly-A \
+             untrimmed read-through); check the library or sequencing run. These reads \
+             are tagged YL:i:1 (--drop-low-complexity removes them).",
+            100.0 * flagged as f64 / total as f64,
+            by_base.0[0],
+            by_base.0[1],
+            by_base.0[2],
+            by_base.0[3],
+            by_base.0[4]
+        )
+    })
 }
 
 #[cfg(test)]
@@ -126,6 +190,37 @@ mod tests {
         tail.extend_from_slice(&[b'A'; 20]);
         assert!(!cfg.is_low(&tail));
         assert!(!cfg.is_low(b""));
+    }
+
+    #[test]
+    fn check_reports_the_most_frequent_base() {
+        let cfg = ComplexityCfg::default();
+        assert_eq!(cfg.check(&[b'G'; 100]), Some(2));
+        assert_eq!(cfg.check(&[b'N'; 60]), Some(4));
+        let mut run = b"ACGTACGTAC".repeat(5);
+        run.extend_from_slice(&[b'T'; 50]);
+        assert_eq!(cfg.check(&run), Some(3));
+        assert_eq!(cfg.check(b"GATTACACCATGGCTTGAACGTTAGCCATGCAAGTCC"), None);
+        let by_base = ByBase([5, 0, 3, 1, 2]);
+        assert_eq!(by_base.g_and_n(), 5);
+        assert_eq!(
+            serde_json::to_string(&by_base).unwrap(),
+            r#"{"A":5,"C":0,"G":3,"T":1,"N":2}"#
+        );
+    }
+
+    #[test]
+    fn warning_counts_poly_a_only_when_read_through_is_untrimmed() {
+        // DZEC04 without --trim-r2-polya: ~4.6% flagged, mostly poly-A.
+        let poly_a = ByBase([90, 0, 7, 3, 0]);
+        assert!(warning("t", &poly_a, 1000, false).is_some());
+        assert!(warning("t", &poly_a, 1000, true).is_none());
+        // DZEC05: dead read 2, poly-G either way.
+        let poly_g = ByBase([5, 0, 480, 5, 20]);
+        let text = warning("t", &poly_g, 1000, true).unwrap();
+        assert!(text.contains("500 of 1000 reads (50.0%) have poly-G/N cDNA"));
+        assert!(warning("t", &poly_g, 1000, false).is_some());
+        assert!(warning("t", &ByBase::default(), 0, false).is_none());
     }
 
     #[test]

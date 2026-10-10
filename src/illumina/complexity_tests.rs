@@ -50,6 +50,8 @@ fn low_complexity_read_is_tagged_and_counted_by_default() {
     let metrics = metrics(&output);
     assert_eq!(metrics["records_emitted"], 2);
     assert_eq!(metrics["low_complexity"], 1);
+    assert_eq!(metrics["low_complexity_by_base"]["G"], 1);
+    assert_eq!(metrics["low_complexity_by_base"]["A"], 0);
     assert_eq!(metrics["low_complexity_base_fraction"], 0.8);
     assert_eq!(metrics["drop_low_complexity"], false);
     let table = read_gz(&crate::barcode_metrics::barcode_path(&metrics_path(

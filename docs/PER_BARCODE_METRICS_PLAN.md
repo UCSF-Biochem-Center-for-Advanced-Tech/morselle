@@ -273,8 +273,14 @@ counted (`low_complexity`, per-barcode column, warning above 5%), and
 `--drop-low-complexity` makes it a filter. `molecules` writes the per-gene
 `artifacts` report (YL and MAPQ < 60 without `mm`, independent of
 `--min-mapq`). Split by assay: 10x GEX follows Cell Ranger's rule (Layer B);
-the tag-seq default is decided after measuring how often the YL flag fires
-on normal libraries. Not done: poly-G tail trimming (A.1), UMI sanity (A.3).
+tag-seq also keeps MAPQ 60 (decided 2026-10-10: DZEC04 loses 3.0% of
+gene-assigned reads, nearly all paralog/repeat genes). The warning counts
+G/N-dominated reads only, except `illumina` without `--trim-r2-polya`
+(untrimmed poly-A read-through: DZEC04 4.6% flagged, 90% A; 0.48% with the
+trim). Poly-G tail trimming (A.1) is **not** wanted: those reads come from a
+bad library, not biology, and should drop out (MAPQ rule, or
+`--drop-low-complexity`) rather than be rescued by trimming. Not done: UMI
+sanity (A.3).
 
 **Layer B: Cell Ranger MAPQ rule with exonic rescue** (`annotate` → `molecules`).
 Agreed design (2026-10-09), replacing "MAPQ ≥ X" and the loose 0.3.5

@@ -376,9 +376,11 @@ pub fn convert_pair_full(
                 let barcode = std::str::from_utf8(&corrected_barcode[..CB_LEN + gem_suffix.len()])?;
                 // Checked after the barcode so the count is per cell; see
                 // crate::complexity for why (DZEC05 dead read 2).
-                let low_complexity = complexity.is_low(out_seq);
-                if low_complexity {
+                let dominant = complexity.check(out_seq);
+                let low_complexity = dominant.is_some();
+                if let Some(base) = dominant {
                     metrics.low_complexity += 1;
+                    metrics.low_complexity_by_base.0[base] += 1;
                     metrics.per_barcode.row(barcode, ".")[10] += 1;
                     if complexity.drop_low_complexity {
                         barcode_row = barcode;

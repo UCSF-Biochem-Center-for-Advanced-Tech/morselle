@@ -284,9 +284,11 @@ pub(crate) fn process_one(
 
         // Low-complexity cDNA (see crate::complexity): counted per cell and
         // tagged YL:i:1, or failed with --drop-low-complexity.
-        let low_complexity = sh.complexity.is_low(&o.seq[r2s..r2e]);
-        if low_complexity {
+        let dominant = sh.complexity.check(&o.seq[r2s..r2e]);
+        let low_complexity = dominant.is_some();
+        if let Some(base) = dominant {
             stats.low_complexity += 1;
+            stats.low_complexity_by_base.0[base] += 1;
             bump(sh.barcodes, &barcode_row, sample, 9);
             if sh.complexity.drop_low_complexity {
                 push_failed("low_complexity", stats)?;

@@ -164,6 +164,8 @@ pub struct Metrics {
     /// (emitted tagged `YL:i:1`, or failed as `low_complexity` with
     /// `--drop-low-complexity`).
     pub low_complexity: u64,
+    /// `low_complexity` by the read's most frequent base.
+    pub low_complexity_by_base: crate::complexity::ByBase,
     /// Reads written to the failed-output side channel, by reason.
     pub records_failed: u64,
     pub failed_by_reason: BTreeMap<String, u64>,
@@ -195,6 +197,7 @@ pub struct PairMetrics {
     pub r2_polya_discarded: u64,
     pub r2_polya_bases_trimmed: u64,
     pub low_complexity: u64,
+    pub low_complexity_by_base: crate::complexity::ByBase,
     pub records_failed: u64,
     pub failed_by_reason: BTreeMap<String, u64>,
     pub insert_length_histogram: BTreeMap<usize, u64>,

@@ -45,8 +45,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   where one base is >= 80% of the cDNA or the longest single-base run
   covers >= 50% (`--low-complexity-base-fraction`,
   `--low-complexity-run-fraction`) is emitted tagged `YL:i:1` and counted
-  (`low_complexity` in the metrics JSON and per-barcode tables), with a
-  warning above 5% of reads. `--drop-low-complexity` fails such reads
+  (`low_complexity` and `low_complexity_by_base` in the metrics JSON,
+  `low_complexity` in the per-barcode tables), with a warning above 5% of
+  reads that are poly-G/N (all flagged reads for `illumina` without
+  `--trim-r2-polya`, where poly-A read-through is expected). `--drop-low-complexity` fails such reads
   (reason `low_complexity`) instead. Normal reads are written exactly as
   before. `sbxpress-probeset-align` copies `YL` into its BAM.
 - `molecules` metrics gain an `artifacts` report: gene-assigned reads, how

@@ -58,6 +58,7 @@ pub(crate) fn build_metrics(
         r2_len_max: stats.r2_len_max,
         // Set by the caller, which holds the CLI thresholds.
         low_complexity: 0,
+        low_complexity_by_base: Default::default(),
         low_complexity_base_fraction: 0.0,
         low_complexity_run_fraction: 0.0,
         drop_low_complexity: false,

@@ -212,6 +212,9 @@ pub fn run(cli: Cli) -> Result<()> {
         metrics.r2_polya_discarded += value.r2_polya_discarded;
         metrics.r2_polya_bases_trimmed += value.r2_polya_bases_trimmed;
         metrics.low_complexity += value.low_complexity;
+        metrics
+            .low_complexity_by_base
+            .add(&value.low_complexity_by_base);
         metrics.records_failed += value.records_failed;
         for (reason, count) in value.failed_by_reason {
             *metrics.failed_by_reason.entry(reason).or_insert(0) += count;
@@ -249,10 +252,13 @@ pub fn run(cli: Cli) -> Result<()> {
         metrics.barcode_rejected,
         metrics_path.display()
     );
+    // Poly-A read-through is expected unless R2 is poly-A trimmed, so only
+    // then is every flagged read a warning; otherwise G/N only.
     crate::complexity::warn_if_high(
         "sbxpress illumina",
-        metrics.low_complexity,
+        &metrics.low_complexity_by_base,
         metrics.records_emitted + metrics.failed_by_reason.get("low_complexity").unwrap_or(&0),
+        cli.trim_r2_polya,
     );
     if !metrics.failed_outputs.is_empty() {
         let reasons = metrics

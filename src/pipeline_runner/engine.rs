@@ -255,6 +255,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         cli.params.processing_tags,
     );
     metrics.low_complexity = stats.low_complexity;
+    metrics.low_complexity_by_base = stats.low_complexity_by_base;
     metrics.low_complexity_base_fraction = cli.params.complexity.low_complexity_base_fraction;
     metrics.low_complexity_run_fraction = cli.params.complexity.low_complexity_run_fraction;
     metrics.drop_low_complexity = cli.params.complexity.drop_low_complexity;
@@ -263,10 +264,14 @@ pub fn run(cli: &Cli) -> Result<()> {
     } else {
         0
     };
+    // SBX cDNA always starts after the dT run and ends at the adapter, so
+    // leftover poly-A/T is not expected: warn on G/N only, as `illumina`
+    // does with --trim-r2-polya.
     crate::complexity::warn_if_high(
         "sbxpress extract",
-        stats.low_complexity,
+        &stats.low_complexity_by_base,
         stats.pairs_emitted + dropped,
+        true,
     );
     let metrics_path = cli.out_dir.join("metrics_summary.json");
     metrics.write_json(&metrics_path)?;

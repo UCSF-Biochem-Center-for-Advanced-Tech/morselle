@@ -231,6 +231,11 @@ fn low_complexity_reads_are_tagged_or_dropped_on_the_sbx_arm() {
     let emitted = metrics["pairs_emitted"].as_u64().unwrap();
     assert!(emitted > 0);
     assert_eq!(metrics["low_complexity"].as_u64().unwrap(), emitted);
+    let by_base: u64 = ["A", "C", "G", "T", "N"]
+        .iter()
+        .map(|base| metrics["low_complexity_by_base"][base].as_u64().unwrap())
+        .sum();
+    assert_eq!(by_base, emitted);
     assert_eq!(flagged, emitted);
     let headers: Vec<&str> = r2.lines().step_by(4).collect();
     assert_eq!(headers.len() as u64, emitted);

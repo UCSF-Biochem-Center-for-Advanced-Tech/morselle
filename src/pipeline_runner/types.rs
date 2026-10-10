@@ -71,6 +71,7 @@ pub(crate) struct Stats {
     pub probe_hit_sample_assigned: u64,
     /// Pairs whose cDNA failed the low-complexity check (crate::complexity).
     pub low_complexity: u64,
+    pub low_complexity_by_base: crate::complexity::ByBase,
 }
 
 impl Stats {
@@ -116,6 +117,7 @@ impl Stats {
         self.probe_hit += o.probe_hit;
         self.probe_hit_sample_assigned += o.probe_hit_sample_assigned;
         self.low_complexity += o.low_complexity;
+        self.low_complexity_by_base.add(&o.low_complexity_by_base);
         self.undetermined_early += o.undetermined_early;
         self.index_unreachable += o.index_unreachable;
         self.via_dual_early += o.via_dual_early;

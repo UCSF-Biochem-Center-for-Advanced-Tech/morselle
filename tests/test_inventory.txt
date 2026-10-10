@@ -67,9 +67,11 @@ src/lib.rs cell_calling::tests::fractional_raw_matrix_is_read_and_filtered_witho
 src/lib.rs cell_calling::tests::ordmag_threshold_uses_top_one_percent
 src/lib.rs cell_calling::tests::tagseq_barcodes_rejects_unknown_barcode
 src/lib.rs cell_calling::tests::tagseq_barcodes_selects_exact_list_ignoring_umi_rank
+src/lib.rs complexity::tests::check_reports_the_most_frequent_base
 src/lib.rs complexity::tests::ordinary_cdna_is_not_low_complexity
 src/lib.rs complexity::tests::poly_g_and_long_runs_are_low_complexity
 src/lib.rs complexity::tests::thresholds_of_zero_disable_each_test
+src/lib.rs complexity::tests::warning_counts_poly_a_only_when_read_through_is_untrimmed
 src/lib.rs config::tests::compat_preset_sets_r2_cap
 src/lib.rs config::tests::explicit_max_r2_len_overrides_preset
 src/lib.rs config::tests::flex_r2_boundary_is_driven_by_the_explicit_flex_flag_alone

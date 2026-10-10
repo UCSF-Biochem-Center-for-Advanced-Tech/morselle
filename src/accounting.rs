@@ -86,6 +86,8 @@ pub struct Metrics {
     /// Pairs whose cDNA failed the low-complexity check (`YL:i:1`, or
     /// failed as `low_complexity` with `drop_low_complexity`).
     pub low_complexity: u64,
+    /// `low_complexity` by the read's most frequent base.
+    pub low_complexity_by_base: crate::complexity::ByBase,
     pub low_complexity_base_fraction: f64,
     pub low_complexity_run_fraction: f64,
     pub drop_low_complexity: bool,
