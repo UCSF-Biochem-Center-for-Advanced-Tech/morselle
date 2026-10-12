@@ -159,7 +159,8 @@ src/lib.rs homopolymer::tests::none_when_absent
 src/lib.rs homopolymer::tests::picks_a_and_t
 src/lib.rs homopolymer::tests::tolerates_isolated_mismatch
 src/lib.rs illumina::complexity_tests::drop_low_complexity_fails_the_pair_with_its_reason
-src/lib.rs illumina::complexity_tests::low_complexity_read_is_tagged_and_counted_by_default
+src/lib.rs illumina::complexity_tests::low_complexity_read_is_tagged_and_counted_when_kept
+src/lib.rs illumina::complexity_tests::poly_a_trim_and_low_complexity_drop_are_on_by_default
 src/lib.rs illumina::tests::a_non_overlapping_pair_falls_back_to_the_standard_path
 src/lib.rs illumina::tests::both_paths_emit_the_same_orientation
 src/lib.rs illumina::tests::converts_exact_and_hamming1_and_gates_failure

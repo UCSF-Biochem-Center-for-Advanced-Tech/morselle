@@ -227,7 +227,8 @@ fn low_complexity_reads_are_tagged_or_dropped_on_the_sbx_arm() {
         (metrics, r2, flagged_in_table, read_gz(&failed), temp)
     };
 
-    let (metrics, r2, flagged, _, _temp) = run(&[]);
+    // Kept and tagged with --drop-low-complexity false.
+    let (metrics, r2, flagged, _, _temp) = run(&["--drop-low-complexity", "false"]);
     let emitted = metrics["pairs_emitted"].as_u64().unwrap();
     assert!(emitted > 0);
     assert_eq!(metrics["low_complexity"].as_u64().unwrap(), emitted);
@@ -241,7 +242,10 @@ fn low_complexity_reads_are_tagged_or_dropped_on_the_sbx_arm() {
     assert_eq!(headers.len() as u64, emitted);
     assert!(headers.iter().all(|h| h.ends_with("\tYL:i:1")));
 
-    let (metrics, r2, flagged, failed, _temp) = run(&["--drop-low-complexity"]);
+    // Dropped by default; the bare flag means the same.
+    let (bare, ..) = run(&["--drop-low-complexity"]);
+    assert_eq!(bare["pairs_emitted"], 0);
+    let (metrics, r2, flagged, failed, _temp) = run(&[]);
     assert_eq!(metrics["pairs_emitted"], 0);
     assert_eq!(metrics["drop_low_complexity"], true);
     assert_eq!(metrics["low_complexity"].as_u64().unwrap(), emitted);

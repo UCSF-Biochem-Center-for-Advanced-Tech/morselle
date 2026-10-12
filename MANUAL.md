@@ -108,25 +108,29 @@ exactly. The `end_overhang` counter reports records that got genes this way;
 A library or sequencing fault can fill reads with one base. On DZEC05,
 28-56% of read 2s were dead (a two-colour sequencer calls "no signal" as G,
 at about Q25, so quality filters miss it), and the poly-G reads that mapped
-gave LINC00486 a fifth of all molecules. Two checks make this visible,
-without changing counts in a normal run:
+gave LINC00486 a fifth of all molecules. Such reads are a library fault,
+not biology, so conversion drops them by default, and two reports make the
+fault visible:
 
 - **At conversion** (`sbxpress illumina`, `sbxpress extract`), each
   barcode-passing read's cDNA is checked: it is low-complexity if one base
   makes up at least `--low-complexity-base-fraction` of it (default 0.8) or
   its longest single-base run covers at least `--low-complexity-run-fraction`
-  (default 0.5). Either test is off at 0. The read is still emitted, with
-  `YL:i:1` in its FASTQ comment (minimap2 `-y` and `sbxpress-probeset-align`
-  carry it into the BAM). The metrics JSON reports `low_complexity` and
-  `low_complexity_by_base` (by the read's most frequent base), and the
-  per-barcode table has a `low_complexity` column. The stage warns when more
-  than 5% of reads are poly-G or poly-N (the dead-read signal). `illumina`
-  without `--trim-r2-polya` warns on all flagged reads instead: untrimmed R2
-  poly-A read-through is then expected (DZEC04 flagged 4.6%, 90% poly-A;
-  0.48%, 85% poly-G, with `--trim-r2-polya`). `--drop-low-complexity`
-  fails these reads instead (reason `low_complexity`, written to
-  `--failed-output` when set). The check is one pass over bases already in
-  memory.
+  (default 0.5). Either test is off at 0. Flagged reads fail with reason
+  `low_complexity` (written to `--failed-output` when set).
+  `--drop-low-complexity false` keeps them instead, with `YL:i:1` in the
+  FASTQ comment (minimap2 `-y` and `sbxpress-probeset-align` carry it into
+  the BAM), so `molecules` can name the genes they land on. Either way the
+  metrics JSON reports `low_complexity` and `low_complexity_by_base` (by the
+  read's most frequent base), and the per-barcode table has `low_complexity`
+  (and, for `illumina`, `failed_low_complexity`). The stage warns when more
+  than 5% of reads are poly-G or poly-N (the dead-read signal).
+  `illumina` trims poly-A read-through from unmerged R2 by default
+  (`--trim-r2-polya`; 3' GEX and tag-seq both read into the tail); with
+  `--trim-r2-polya false` that read-through is expected to look
+  low-complexity, so the warning then counts all flagged reads (DZEC04
+  flagged 4.6%, 90% poly-A, untrimmed; 0.48%, 85% poly-G, trimmed). The
+  check is one pass over bases already in memory.
 - **In `sbxpress molecules`**, the metrics JSON has an `artifacts` section:
   gene-assigned primary reads, how many carry `YL:i:1`, how many are below
   MAPQ 60 without `mm:i:1` (counted whatever `--min-mapq` is), and up to 25
@@ -134,6 +138,8 @@ without changing counts in a normal run:
   gene holding at least 1% of gene-assigned reads is printed as a warning.
   In a normal library a few intronic-repeat genes are listed, each a small
   share of reads; DZEC05's LINC00486 would be listed with a fifth of them.
+  With the default drop, `YL` reads never reach `molecules`, so the report
+  then shows only the low-MAPQ side.
 
 ## 1. Inputs shared by both paths
 

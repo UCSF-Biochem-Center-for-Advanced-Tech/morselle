@@ -1,5 +1,6 @@
-//! Low-complexity cDNA at Illumina conversion (crate::complexity): flagged
-//! and counted by default, failed with `--drop-low-complexity`.
+//! Low-complexity cDNA at Illumina conversion (crate::complexity): failed
+//! and counted by default, kept tagged `YL:i:1` with
+//! `--drop-low-complexity false`.
 use super::converter::run;
 use super::tests::{base_cli, read_gz, table_sums};
 use super::types::metrics_path;
@@ -28,7 +29,7 @@ fn metrics(output: &Path) -> serde_json::Value {
 }
 
 #[test]
-fn low_complexity_read_is_tagged_and_counted_by_default() {
+fn low_complexity_read_is_tagged_and_counted_when_kept() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let temp = tempfile::tempdir().unwrap();
     let output = temp.path().join("tagged.fastq.gz");
@@ -36,6 +37,7 @@ fn low_complexity_read_is_tagged_and_counted_by_default() {
     let mut cli = base_cli(&root, output.clone());
     cli.r1 = vec![r1];
     cli.r2 = vec![r2];
+    cli.complexity.drop_low_complexity = false;
     run(cli).unwrap();
 
     let text = read_gz(&output);
@@ -74,7 +76,7 @@ fn drop_low_complexity_fails_the_pair_with_its_reason() {
     cli.r1 = vec![r1];
     cli.r2 = vec![r2];
     cli.failed_output = Some(failed.clone());
-    cli.complexity.drop_low_complexity = true;
+    // Dropping is the default (base_cli uses ComplexityCfg::default()).
     run(cli).unwrap();
 
     let text = read_gz(&output);
@@ -85,6 +87,7 @@ fn drop_low_complexity_fails_the_pair_with_its_reason() {
     assert_eq!(metrics["records_emitted"], 1);
     assert_eq!(metrics["low_complexity"], 1);
     assert_eq!(metrics["failed_by_reason"]["low_complexity"], 1);
+    assert_eq!(metrics["drop_low_complexity"], true);
     let failed_r2 = read_gz(&temp.path().join("failed_R2.fastq.gz"));
     assert!(failed_r2.starts_with("@dead/2\tXF:Z:low_complexity\n"));
     let table = read_gz(&crate::barcode_metrics::barcode_path(&metrics_path(
@@ -95,4 +98,32 @@ fn drop_low_complexity_fails_the_pair_with_its_reason() {
     assert_eq!(sums["emitted"], 1);
     assert_eq!(sums["low_complexity"], 1);
     assert_eq!(sums["failed_low_complexity"], 1);
+}
+
+#[test]
+fn poly_a_trim_and_low_complexity_drop_are_on_by_default() {
+    use super::types::Cli;
+    use clap::Parser;
+    let parse = |extra: &[&str]| {
+        let base = [
+            "illumina",
+            "--r1",
+            "a",
+            "--r2",
+            "b",
+            "--whitelist",
+            "w",
+            "-o",
+            "o",
+        ];
+        Cli::try_parse_from(base.iter().chain(extra)).unwrap()
+    };
+    let cli = parse(&[]);
+    assert!(cli.trim_r2_polya);
+    assert!(cli.complexity.drop_low_complexity);
+    // The bare flags still mean "on"; `false` turns each off.
+    let cli = parse(&["--trim-r2-polya", "--drop-low-complexity"]);
+    assert!(cli.trim_r2_polya && cli.complexity.drop_low_complexity);
+    let cli = parse(&["--trim-r2-polya", "false", "--drop-low-complexity", "false"]);
+    assert!(!cli.trim_r2_polya && !cli.complexity.drop_low_complexity);
 }

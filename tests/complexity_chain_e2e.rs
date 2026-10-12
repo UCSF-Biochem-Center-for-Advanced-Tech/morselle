@@ -83,6 +83,9 @@ fn illumina_flags_low_complexity_and_molecules_names_the_gene() {
             "--metrics",
             conversion.to_str().unwrap(),
             "--barcode-metrics",
+            // Keep and tag (the default drops them) so molecules can name the gene.
+            "--drop-low-complexity",
+            "false",
         ],
     );
     let metrics = json(&conversion);

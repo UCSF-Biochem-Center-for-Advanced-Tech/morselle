@@ -7,6 +7,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Changed
+- **Counts change:** `sbxpress illumina` now trims poly-A read-through in
+  unmerged R2 by default (`--trim-r2-polya`; 3' GEX and tag-seq both read
+  into the tail). `--trim-r2-polya false` restores the old behaviour. The
+  bare flag still works.
+- **Counts change:** low-complexity cDNA (below) is dropped by default at
+  conversion (reason `low_complexity`): a dead read 2 is a library fault,
+  not biology. `--drop-low-complexity false` keeps such reads, tagged
+  `YL:i:1`. `complexity::ComplexityCfg::default()` now drops, so
+  `illumina::pair::convert_pair` / `convert_pair_with` do too.
 - **Counts change:** `molecules` now counts only confidently mapped reads,
   as Cell Ranger does: MAPQ >= `--min-mapq` (default 60) or rescued by
   `annotate` (`mm:i:1`). On DZEC05 this removes the poly-G LINC00486
@@ -44,13 +53,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Low-complexity cDNA check at conversion (`illumina`, `extract`): a read
   where one base is >= 80% of the cDNA or the longest single-base run
   covers >= 50% (`--low-complexity-base-fraction`,
-  `--low-complexity-run-fraction`) is emitted tagged `YL:i:1` and counted
+  `--low-complexity-run-fraction`) is dropped, or with
+  `--drop-low-complexity false` emitted tagged `YL:i:1`, and counted
   (`low_complexity` and `low_complexity_by_base` in the metrics JSON,
   `low_complexity` in the per-barcode tables), with a warning above 5% of
   reads that are poly-G/N (all flagged reads for `illumina` without
-  `--trim-r2-polya`, where poly-A read-through is expected). `--drop-low-complexity` fails such reads
-  (reason `low_complexity`) instead. Normal reads are written exactly as
-  before. `sbxpress-probeset-align` copies `YL` into its BAM.
+  `--trim-r2-polya false`, where poly-A read-through is expected). Normal
+  reads are written exactly as before. `sbxpress-probeset-align` copies `YL` into its BAM.
 - `molecules` metrics gain an `artifacts` report: gene-assigned reads, how
   many are low-complexity (`YL:i:1`) or MAPQ < 60 without `mm:i:1`, and the
   genes where at least half of >= 100 reads are flagged; a listed gene with

@@ -8,11 +8,12 @@
 //! so one pass over its bases is the cheapest place to see this. minimap2
 //! masks low-complexity seeds internally but reports nothing per read.
 //!
-//! By default a flagged read is still emitted, with `YL:i:1` in its FASTQ
-//! comment (minimap2 `-y` copies it into the BAM), and counted, so a normal
-//! library's counts do not change and a bad one is visible in the metrics,
-//! the per-barcode table and `molecules`' per-gene artifact report.
-//! `--drop-low-complexity` sends flagged reads to the failed output instead.
+//! By default a flagged read is dropped (failure reason `low_complexity`)
+//! and counted: a dead read 2 is a library fault, not biology, and should
+//! not be rescued by trimming. `--drop-low-complexity false` emits it
+//! instead, with `YL:i:1` in its FASTQ comment (minimap2 `-y` copies it into
+//! the BAM), so `molecules`' per-gene artifact report can name the genes it
+//! lands on. Either way the metrics and per-barcode table count it.
 
 /// FASTQ comment / BAM tag marking a low-complexity cDNA read.
 pub const TAG: &[u8] = b"\tYL:i:1";
@@ -30,9 +31,11 @@ pub struct ComplexityCfg {
     #[arg(long, default_value_t = 0.5)]
     pub low_complexity_run_fraction: f64,
 
-    /// Drop low-complexity reads (failure reason `low_complexity`) instead
-    /// of emitting them tagged `YL:i:1`.
-    #[arg(long, default_value_t = false)]
+    /// Drop low-complexity reads (failure reason `low_complexity`). On by
+    /// default; `--drop-low-complexity false` emits them tagged `YL:i:1`
+    /// instead.
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set,
+          num_args = 0..=1, default_missing_value = "true")]
     pub drop_low_complexity: bool,
 }
 
@@ -41,7 +44,7 @@ impl Default for ComplexityCfg {
         Self {
             low_complexity_base_fraction: 0.8,
             low_complexity_run_fraction: 0.5,
-            drop_low_complexity: false,
+            drop_low_complexity: true,
         }
     }
 }
@@ -128,14 +131,21 @@ pub const WARN_FRACTION: f64 = 0.05;
 /// poly-A/T is expected wherever R2 read-through is not trimmed
 /// (`illumina` without `--trim-r2-polya`: DZEC04 flagged 4.6%, 90% A, with
 /// no fault), so it is warned on only then.
-pub fn warn_if_high(stage: &str, by_base: &ByBase, total: u64, g_and_n_only: bool) {
-    if let Some(text) = warning(stage, by_base, total, g_and_n_only) {
+/// `dropped` says which of the two the run did with them.
+pub fn warn_if_high(stage: &str, by_base: &ByBase, total: u64, g_and_n_only: bool, dropped: bool) {
+    if let Some(text) = warning(stage, by_base, total, g_and_n_only, dropped) {
         eprintln!("{text}");
     }
 }
 
 /// The text [`warn_if_high`] prints, if any.
-pub fn warning(stage: &str, by_base: &ByBase, total: u64, g_and_n_only: bool) -> Option<String> {
+pub fn warning(
+    stage: &str,
+    by_base: &ByBase,
+    total: u64,
+    g_and_n_only: bool,
+    dropped: bool,
+) -> Option<String> {
     let (flagged, what) = if g_and_n_only {
         (by_base.g_and_n(), "poly-G/N")
     } else {
@@ -145,14 +155,18 @@ pub fn warning(stage: &str, by_base: &ByBase, total: u64, g_and_n_only: bool) ->
         format!(
             "[{stage}] WARNING: {flagged} of {total} reads ({:.1}%) have {what} cDNA \
              (A {}, C {}, G {}, T {}, N {}; poly-G/N suggests a dead read 2, poly-A \
-             untrimmed read-through); check the library or sequencing run. These reads \
-             are tagged YL:i:1 (--drop-low-complexity removes them).",
+             untrimmed read-through); check the library or sequencing run. {}",
             100.0 * flagged as f64 / total as f64,
             by_base.0[0],
             by_base.0[1],
             by_base.0[2],
             by_base.0[3],
-            by_base.0[4]
+            by_base.0[4],
+            if dropped {
+                "These reads were dropped (failure reason low_complexity)."
+            } else {
+                "These reads are kept, tagged YL:i:1 (--drop-low-complexity false)."
+            }
         )
     })
 }
@@ -213,14 +227,16 @@ mod tests {
     fn warning_counts_poly_a_only_when_read_through_is_untrimmed() {
         // DZEC04 without --trim-r2-polya: ~4.6% flagged, mostly poly-A.
         let poly_a = ByBase([90, 0, 7, 3, 0]);
-        assert!(warning("t", &poly_a, 1000, false).is_some());
-        assert!(warning("t", &poly_a, 1000, true).is_none());
+        assert!(warning("t", &poly_a, 1000, false, true).is_some());
+        assert!(warning("t", &poly_a, 1000, true, true).is_none());
         // DZEC05: dead read 2, poly-G either way.
         let poly_g = ByBase([5, 0, 480, 5, 20]);
-        let text = warning("t", &poly_g, 1000, true).unwrap();
+        let text = warning("t", &poly_g, 1000, true, true).unwrap();
         assert!(text.contains("500 of 1000 reads (50.0%) have poly-G/N cDNA"));
-        assert!(warning("t", &poly_g, 1000, false).is_some());
-        assert!(warning("t", &ByBase::default(), 0, false).is_none());
+        assert!(text.contains("were dropped"));
+        let kept = warning("t", &poly_g, 1000, false, false).unwrap();
+        assert!(kept.contains("kept, tagged YL:i:1"));
+        assert!(warning("t", &ByBase::default(), 0, false, true).is_none());
     }
 
     #[test]

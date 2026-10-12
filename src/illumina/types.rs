@@ -104,15 +104,18 @@ pub struct Cli {
     #[arg(long, default_value_t = false)]
     pub trim_tso: bool,
 
-    /// Trim poly-A read-through in a non-merged R2.
-    #[arg(long, default_value_t = false)]
+    /// Trim poly-A read-through in a non-merged R2. On by default (3' GEX
+    /// and tag-seq both read into the tail); `--trim-r2-polya false` turns
+    /// it off.
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set,
+          num_args = 0..=1, default_missing_value = "true")]
     pub trim_r2_polya: bool,
 
     /// Shortest poly-A run in R2 that counts as tail read-through.
     #[arg(long, default_value_t = 12)]
     pub r2_polya_min_run: usize,
 
-    /// Low-complexity cDNA check (flag-and-count by default).
+    /// Low-complexity cDNA check (dropped by default).
     #[command(flatten)]
     pub complexity: crate::complexity::ComplexityCfg,
 }

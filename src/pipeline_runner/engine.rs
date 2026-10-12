@@ -266,12 +266,13 @@ pub fn run(cli: &Cli) -> Result<()> {
     };
     // SBX cDNA always starts after the dT run and ends at the adapter, so
     // leftover poly-A/T is not expected: warn on G/N only, as `illumina`
-    // does with --trim-r2-polya.
+    // does with --trim-r2-polya (its default).
     crate::complexity::warn_if_high(
         "sbxpress extract",
         &stats.low_complexity_by_base,
         stats.pairs_emitted + dropped,
         true,
+        cli.params.complexity.drop_low_complexity,
     );
     let metrics_path = cli.out_dir.join("metrics_summary.json");
     metrics.write_json(&metrics_path)?;

@@ -282,6 +282,12 @@ bad library, not biology, and should drop out (MAPQ rule, or
 `--drop-low-complexity`) rather than be rescued by trimming. Not done: UMI
 sanity (A.3).
 
+**Defaults changed (decided 2026-10-12).** Dropping is now the default
+(`--drop-low-complexity false` keeps and tags), and `illumina` trims R2
+poly-A read-through by default (`--trim-r2-polya false` turns it off): all
+current `illumina` inputs (CAT02 3' GEX, DZEC04/DZEC05 tag-seq) are 3'
+assays that read into the tail.
+
 **Layer B: Cell Ranger MAPQ rule with exonic rescue** (`annotate` → `molecules`).
 Agreed design (2026-10-09), replacing "MAPQ ≥ X" and the loose 0.3.5
 `--multimap-tags` rule.
