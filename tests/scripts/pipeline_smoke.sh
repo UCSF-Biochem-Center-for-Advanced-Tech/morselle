@@ -78,6 +78,11 @@ check sbx_flex_multi_spaces "$P" --analysis-mode flex "${COMMON[@]}" "${SBX[@]}"
 expect_call sbx_flex_multi_spaces "cells .*--tagseq-barcodes .*cells with spaces.txt"
 check illumina_gex "$P" --input-mode illumina "${COMMON[@]}" "${ILL[@]}" "${GEX[@]}"
 expect_call illumina_gex "sbxpress illumina --r1 .* --r2 "
+expect_call illumina_gex "minimap .*S1.tagged.R2.fastq.gz$"
+# Several lanes: illumina writes one shard per pair; all of them are mapped
+# (0.6.1 looked for a single file and failed).
+check illumina_gex_lanes "$P" --input-mode illumina "${COMMON[@]}" "${ILL[@]}" --r1 "$R/r1.fq.gz" --r2 "$R/r2.fq.gz" "${GEX[@]}"
+expect_call illumina_gex_lanes "minimap .*S1.tagged.R2.shard-001.fastq.gz .*S1.tagged.R2.shard-002.fastq.gz$"
 check illumina_flex "$P" --input-mode illumina --analysis-mode flex "${COMMON[@]}" "${ILL[@]}" "${FLEX[@]}"
 reject_call illumina_flex "molecules .*--flex"
 

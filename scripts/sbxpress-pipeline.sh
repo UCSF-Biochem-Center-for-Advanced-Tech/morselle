@@ -286,22 +286,39 @@ if [[ $INPUT_MODE == sbx ]]; then
     CDNA_FASTQS=("$EXTRACT_DIR/${SAMPLE}_S"*_R2_*.fastq.gz "$EXTRACT_DIR/${SAMPLE}_S"*_R2_*.fastq)
     shopt -u nullglob
 else
-    TAGGED_FASTQ="$EXTRACT_DIR/$SAMPLE.tagged.R2.fastq.gz"
-    if [[ ! -s "$TAGGED_FASTQ" ]]; then
+    # One input pair gives $SAMPLE.tagged.R2.fastq.gz; several (lanes) give
+    # $SAMPLE.tagged.R2.shard-NNN.fastq.gz, one per pair (sbxpress illumina
+    # shards its output by input). 0.6.1 and earlier expected the single file
+    # and failed on multi-lane input.
+    TAGGED_PREFIX="$EXTRACT_DIR/$SAMPLE.tagged.R2"
+    ILLUMINA_DONE="$EXTRACT_DIR/.$SAMPLE.illumina.done"
+    # A single finished file from an older run counts as done.
+    [[ ! -s "$TAGGED_PREFIX.fastq.gz" ]] || [[ -e "$ILLUMINA_DONE" ]] \
+        || [[ ${SBXPRESS_PIPELINE_DRY_RUN:-0} == 1 ]] || touch "$ILLUMINA_DONE"
+    if [[ ! -e "$ILLUMINA_DONE" ]]; then
         echo "[1/5] converting Illumina R1/R2 to tagged cDNA FASTQ"
         ILLUMINA_ARGS=()
         for i in "${!R1_FASTQS[@]}"; do ILLUMINA_ARGS+=(--r1 "${R1_FASTQS[$i]}" --r2 "${R2_FASTQS[$i]}"); done
-        # Write to a temporary name so an interrupted run is never mistaken
-        # for a finished one by the -s check above.
+        # Write into a scratch directory and move the shards out only once
+        # the conversion has finished, so an interrupted run is never
+        # mistaken for a finished one.
+        ILLUMINA_PARTIAL="$EXTRACT_DIR/.$SAMPLE.illumina.partial"
+        [[ ${SBXPRESS_PIPELINE_DRY_RUN:-0} == 1 ]] || { rm -rf "$ILLUMINA_PARTIAL"; mkdir -p "$ILLUMINA_PARTIAL"; }
         run "$LOG_DIR/illumina.log" sbxpress illumina "${ILLUMINA_ARGS[@]}" \
-            --whitelist "$WHITELIST" --output "$TAGGED_FASTQ.partial.fastq.gz" \
+            --whitelist "$WHITELIST" --output "$ILLUMINA_PARTIAL/$SAMPLE.tagged.R2.fastq.gz" \
             --metrics "$EXTRACT_DIR/$SAMPLE.illumina.metrics.json" --threads "$EXTRACT_THREADS" \
             ${BARCODE_METRICS[@]+"${BARCODE_METRICS[@]}"}
-        [[ ${SBXPRESS_PIPELINE_DRY_RUN:-0} == 1 ]] || mv "$TAGGED_FASTQ.partial.fastq.gz" "$TAGGED_FASTQ"
+        if [[ ${SBXPRESS_PIPELINE_DRY_RUN:-0} != 1 ]]; then
+            mv "$ILLUMINA_PARTIAL"/"$SAMPLE".tagged.R2*.fastq.gz "$EXTRACT_DIR"/
+            rmdir "$ILLUMINA_PARTIAL"
+            touch "$ILLUMINA_DONE"
+        fi
     else
-        echo "[1/5] Illumina conversion already complete; reusing $TAGGED_FASTQ"
+        echo "[1/5] Illumina conversion already complete; reusing $TAGGED_PREFIX*.fastq.gz"
     fi
-    CDNA_FASTQS=("$TAGGED_FASTQ")
+    shopt -s nullglob
+    CDNA_FASTQS=("$TAGGED_PREFIX".fastq.gz "$TAGGED_PREFIX".shard-*.fastq.gz)
+    shopt -u nullglob
 fi
 if [[ ${SBXPRESS_PIPELINE_DRY_RUN:-0} != 1 ]]; then
     (( ${#CDNA_FASTQS[@]} > 0 )) || die "no tagged cDNA FASTQs found for $SAMPLE in $EXTRACT_DIR"

@@ -58,6 +58,13 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `exonic_compatible`, and `molecules::MoleculeOptions` gains `min_mapq`;
   struct literals must set them.
 
+### Fixed
+- `sbxpress-pipeline.sh --input-mode illumina` with more than one `--r1`/
+  `--r2` pair (e.g. one per lane) failed after conversion: `illumina` writes
+  one `.shard-NNN` output per pair, and the script looked for a single
+  file. It now converts into a scratch directory, moves every shard out,
+  marks the stage done, and maps all shards. Found on CAT02 M2_GEX (9 pairs).
+
 ### Added
 - Low-complexity cDNA check at conversion (`illumina`, `extract`): a read
   where one base is >= 80% of the cDNA or the longest single-base run

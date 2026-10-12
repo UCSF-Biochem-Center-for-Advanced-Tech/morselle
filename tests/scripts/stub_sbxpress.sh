@@ -24,7 +24,13 @@ case "$sub" in
         out=$(value --out-dir -o); mkdir -p "$out"; echo '{}' > "$out/metrics_summary.json"
         ext=fastq.gz; for a in "${ARGS[@]}"; do [[ $a == --no-gzip ]] && ext=fastq; done
         for chunk in 001 002; do echo stub > "$out/${STUB_SAMPLE}_S1_L001_R2_${chunk}.$ext"; done ;;
-    illumina) echo stub > "$(value --output -o)" ;;
+    illumina)
+        # Like the real binary: one output per --r1/--r2 pair, sharded as
+        # <prefix>.shard-NNN.fastq.gz when there is more than one.
+        out=$(value --output -o); n=0
+        for a in "${ARGS[@]}"; do [[ $a == --r1 ]] && n=$((n + 1)); done
+        if (( n == 1 )); then echo stub > "$out"
+        else for ((i = 1; i <= n; i++)); do echo stub > "${out%.fastq.gz}.shard-$(printf %03d "$i").fastq.gz"; done; fi ;;
     minimap) echo "@HD	VN:1.6" ;;
     annotate) cat > /dev/null; echo "annotated" ;;
     probeset-align) echo stub > "$(value --output -o)" ;;
