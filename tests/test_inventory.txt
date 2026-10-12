@@ -155,6 +155,7 @@ src/lib.rs homopolymer::tests::finds_clean_run
 src/lib.rs homopolymer::tests::first_run_at_least_finds_leftmost_qualifying_run_not_the_longest
 src/lib.rs homopolymer::tests::first_run_at_least_returns_none_below_threshold
 src/lib.rs homopolymer::tests::first_run_at_least_tolerates_isolated_mismatch
+src/lib.rs homopolymer::tests::first_tail_run_needs_ninety_percent_base
 src/lib.rs homopolymer::tests::none_when_absent
 src/lib.rs homopolymer::tests::picks_a_and_t
 src/lib.rs homopolymer::tests::tolerates_isolated_mismatch

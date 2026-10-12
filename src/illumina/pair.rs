@@ -308,7 +308,7 @@ pub fn convert_pair_full(
                     // both mates; this is the same check for reads that never
                     // get that treatment.
                     if let Some(min_run) = r2_polya_min_run {
-                        if let Some(run) = homopolymer::first_run_at_least(&r2_seq, b'A', min_run) {
+                        if let Some(run) = homopolymer::first_tail_run(&r2_seq, b'A', min_run) {
                             metrics.r2_polya_bases_trimmed += (r2_seq.len() - run.start) as u64;
                             r2_trim_end = run.start;
                             if r2_trim_end < extract_cfg.min_cdna_len {

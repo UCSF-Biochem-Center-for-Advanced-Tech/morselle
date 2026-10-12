@@ -111,7 +111,8 @@ pub struct Cli {
           num_args = 0..=1, default_missing_value = "true")]
     pub trim_r2_polya: bool,
 
-    /// Shortest poly-A run in R2 that counts as tail read-through.
+    /// Shortest poly-A run in R2 that counts as tail read-through (at least
+    /// 90% A, isolated mismatches only).
     #[arg(long, default_value_t = 12)]
     pub r2_polya_min_run: usize,
 

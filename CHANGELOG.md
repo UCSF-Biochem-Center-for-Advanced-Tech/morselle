@@ -11,6 +11,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unmerged R2 by default (`--trim-r2-polya`; 3' GEX and tag-seq both read
   into the tail). `--trim-r2-polya false` restores the old behaviour. The
   bare flag still works.
+- **Counts change (fix):** the `--trim-r2-polya` tail must now be at least
+  `--r2-polya-min-run` bases and at least 90% A
+  (`homopolymer::first_tail_run`). The old rule tolerated a mismatch at
+  every other base and cut at A-rich transcript sequence: on DZEC04 (5 M
+  pairs, no `--overlap`) it discarded 123,568 counted reads (5.8%), 68% of
+  them aligned over all 150 bases at MAPQ 60, losing 37% of ALB's reads and
+  13-35% of several MT and ribosomal genes. With the fix, 8,831 counted
+  reads (0.4%) are discarded, and molecules counted go from 1,989,952
+  (trim off) to 2,004,230 (trim on, previously 1,809,922).
 - **Counts change:** low-complexity cDNA (below) is dropped by default at
   conversion (reason `low_complexity`): a dead read 2 is a library fault,
   not biology. `--drop-low-complexity false` keeps such reads, tagged

@@ -95,6 +95,46 @@ pub fn first_run_at_least(seq: &[u8], base: u8, min_len: usize) -> Option<Run> {
     None
 }
 
+/// Leftmost poly-A tail (read-through) of `base`: at least `min_len` long,
+/// at least 90% `base` (one mismatch per 10 bases), mismatches isolated.
+/// Starts and ends on `base`; extends as far as it stays at 90%.
+///
+/// Stricter than [`first_run_at_least`], whose every-other-base tolerance
+/// fires on A-rich transcript sequence. On DZEC04, `--trim-r2-polya` with
+/// that rule discarded 124 K counted reads (5.8%) that aligned across all
+/// 150 bases at MAPQ 60, cut at genomic runs such as ALB's
+/// `AGAATAAGAGAAAGAAAA` (67% A; 37% of ALB's reads). A real read-through
+/// tail is the ~30-base dT primer and passes easily.
+pub fn first_tail_run(seq: &[u8], base: u8, min_len: usize) -> Option<Run> {
+    let n = seq.len();
+    for start in 0..n {
+        if seq[start] != base {
+            continue;
+        }
+        let (mut mismatches, mut best_end) = (0usize, None);
+        for k in start..n {
+            if seq[k] != base {
+                if seq[k - 1] != base {
+                    break;
+                }
+                mismatches += 1;
+                continue;
+            }
+            let len = k - start + 1;
+            if len >= min_len && mismatches * 10 <= len {
+                best_end = Some(k);
+            }
+        }
+        if let Some(end) = best_end {
+            return Some(Run {
+                start,
+                len: end - start + 1,
+            });
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,5 +199,30 @@ mod tests {
         let r = first_run_at_least(s, b'A', 10).unwrap();
         assert_eq!(r.start, 2);
         assert_eq!(r.len, 11);
+    }
+
+    #[test]
+    fn first_tail_run_needs_ninety_percent_base() {
+        // DZEC04 transcript sequence that first_run_at_least cut at.
+        for genomic in [
+            &b"GCCTACCATGAGAATAAGAGAAAGAAAATGAAGATCAA"[..], // ALB
+            b"CCATAGTCTAATAGAAAACAACCGAAACCAAATAAT",        // MT-CO3
+            b"ACCATTGCTGAAGAGAGAGACAAAAGACTGGCGGCCA",       // RPS4X
+        ] {
+            assert!(first_run_at_least(genomic, b'A', 12).is_some());
+            assert_eq!(first_tail_run(genomic, b'A', 12), None);
+        }
+        // Read-through: cDNA, then the dT tail with one error, then UMI.
+        let tail = b"GATTACACCATGGCTTAAAAAAAAAAAAGAAAAAAAAAAAAAAACGTTAGC";
+        assert_eq!(
+            first_tail_run(tail, b'A', 12),
+            Some(Run { start: 16, len: 28 })
+        );
+        // An A-rich lead-in does not move the cut while it keeps 90%.
+        let lead = b"CCCCAGAAAAAAAAAAAAAAAAAAAAGG";
+        assert_eq!(first_tail_run(lead, b'A', 12).unwrap().start, 4);
+        // Exactly one mismatch in 10 is allowed; 2 in 12 is not.
+        assert!(first_tail_run(b"AAAAAGAAAA", b'A', 10).is_some());
+        assert!(first_tail_run(b"AAGAAAAGAAAA", b'A', 12).is_none());
     }
 }
