@@ -316,8 +316,11 @@ else
     else
         echo "[1/5] Illumina conversion already complete; reusing $TAGGED_PREFIX*.fastq.gz"
     fi
+    # nullglob drops only unmatched patterns, so test the single-file name.
+    CDNA_FASTQS=()
+    [[ ! -e "$TAGGED_PREFIX.fastq.gz" ]] || CDNA_FASTQS=("$TAGGED_PREFIX.fastq.gz")
     shopt -s nullglob
-    CDNA_FASTQS=("$TAGGED_PREFIX".fastq.gz "$TAGGED_PREFIX".shard-*.fastq.gz)
+    CDNA_FASTQS+=("$TAGGED_PREFIX".shard-*.fastq.gz)
     shopt -u nullglob
 fi
 if [[ ${SBXPRESS_PIPELINE_DRY_RUN:-0} != 1 ]]; then

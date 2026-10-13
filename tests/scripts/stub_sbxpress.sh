@@ -31,7 +31,13 @@ case "$sub" in
         for a in "${ARGS[@]}"; do [[ $a == --r1 ]] && n=$((n + 1)); done
         if (( n == 1 )); then echo stub > "$out"
         else for ((i = 1; i <= n; i++)); do echo stub > "${out%.fastq.gz}.shard-$(printf %03d "$i").fastq.gz"; done; fi ;;
-    minimap) echo "@HD	VN:1.6" ;;
+    minimap)
+        # Every FASTQ handed to minimap2 must exist (the multi-lane fix once
+        # passed a single-file name that was never written).
+        for a in "${ARGS[@]}"; do
+            [[ $a != *.fastq.gz && $a != *.fastq ]] || [[ -e $a ]] || { echo "stub: minimap input missing: $a" >&2; exit 2; }
+        done
+        echo "@HD	VN:1.6" ;;
     annotate) cat > /dev/null; echo "annotated" ;;
     probeset-align) echo stub > "$(value --output -o)" ;;
     molecules) echo stub > "$(value --output -o)" ;;
