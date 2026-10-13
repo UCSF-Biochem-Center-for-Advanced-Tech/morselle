@@ -288,6 +288,26 @@ poly-A read-through by default (`--trim-r2-polya false` turns it off): all
 current `illumina` inputs (CAT02 3' GEX, DZEC04/DZEC05 tag-seq) are 3'
 assays that read into the tail.
 
+**Release check (2026-10-12/13, not yet released).** The poly-A trim's run
+detector was too loose: it accepted a mismatch at every other base, so on
+DZEC04 it cut 5.8% of counted reads at A-rich exon sequence (ALB lost 37%).
+It now requires a run that is at least 90% A (81e4f53). Then
+`sbxpress-pipeline.sh` was run with 0.6.1 and with the 0.6.2 branch, at
+default settings, on four datasets
+(`sbxpress_validation/v0.6.2_release/report.md`):
+- DZEC05: LINC00486 drops from 542 K molecules to 1, and both conversion
+  and molecules warn.
+- DZEC04: +0.8% molecules, the same cells.
+- CAT02: -10.6% molecules, from the MAPQ rule; 25,809 cells called by both.
+- CAT06: identical in every count.
+
+The check found the pipeline script failing on Illumina input with more
+than one R1/R2 pair (f82de75, be2f3fb). Still open before release: the
+CAT02 matched-depth comparison (`sbxpress_validation/cat02_matched_depth`),
+with Cell Ranger on Illumina at 0.683 of reads and sbxpress on Illumina
+(0.683), SBX 3p (0.900) and SBX 5p (full depth). Then the version bump
+and tag. Follow-up: TSO trimming (FUTURE_ROADMAP.md Priority 5).
+
 **Layer B: Cell Ranger MAPQ rule with exonic rescue** (`annotate` → `molecules`).
 Agreed design (2026-10-09), replacing "MAPQ ≥ X" and the loose 0.3.5
 `--multimap-tags` rule.
