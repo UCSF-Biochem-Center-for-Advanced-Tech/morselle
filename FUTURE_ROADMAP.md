@@ -111,14 +111,28 @@ flowchart TD
   an unmapped short read) rather than misplacement. The TSO is present only
   on fragments that reach the transcript 5' end, so it is likely more common
   in short fragments and in the SBX 5p library.
+- **Design notes** (user review, 2026-10-13):
+  1. In 3' expression the TSO is at the far end of the molecule from the
+     CB/UMI (and dT). For Illumina, that is where read 2 starts: on a
+     fragment reaching the transcript 5' end, R2 begins in the TSO. Finding
+     it does not depend on merging mates, so the current restriction of
+     `illumina --trim-tso` to `--overlap` merged pairs has no structural
+     reason; unmerged R2 should be checked too (5' end of R2).
+  2. In 5' expression the layout is reversed: the TSO sits next to the
+     CB/UMI, where 3' chemistry has the dT/poly-T, and the poly-A is at the
+     far end. Any TSO or poly-A/T detection should therefore handle both
+     sequences in either position (CB-adjacent or far end), chosen by
+     chemistry, rather than hard-coding the 3' layout.
 - **Proposed Work**:
   1. Run `sbxpress audit` on the CAT02 matched-depth annotated BAMs
      (`sbxpress_validation/cat02_matched_depth`: Illumina, SBX 3p, SBX 5p),
      which reports TSO in 5'/3' soft clips as a share of mapped reads.
   2. On a subset of each library, compare with and without TSO trimming
-     (`extract --trim-tso`; for Illumina, unmerged-R2 TSO trimming, which
-     needs a code change) on eligible reads, molecules, cells and per-gene
-     counts.
-  3. Adopt as a default only if the gain is measurable and nothing is lost.
+     (`extract --trim-tso`; for Illumina, TSO trimming at the start of
+     unmerged R2, which needs a code change per design note 1) on eligible
+     reads, molecules, cells and per-gene counts.
+  3. Build the detector for both layouts (design note 2) so 5' expression
+     uses the same code with the TSO and dT/poly-A roles swapped.
+  4. Adopt as a default only if the gain is measurable and nothing is lost.
 - **Expected Impact**: Decides whether TSO trimming should be on by default
   for each input mode, with data behind it.
