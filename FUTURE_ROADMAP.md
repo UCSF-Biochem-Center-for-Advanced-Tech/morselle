@@ -96,3 +96,29 @@ flowchart TD
   2. Maintain automated profiling scripts wrapping `cargo bench` and CPU/memory instrumentation (`samply`, `perf`).
 - **Expected Impact**: Catches performance regressions in hot-path sequence parsing and alignment prior to deployment on production HPC clusters.
 
+
+### Priority 5: Evaluate TSO Trimming (follow-up raised 2026-10-13)
+
+- **Context**: No path trims the template-switch oligo by default.
+  `sbxpress extract --trim-tso` is off ("enabling it changes emitted cDNA,
+  so measure the delta before adopting"). `sbxpress illumina --trim-tso`
+  acts only on merged pairs (`--overlap`), and `sbxpress-pipeline.sh` passes
+  neither flag, so unmerged Illumina R2 is never TSO-trimmed. Poly-A/T is
+  already handled: `extract` keeps only the cDNA between the dT run and the
+  adapter, and `illumina` trims R2 poly-A read-through by default (90%-A
+  tail, 0.6.2). minimap2 soft-clips an untrimmed TSO (~30 nt, non-genomic,
+  ending GGG), so the expected cost is a shorter aligned span (lower MAPQ or
+  an unmapped short read) rather than misplacement. The TSO is present only
+  on fragments that reach the transcript 5' end, so it is likely more common
+  in short fragments and in the SBX 5p library.
+- **Proposed Work**:
+  1. Run `sbxpress audit` on the CAT02 matched-depth annotated BAMs
+     (`sbxpress_validation/cat02_matched_depth`: Illumina, SBX 3p, SBX 5p),
+     which reports TSO in 5'/3' soft clips as a share of mapped reads.
+  2. On a subset of each library, compare with and without TSO trimming
+     (`extract --trim-tso`; for Illumina, unmerged-R2 TSO trimming, which
+     needs a code change) on eligible reads, molecules, cells and per-gene
+     counts.
+  3. Adopt as a default only if the gain is measurable and nothing is lost.
+- **Expected Impact**: Decides whether TSO trimming should be on by default
+  for each input mode, with data behind it.
