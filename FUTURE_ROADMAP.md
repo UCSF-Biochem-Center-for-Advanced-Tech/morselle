@@ -136,3 +136,42 @@ flowchart TD
   4. Adopt as a default only if the gain is measurable and nothing is lost.
 - **Expected Impact**: Decides whether TSO trimming should be on by default
   for each input mode, with data behind it.
+
+### Priority 6: Genes Undercounted vs Cell Ranger by Annotation and X/Y Homology (raised 2026-10-14)
+
+- **Context**: In the CAT02 M2_GEX matched-depth Illumina comparison
+  (`sbxpress_validation/cat02_matched_depth/report.md`), sbxpress with
+  minimap2 `-x splice:sr -m 20 -s 30` reached 79% of Cell Ranger's UMIs in
+  cells, with per-gene r 0.977. A few genes stay far below Cell Ranger at
+  every mapping and MAPQ setting tried, so the cause looks like annotation
+  or the X/Y reference rather than mapping. UMI totals below are over cells
+  both runs call (Cell Ranger vs sbxpress):
+  - ANKUB1: 19,359 vs 119. The GENCODE v44 *basic* GTF used by sbxpress has
+    2 of the 9 transcripts in Cell Ranger's 2024-A GTF. Overall, basic has
+    117,747 transcripts vs 226,005, so reads in exons missing from basic fall
+    outside the gene or become intergenic.
+  - IL3RA: 4,439 vs 105. It sits in the X/Y pseudoautosomal region (PAR1).
+    If both chrX and chrY PAR copies are present, reads align equally well
+    to both, get MAPQ 0, and the MAPQ >= 60 rule drops them.
+  - PCDH11X: 66,291 vs 10,759. It has a near-identical chrY copy
+    (PCDH11Y, X-transposed region), so it is likely the same low-MAPQ effect.
+  - ENSG00000289474 (a 116-base lncRNA inside KIF5C): Cell Ranger gives it
+    about 100 K UMIs where sbxpress sees about 3.7 K reads. This may be a
+    Cell Ranger placement artifact rather than an sbxpress loss; check
+    before "fixing".
+- **Proposed Work**:
+  1. Re-annotate the existing Illumina BAM with Cell Ranger's 2024-A
+     `genes.gtf` (or full GENCODE v44 with the same biotype filters) and
+     measure how much of the gap closes, especially ANKUB1. Decide whether
+     the documented reference should move off the *basic* GTF.
+  2. Check how the reference handles chrY PAR. If both copies are present,
+     either mask the chrY PARs in the minimap2 index (as is common for
+     RNA-seq references) or treat PAR multi-mapping X/Y pairs as one locus.
+     Confirm what Cell Ranger 2024-A does (the earlier "chrY PAR masking for
+     the CAT02 Cell Ranger comparison" item).
+  3. For X/Y homolog pairs outside the PAR (PCDH11X/Y), measure how many
+     reads are MAPQ 0 between exactly those two genes, and consider an
+     `annotate` rescue like `mm:i:1` when all hits fall on one gene pair.
+- **Expected Impact**: Closes a gene-specific part of the Illumina gap to
+  Cell Ranger and removes systematic undercounting of sex-chromosome
+  homologs, which matters for any sex-aware analysis.
