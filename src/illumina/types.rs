@@ -100,7 +100,9 @@ pub struct Cli {
     #[arg(long)]
     pub failed_output: Option<PathBuf>,
 
-    /// Trim the template-switch oligo from merged fragments.
+    /// Trim the template-switch oligo: from merged fragments, and from the
+    /// start of a non-merged R2 (3' GEX: R2 starts in the TSO on fragments
+    /// that reach the transcript's 5' end).
     #[arg(long, default_value_t = false)]
     pub trim_tso: bool,
 
@@ -160,6 +162,13 @@ pub struct Metrics {
     /// `r2_polya_short` in `failed_by_reason`).
     pub r2_polya_discarded: u64,
     pub r2_polya_bases_trimmed: u64,
+    /// Non-merged R2 reads that started with the TSO (whole or a suffix of at
+    /// least 12 bases) and had it trimmed (needs `--trim-tso`).
+    pub r2_tso_trimmed: u64,
+    /// Of those, the cDNA left after the TSO was below `--min-cdna-len`, so
+    /// the pair was discarded (`r2_tso_short` in `failed_by_reason`).
+    pub r2_tso_discarded: u64,
+    pub r2_tso_bases_trimmed: u64,
     /// Thresholds used for the low-complexity check.
     pub low_complexity_base_fraction: f64,
     pub low_complexity_run_fraction: f64,
@@ -181,7 +190,7 @@ pub struct Metrics {
 
 #[derive(Debug, Default)]
 pub struct PairMetrics {
-    pub per_barcode: BarcodeTable<12>,
+    pub per_barcode: BarcodeTable<13>,
     pub records_read: u64,
     pub records_emitted: u64,
     pub barcode_exact: u64,
@@ -200,6 +209,9 @@ pub struct PairMetrics {
     pub r2_polya_trimmed: u64,
     pub r2_polya_discarded: u64,
     pub r2_polya_bases_trimmed: u64,
+    pub r2_tso_trimmed: u64,
+    pub r2_tso_discarded: u64,
+    pub r2_tso_bases_trimmed: u64,
     pub low_complexity: u64,
     pub low_complexity_by_base: crate::complexity::ByBase,
     pub records_failed: u64,

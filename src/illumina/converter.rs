@@ -130,7 +130,7 @@ pub fn run(cli: Cli) -> Result<()> {
             .collect(),
         ..Metrics::default()
     };
-    let mut per_barcode = crate::barcode_metrics::BarcodeTable::<12>::new(cli.barcode_metrics);
+    let mut per_barcode = crate::barcode_metrics::BarcodeTable::<13>::new(cli.barcode_metrics);
     let workers = if cli.threads == 0 {
         cli.r1.len()
     } else {
@@ -211,6 +211,9 @@ pub fn run(cli: Cli) -> Result<()> {
         metrics.r2_polya_trimmed += value.r2_polya_trimmed;
         metrics.r2_polya_discarded += value.r2_polya_discarded;
         metrics.r2_polya_bases_trimmed += value.r2_polya_bases_trimmed;
+        metrics.r2_tso_trimmed += value.r2_tso_trimmed;
+        metrics.r2_tso_discarded += value.r2_tso_discarded;
+        metrics.r2_tso_bases_trimmed += value.r2_tso_bases_trimmed;
         metrics.low_complexity += value.low_complexity;
         metrics
             .low_complexity_by_base
@@ -243,6 +246,7 @@ pub fn run(cli: Cli) -> Result<()> {
             "failed_cb_unmatched",
             "low_complexity",
             "failed_low_complexity",
+            "failed_r2_tso_short",
         ],
     )?;
     eprintln!(
@@ -339,6 +343,12 @@ pub fn run(cli: Cli) -> Result<()> {
                 }
             );
         }
+    }
+    if cli_trim_tso {
+        eprintln!(
+            "[sbxpress illumina] r2 TSO trim: trimmed={} discarded={} bases_trimmed={}",
+            metrics.r2_tso_trimmed, metrics.r2_tso_discarded, metrics.r2_tso_bases_trimmed,
+        );
     }
     if cli.trim_r2_polya {
         eprintln!(

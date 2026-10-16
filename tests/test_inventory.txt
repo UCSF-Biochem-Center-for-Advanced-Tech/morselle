@@ -162,6 +162,10 @@ src/lib.rs homopolymer::tests::tolerates_isolated_mismatch
 src/lib.rs illumina::complexity_tests::drop_low_complexity_fails_the_pair_with_its_reason
 src/lib.rs illumina::complexity_tests::low_complexity_read_is_tagged_and_counted_when_kept
 src/lib.rs illumina::complexity_tests::poly_a_trim_and_low_complexity_drop_are_on_by_default
+src/lib.rs illumina::r2_trim_tests::trim_r2_polya_discards_when_cdna_left_is_too_short
+src/lib.rs illumina::r2_trim_tests::trim_r2_polya_trims_readthrough_when_cdna_survives_min_len
+src/lib.rs illumina::r2_trim_tests::trim_tso_discards_when_cdna_left_is_too_short
+src/lib.rs illumina::r2_trim_tests::trim_tso_trims_the_start_of_a_non_merged_r2
 src/lib.rs illumina::tests::a_non_overlapping_pair_falls_back_to_the_standard_path
 src/lib.rs illumina::tests::both_paths_emit_the_same_orientation
 src/lib.rs illumina::tests::converts_exact_and_hamming1_and_gates_failure
@@ -170,8 +174,11 @@ src/lib.rs illumina::tests::failed_output_accounts_for_every_input_read
 src/lib.rs illumina::tests::failed_reads_are_emitted_verbatim
 src/lib.rs illumina::tests::normalizes_common_mate_suffixes
 src/lib.rs illumina::tests::overlap_merges_and_emits_the_full_cdna_with_a_yc_tag
-src/lib.rs illumina::tests::trim_r2_polya_discards_when_cdna_left_is_too_short
-src/lib.rs illumina::tests::trim_r2_polya_trims_readthrough_when_cdna_survives_min_len
+src/lib.rs illumina::tso::tests::finds_a_tso_suffix
+src/lib.rs illumina::tso::tests::finds_the_whole_tso
+src/lib.rs illumina::tso::tests::ignores_short_suffixes_and_plain_cdna
+src/lib.rs illumina::tso::tests::tolerates_one_mismatch_per_ten_bases
+src/lib.rs illumina::tso::tests::tso_later_in_the_read_is_not_a_prefix
 src/lib.rs io::tests::gzip_level_writes_valid_gzip_with_gz_extension
 src/lib.rs io::tests::no_gzip_writes_plain_readable_fastq_with_plain_extension
 src/lib.rs io::tests::shard_writer_no_gzip_round_trips

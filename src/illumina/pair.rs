@@ -175,6 +175,7 @@ pub fn convert_pair_full(
                             "no_cdna" => 5,
                             "short_r1" => 6,
                             "r2_polya_short" => 7,
+                            "r2_tso_short" => 12,
                             "cb_invalid" => 8,
                             "cb_unmatched" => 9,
                             "low_complexity" => 11,
@@ -225,8 +226,10 @@ pub fn convert_pair_full(
                 let mut merged_seq: Vec<u8> = Vec::new();
                 let mut merged_qual: Vec<u8> = Vec::new();
                 let mut merged_tag: Option<YcTag> = None;
-                // Non-merged path only: end of the emitted R2 window, trimmed
-                // back from r2_seq.len() when --trim-r2-polya finds read-through.
+                // Non-merged path only: the emitted R2 window. The start moves
+                // past a leading TSO with --trim-tso; the end is trimmed back
+                // from r2_seq.len() when --trim-r2-polya finds read-through.
+                let mut r2_trim_start = 0;
                 let mut r2_trim_end = r2_seq.len();
 
                 if let Some(m) = &merged {
@@ -307,6 +310,15 @@ pub fn convert_pair_full(
                     // --overlap catches this by reconstructing the fragment from
                     // both mates; this is the same check for reads that never
                     // get that treatment.
+                    // A fragment that reached the transcript's 5' end starts
+                    // R2 in the TSO (see super::tso).
+                    if extract_cfg.trim_tso {
+                        if let Some(len) = super::tso::r2_tso_prefix(&r2_seq) {
+                            r2_trim_start = len;
+                            metrics.r2_tso_trimmed += 1;
+                            metrics.r2_tso_bases_trimmed += len as u64;
+                        }
+                    }
                     if let Some(min_run) = r2_polya_min_run {
                         if let Some(run) = homopolymer::first_tail_run(&r2_seq, b'A', min_run) {
                             metrics.r2_polya_bases_trimmed += (r2_seq.len() - run.start) as u64;
@@ -318,6 +330,13 @@ pub fn convert_pair_full(
                             }
                             metrics.r2_polya_trimmed += 1;
                         }
+                    }
+                    if r2_trim_start > 0
+                        && r2_trim_end.saturating_sub(r2_trim_start) < extract_cfg.min_cdna_len
+                    {
+                        metrics.r2_tso_discarded += 1;
+                        barcode_row = UNRESOLVED_BARCODE;
+                        fail_pair!("r2_tso_short");
                     }
                 }
 
@@ -338,8 +357,8 @@ pub fn convert_pair_full(
                         &r1_seq[CB_LEN..CB_LEN + UMI_LEN],
                         &r1_qual[..CB_LEN],
                         &r1_qual[CB_LEN..CB_LEN + UMI_LEN],
-                        &r2_seq[..r2_trim_end],
-                        &r2_qual[..r2_trim_end],
+                        &r2_seq[r2_trim_start..r2_trim_end],
+                        &r2_qual[r2_trim_start..r2_trim_end],
                     ),
                 };
 

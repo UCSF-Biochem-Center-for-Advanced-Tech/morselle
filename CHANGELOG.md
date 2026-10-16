@@ -6,6 +6,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `sbxpress illumina --trim-tso` now also trims the template-switch oligo
+  from the start of a non-merged R2 (before, it acted only on `--overlap`
+  merged fragments, so unmerged R2 was never trimmed). In 3' GEX a fragment
+  that reached the transcript's 5' end starts R2 in the TSO: 8.5% of 1 M raw
+  CAT02 M2_GEX R2 reads, 75% of those with all 30 bases and the rest with a
+  suffix. `illumina::tso::r2_tso_prefix` finds the whole TSO or a suffix of
+  at least 12 bases (one mismatch per 10 bases). Still off by default.
+- `illumina` metrics gain `r2_tso_trimmed`, `r2_tso_discarded` and
+  `r2_tso_bases_trimmed`; a pair whose cDNA after the TSO is below
+  `--min-cdna-len` fails as `r2_tso_short` (new per-barcode column
+  `failed_r2_tso_short`). `illumina::Metrics` and `illumina::PairMetrics`
+  gain the fields; struct literals must set them.
+
 ## [0.6.2] — 2026-10-16
 
 ### Changed

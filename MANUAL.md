@@ -34,7 +34,7 @@ reproduces the corresponding run-wide JSON counter.
 
 | Stage | Count columns |
 |---|---|
-| `illumina` | `reads`, `barcode_exact`, `barcode_corrected`, `emitted`, `failed_merged_too_short`, `failed_no_cdna`, `failed_short_r1`, `failed_r2_polya_short`, `failed_cb_invalid`, `failed_cb_unmatched`, `low_complexity`, `failed_low_complexity` |
+| `illumina` | `reads`, `barcode_exact`, `barcode_corrected`, `emitted`, `failed_merged_too_short`, `failed_no_cdna`, `failed_short_r1`, `failed_r2_polya_short`, `failed_cb_invalid`, `failed_cb_unmatched`, `low_complexity`, `failed_low_complexity`, `failed_r2_tso_short` |
 | `extract` | `reads`, `cb_on_whitelist`, `cb_within1`, `emitted`, `class_full`, `class_partial`, `class_unparseable`, `pb_located`, `pb_hit`, `low_complexity` |
 | `annotate` | `records`, `primary`, `unmapped`, `exonic`, `intronic`, `intergenic`, `antisense`, `gene_assigned`, `unique_gene`, `multi_gene`, `rescued`, `end_overhang` |
 | `molecules` | `eligible_reads`, `raw_cell_gene_umis`, `molecules_counted`, `collision_groups`, `representatives_tagged`, `rescued_reads`, `low_mapq_reads`, `multimapper_reads` |
