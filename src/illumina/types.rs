@@ -102,7 +102,9 @@ pub struct Cli {
 
     /// Trim the template-switch oligo: from merged fragments, and from the
     /// start of a non-merged R2 (3' GEX: R2 starts in the TSO on fragments
-    /// that reach the transcript's 5' end).
+    /// that reach the transcript's 5' end). Off by default: minimap2 already
+    /// soft-clips the TSO, and on CAT02 trimming it lowered MAPQ and cost
+    /// 0.6% of countable reads (CHANGELOG 0.6.3).
     #[arg(long, default_value_t = false)]
     pub trim_tso: bool,
 

@@ -6,6 +6,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.3] — 2026-10-16
+
 ### Added
 - `sbxpress illumina --trim-tso` now also trims the template-switch oligo
   from the start of a non-merged R2 (before, it acted only on `--overlap`
@@ -13,7 +15,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   that reached the transcript's 5' end starts R2 in the TSO: 8.5% of 1 M raw
   CAT02 M2_GEX R2 reads, 75% of those with all 30 bases and the rest with a
   suffix. `illumina::tso::r2_tso_prefix` finds the whole TSO or a suffix of
-  at least 12 bases (one mismatch per 10 bases). Still off by default.
+  at least 12 bases (one mismatch per 10 bases). Still off by default,
+  and measured not worth turning on: on 2 M CAT02 M2_GEX pairs mapped with
+  the 0.6.2 preset it trimmed 10.7% of emitted reads and **lowered**
+  countable reads by 0.59% (739,622 -> 735,277). minimap2 already
+  soft-clips the TSO (median aligned length 60 bases with or without it),
+  and without it the same alignments get lower MAPQ (trimmed reads at
+  MAPQ 60: 52,392 -> 38,985; 4,582 of the 5,775 lost reads stay at the same
+  locus). SBX `extract --trim-tso` trimmed 4.5% (3') and 3.2% (5') of
+  reads with no change in countable reads (+/- 0.01%). The `r2_tso_*`
+  counters remain useful as a TSO-rate QC metric.
 - `illumina` metrics gain `r2_tso_trimmed`, `r2_tso_discarded` and
   `r2_tso_bases_trimmed`; a pair whose cDNA after the TSO is below
   `--min-cdna-len` fails as `r2_tso_short` (new per-barcode column

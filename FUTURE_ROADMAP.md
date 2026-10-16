@@ -99,6 +99,17 @@ flowchart TD
 
 ### Priority 5: Evaluate TSO Trimming (follow-up raised 2026-10-13)
 
+- **Status (2026-10-16, 0.6.3): steps 1-2 done; do not adopt.** The audit
+  (`cat02_matched_depth/tso_audit`) found the TSO at the read's 5' end in
+  9.7% (Illumina), 8.0% (SBX 3') and 5.6% (SBX 5') of mapped reads, always
+  soft-clipped. 0.6.3 adds `illumina --trim-tso` for unmerged R2 (off by
+  default). On a 2 M-read subset per arm (`cat02_matched_depth/
+  tso_trim_test`) trimming cost Illumina 0.59% of countable reads (same
+  alignments, lower MAPQ) and changed nothing for SBX. Step 3 (an
+  indel-tolerant detector for both layouts) has no payoff for counting;
+  revisit only if a consumer needs TSO-free sequence (e.g. 5' end
+  analysis).
+
 - **Context**: No path trims the template-switch oligo by default.
   `sbxpress extract --trim-tso` is off ("enabling it changes emitted cDNA,
   so measure the delta before adopting"). `sbxpress illumina --trim-tso`
