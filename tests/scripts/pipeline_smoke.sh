@@ -43,6 +43,8 @@ reject_call() { ! grep -qE -- "$2" "$WORK/$1.calls" || { echo "FAIL $1: unexpect
 P="$REPO/scripts/sbxpress-pipeline.sh"
 check sbx_gex "$P" "${COMMON[@]}" "${SBX[@]}" "${GEX[@]}" --audit --expect-cells 500
 expect_call sbx_gex "sbxpress extract .*--lenient --minimap2"
+# The validated mapping preset (CHANGELOG 0.6.2), whatever the minimap2 version.
+expect_call sbx_gex "sbxpress minimap -a -x splice -m 20 -s 30 --junc-bed "
 expect_call sbx_gex "sbxpress annotate - .*--unordered.*--three-prime"
 expect_call sbx_gex "sbxpress cells .*--expect-cells 500"
 reject_call sbx_gex "molecules .*--tagseq"
@@ -118,4 +120,5 @@ fi
 echo "ok   rejects multiplexed Illumina Flex"
 
 check gex_script "$REPO/scripts/sbxpress-gex-pipeline.sh" "${COMMON[@]}" "${SBX[@]}" "${GEX[@]}" --audit
+expect_call gex_script "sbxpress minimap -a -x splice -m 20 -s 30 --junc-bed "
 echo "all pipeline smoke tests passed"

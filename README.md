@@ -414,7 +414,7 @@ sbxpress illumina \
   --output sample.illumina.minimap.fastq.gz \
   --threads 2 --split 4
 
-sbxpress minimap -a -x splice:sr --secondary=no -y reference.mmi \
+sbxpress minimap -a -x splice -m 20 -s 30 --secondary=no -y reference.mmi \
   sample.illumina.minimap.shard-*.fastq.gz \
   | sbxpress annotate - --gtf genes.gtf --output -
 ```

@@ -6,7 +6,24 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.2] — 2026-10-16
+
 ### Changed
+- **Counts change:** `sbxpress-pipeline.sh` and `sbxpress-gex-pipeline.sh`
+  map with `minimap2 -x splice -m 20 -s 30` instead of `-x splice:sr`.
+  minimap2 2.28 accepts `-x splice:sr` but runs the long-read `splice`
+  preset (2.29 added a real short-read preset; 2.30's `-x splice` gives the
+  same output as 2.28's `-x splice:sr`), so every earlier run and
+  validation used `splice` scoring. Naming it keeps the mapping the same on
+  any minimap2 version. Under it, 90-base Illumina R2 often fell below the
+  minimum chain and alignment scores (19.5% unmapped); `-m 20 -s 30` lowers
+  them. CAT02 M2_GEX at matched depth (Cell Ranger Illumina 190.9 M UMIs in
+  cells): Illumina 122.8 M -> 151.4 M UMIs in cells (64% -> 79% of Cell
+  Ranger; per-cell r 0.997), SBX 3' 187.3 M -> 190.8 M, SBX 5' 185.9 M ->
+  193.2 M (Cell Ranger on the same SBX 5' reads: 192.3 M). Reads already
+  countable keep their gene, and the repeat-artifact genes do not rise.
+  `-f 0.00002` (keep more repeat seeds) added little for 4.3x the CPU and
+  is not used.
 - **Counts change:** `sbxpress illumina` now trims poly-A read-through in
   unmerged R2 by default (`--trim-r2-polya`; 3' GEX and tag-seq both read
   into the tail). `--trim-r2-polya false` restores the old behaviour. The

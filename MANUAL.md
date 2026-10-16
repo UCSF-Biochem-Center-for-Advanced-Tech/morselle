@@ -267,10 +267,13 @@ sbxpress illumina \
 ```
 
 Run the same mapping-to-cells path. The standard fast mode suppresses secondary
-alignments and allows unordered annotation:
+alignments and allows unordered annotation. `-x splice -m 20 -s 30` is the
+pipeline's mapping preset: minimap2 2.28 runs `-x splice:sr` as `-x splice`
+anyway, and the lower chain and alignment score minimums keep short reads that
+would otherwise go unmapped (CHANGELOG 0.6.2):
 
 ```bash
-sbxpress minimap -a -x splice:sr \
+sbxpress minimap -a -x splice -m 20 -s 30 \
   --junc-bed "$REF/gencode.v44.primary_assembly.junctions.bed" \
   --secondary=no -y -t 32 \
   "$REF/GRCh38.primary_assembly.gencode-v44.splice-sr.mmi" \

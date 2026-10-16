@@ -110,7 +110,7 @@ The annotator also supports streaming BAM/SAM input and BAM output with `-`. Thi
 allows annotation before the only coordinate sort:
 
 ```bash
-sbxpress minimap -a -x splice:sr --secondary=no -y reference.mmi reads.fastq.gz \
+sbxpress minimap -a -x splice -m 20 -s 30 --secondary=no -y reference.mmi reads.fastq.gz \
 | sbxpress annotate - --gtf genes.gtf.gz --output - \
     --metrics sample.annotation.metrics.json --three-prime \
 | samtools sort -@ 8 -o sample.annotated.coordinate.bam -

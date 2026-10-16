@@ -250,6 +250,14 @@ MULTIPLEXED_FLEX=0
 [[ $ANALYSIS_MODE == flex && -n $PROBE_SAMPLE_SHEET ]] && MULTIPLEXED_FLEX=1
 
 source "$SCRIPT_DIR/pipeline_state.sh"
+# Mapping preset. minimap2 2.28 accepts `-x splice:sr` but runs the long-read
+# `splice` preset (2.29 added a real short-read one), so every validated run
+# used `splice` scoring; naming it gives the same mapping on any version
+# (2.30's `-x splice` matches 2.28's `-x splice:sr`). -m 20 -s 30 lower the
+# minimum chain and alignment scores so short reads are not dropped: on
+# CAT02 M2_GEX at matched depth, +16% countable Illumina reads and +5% SBX
+# (CHANGELOG 0.6.2). Adding -f 0.00002 gained little for 4.3x the CPU.
+MAP_PRESET=(-x splice -m 20 -s 30)
 # Extraction is shared across samples; downstream analysis is sample-specific.
 bind_pipeline_state "$EXTRACT_DIR" "$INPUT_MODE" "$ANALYSIS_MODE" "$WHITELIST" "$SAMPLE_SHEET" \
     "$PROBE_BARCODE_WL" "$SPLIT" "$EXTRACT_NO_GZIP" \
@@ -369,10 +377,10 @@ if [[ ! -s "$ANNOTATED_BAM.bai" ]]; then
         fi
         (( THREE_PRIME == 0 )) || ANNOTATE_ARGS+=(--three-prime)
         if [[ ${SBXPRESS_PIPELINE_DRY_RUN:-0} == 1 ]]; then
-            echo "+ sbxpress minimap -a -x splice:sr --junc-bed $JUNCTIONS ${MAP_MULTIMAP_ARGS[*]} -y -t $MAP_THREADS $MMI ${CDNA_FASTQS[*]} | sbxpress annotate - ${ANNOTATE_ARGS[*]} | samtools sort ... -o $ANNOTATED_BAM"
+            echo "+ sbxpress minimap -a ${MAP_PRESET[*]} --junc-bed $JUNCTIONS ${MAP_MULTIMAP_ARGS[*]} -y -t $MAP_THREADS $MMI ${CDNA_FASTQS[*]} | sbxpress annotate - ${ANNOTATE_ARGS[*]} | samtools sort ... -o $ANNOTATED_BAM"
         else
             sbxpress minimap \
-                -a -x splice:sr --junc-bed "$JUNCTIONS" "${MAP_MULTIMAP_ARGS[@]}" -y \
+                -a "${MAP_PRESET[@]}" --junc-bed "$JUNCTIONS" "${MAP_MULTIMAP_ARGS[@]}" -y \
                 -t "$MAP_THREADS" "$MMI" "${CDNA_FASTQS[@]}" \
                 2> "$LOG_DIR/minimap2.log" \
             | sbxpress annotate - "${ANNOTATE_ARGS[@]}" \
