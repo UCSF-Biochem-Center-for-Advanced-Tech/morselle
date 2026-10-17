@@ -171,6 +171,17 @@ flowchart TD
     about 100 K UMIs where sbxpress sees about 3.7 K reads. This may be a
     Cell Ranger placement artifact rather than an sbxpress loss; check
     before "fixing".
+- **SBX 5' evidence (2026-10-16, 0.6.2 preset)**: on the same SBX 5'
+  reads, sbxpress and Cell Ranger agree on totals (193.2 M vs 192.3 M UMIs
+  in cells; median cell ratio 0.99, per-cell r 0.9997), so these genes are
+  now the largest remaining sbxpress-vs-Cell Ranger difference on SBX 5'
+  (`cat02_matched_depth/report_ms.md`; sbxpress vs Cell Ranger UMIs on
+  shared cells): ANKUB1 164 vs 19,662; IL3RA 40 vs 3,453; ENSG00000291181
+  25 vs 30,480; repeat lncRNAs ENSG00000280441 134 vs 18,738 and
+  ENSG00000278996 45 vs 10,123; PRB2 21 vs 1,890; TP53TG5 83 vs 6,831.
+  Median genes per cell is also lower (2,136 vs 2,307) at equal UMIs. The
+  same genes lead the Illumina list, so the cause is shared (annotation,
+  X/Y, MAPQ >= 60 on repeats) and not SBX-specific.
 - **Proposed Work**:
   1. Re-annotate the existing Illumina BAM with Cell Ranger's 2024-A
      `genes.gtf` (or full GENCODE v44 with the same biotype filters) and
@@ -214,7 +225,16 @@ flowchart TD
      reporting: compare call rates on Cell Ranger's cell set.
   3. Measure `--umi-indel-correction` (and, separately, the singleton fold)
      on GEX (CAT02, DZEC04) before considering either beyond CRISPR. Both
-     are off for GEX today.
+     are off for GEX today. SBX's 1-base UMI indels (the 0.6.4 cause)
+     should affect GEX too: an uncorrected indel splits one molecule into
+     two, which inflates UMIs per gene in deeply sequenced cells. On CAT02
+     M2_GEX at matched depth, rerun `molecules` and `matrix` on the SBX 3'
+     and 5' annotated BAMs with and without the flag, and compare against
+     Cell Ranger (UMIs and genes per cell, per-gene ratios, saturation).
+     The full-depth `sbxpress_ms` BAMs were deleted on 2026-10-16, so this
+     needs a remap of one arm (about 10-12 h at the reduced load) or a
+     cell subset. The 1 M-read BAMs in `cat02_matched_depth/tso_trim_test`
+     are too shallow: nearly every molecule is a singleton there.
   4. Repeat on CAT06 L2 to confirm the fix there.
 - **Expected Impact**: CRISPR call rates that match Cell Ranger in
   high-signal samples, not just low-signal ones.
