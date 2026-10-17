@@ -6,7 +6,7 @@ use anyhow::{bail, Result};
 use clap::{CommandFactory, FromArgMatches, Parser};
 use sbx10x::molecules::{
     barcode_metrics, build_decisions_with, collect_evidence_indexed_with, collect_evidence_with,
-    run_sharded, write_output, DedupPolicy, KeyTables, Metrics, MoleculeOptions,
+    run_sharded, write_output, KeyTables, Metrics, MoleculeOptions, UmiRules,
 };
 use tracing::info;
 
@@ -144,6 +144,24 @@ struct Cli {
     /// (`NH` > 1). 0 counts every MAPQ (the pre-0.6.2 behaviour).
     #[arg(long, default_value_t = 60)]
     min_mapq: u8,
+    /// Also merge UMIs one insertion or deletion apart (same-length window,
+    /// so the bases after the indel are shifted), under the same 2n-1
+    /// read-support rule as 1-mismatch correction. SBX errors are mostly
+    /// 1-base indels, which 1-mismatch correction cannot merge; on CAT06
+    /// SBX CRISPR this cut molecules from 6.1x Cell Ranger's to 1.9x. Off by
+    /// default; no effect where correction is skipped (--tagseq without
+    /// --position-aware-umis). GEX impact not yet measured.
+    #[arg(long)]
+    umi_indel_correction: bool,
+    /// After UMI correction, fold every 1-read molecule into its (cell,
+    /// sample, gene) family's top molecule when that top has at least this
+    /// many reads. For deeply sequenced feature-barcoding libraries, where a
+    /// low-quality read with several UMI errors otherwise counts as a new
+    /// molecule (CAT06 SBX CRISPR: with --umi-indel-correction and 10,
+    /// molecules 0.99x Cell Ranger's). 0 (default) disables it. Not for GEX,
+    /// where 1-read molecules are mostly real.
+    #[arg(long, default_value_t = 0)]
+    fold_singletons_min_top: u32,
 }
 
 fn write_metrics(cli: &Cli, metrics: &mut Metrics) -> Result<()> {
@@ -207,6 +225,10 @@ fn main() -> Result<()> {
         position_aware: cli.position_aware_umis,
         min_mapq: cli.min_mapq,
         compression_level: cli.compression_level,
+        umi_rules: UmiRules {
+            indels: cli.umi_indel_correction,
+            fold_singletons_min_top: cli.fold_singletons_min_top,
+        },
     };
     let started = Instant::now();
     let mut metrics = Metrics {
@@ -220,6 +242,8 @@ fn main() -> Result<()> {
         tagseq: cli.tagseq,
         fractional_collisions: cli.fractional_collisions,
         position_aware_umis: cli.position_aware_umis,
+        umi_indel_correction: cli.umi_indel_correction,
+        fold_singletons_min_top: cli.fold_singletons_min_top,
         min_mapq: cli.min_mapq,
         ..Default::default()
     };
@@ -270,7 +294,7 @@ fn main() -> Result<()> {
         &mut metrics,
         cli.saturation.as_ref().map(|_| cli.saturation_interval),
         cli.evidence_workers,
-        DedupPolicy::from_flags(opts.tagseq, opts.fractional, opts.position_aware),
+        opts.dedup_policy(),
     );
     drop(evidence);
     if let (Some(curve), Some(path)) = (saturation, cli.saturation.as_deref()) {

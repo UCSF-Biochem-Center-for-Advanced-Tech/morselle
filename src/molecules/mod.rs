@@ -19,8 +19,10 @@ pub mod saturation;
 #[cfg(test)]
 mod tests;
 pub mod types;
+pub mod umi_rules;
 
 pub use dedup::*;
 pub use evidence::*;
 pub use pipeline::*;
 pub use types::*;
+pub use umi_rules::UmiRules;

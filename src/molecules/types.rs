@@ -177,6 +177,9 @@ pub struct Metrics {
     /// Policy flags this run used (see `sbx10x-molecules --help`).
     pub fractional_collisions: bool,
     pub position_aware_umis: bool,
+    /// --umi-indel-correction / --fold-singletons-min-top (0 = off) this run used.
+    pub umi_indel_correction: bool,
+    pub fold_singletons_min_top: u32,
     /// --min-mapq this run used (0 = no mapping filter).
     pub min_mapq: u8,
     pub records: u64,
@@ -200,6 +203,9 @@ pub struct Metrics {
     pub molecules_before_gene_resolution: u64,
     pub molecules_counted: u64,
     pub umi_nodes_collapsed: u64,
+    /// --fold-singletons-min-top: 1-read molecules folded into their
+    /// family's top molecule (also counted in `umi_nodes_collapsed`).
+    pub umi_singletons_folded: u64,
     pub collision_groups: u64,
     pub collision_molecules_won: u64,
     pub collision_molecules_lost: u64,
@@ -238,6 +244,7 @@ pub fn merge_metrics(target: &mut Metrics, source: &Metrics) {
     target.molecules_before_gene_resolution += source.molecules_before_gene_resolution;
     target.molecules_counted += source.molecules_counted;
     target.umi_nodes_collapsed += source.umi_nodes_collapsed;
+    target.umi_singletons_folded += source.umi_singletons_folded;
     target.collision_groups += source.collision_groups;
     target.collision_molecules_won += source.collision_molecules_won;
     target.collision_molecules_lost += source.collision_molecules_lost;

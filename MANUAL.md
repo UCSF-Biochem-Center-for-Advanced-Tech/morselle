@@ -426,6 +426,21 @@ sbxpress molecules "$OUT/annotation/sample.annotated.bam" \
 
 Caveat: duplicates whose start differs (an indel or soft-clip difference at the read's 5′ end) are counted separately, so this mode can overcount slightly. Validate on your data before switching.
 
+### SBX UMI rules for CRISPR guide capture (`--umi-indel-correction`, `--fold-singletons-min-top`)
+
+Default UMI correction merges a UMI into a 1-mismatch neighbour with at least 2n−1 reads. SBX errors are mostly 1-base indels; inside the 12-bp UMI an indel shifts every later base, so its copy is several mismatches from the parent and never merges. In a deeply sequenced library this adds up. In CAT06 SBX CRISPR (~450 reads per guide molecule), sbxpress counted 6.1× Cell Ranger's molecules on depth-matched Illumina, which pushed cells with 1–2 true guide UMIs over the 3-UMI call floor (RZ211 CD45: 80% of cells called vs Cell Ranger's 60%; Neg: 4.5% vs 0.9%).
+
+- `--umi-indel-correction` also merges one-indel neighbours under the same 2n−1 rule (CAT06: 6.1× → 1.9×).
+- `--fold-singletons-min-top K` then folds every 1-read molecule into its (cell, sample, gene) family's top molecule when that top has at least `K` reads. The remaining excess was low-quality reads with several UMI errors (50% had two or more sub-Q20 UMI bases, vs 2.3% of real-molecule reads). With both rules and `K = 10`, CAT06 matched Cell Ranger: 0.99× the molecules, RZ211 59.4% called, Neg 0.80%. Any `K` from 5 to 50 gave results within about a point. Folded molecules are reported as `umi_singletons_folded` in the metrics JSON.
+
+`scripts/run_flex_multi.sh` turns both on for the CRISPR stream only. Both are off by default and are not meant for GEX: most GEX molecules have few reads, so a 1-read UMI there is usually a real molecule. Their effect on GEX has not been measured.
+
+```bash
+sbxpress molecules "$OUT/crispr/guides.bam" --flex \
+  --umi-indel-correction --fold-singletons-min-top 10 \
+  --output "$OUT/crispr/crispr_molecules.bam"
+```
+
 ### Choosing a mode: compare against a reference
 
 `scripts/compare_tagseq_modes.sh` runs one annotated BAM through each mode and compares every matrix with an independent reference — typically the same library sequenced on Illumina and counted separately:

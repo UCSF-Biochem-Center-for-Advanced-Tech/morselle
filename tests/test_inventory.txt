@@ -1,6 +1,7 @@
 annotate_chain_e2e illumina_annotate_molecules_barcode_funnel
 complexity_chain_e2e annotate_keeps_yl_and_low_mapq_intronic_gene_is_listed
 complexity_chain_e2e illumina_flags_low_complexity_and_molecules_names_the_gene
+crispr_umi_rules_e2e crispr_umi_rules_remove_sbx_error_molecules_only
 docs_commands documented_commands_use_real_flags
 failed_output barcode_table_is_written_only_with_barcode_metrics
 failed_output extract_per_barcode_values_include_barcode_less_reads
@@ -204,6 +205,10 @@ src/lib.rs molecules::tests::intern_sample_assigns_stable_ids_per_distinct_pb
 src/lib.rs molecules::tests::one_mismatch_neighbors_match_brute_force_hamming
 src/lib.rs molecules::tests::records_without_a_confident_sample_barcode_are_dropped_not_bucketed
 src/lib.rs molecules::tests::saturation_is_nested_and_reports_run_and_cells
+src/lib.rs molecules::umi_rules::tests::folds_singletons_only_in_deep_families
+src/lib.rs molecules::umi_rules::tests::indel_neighbors_keep_position_tag
+src/lib.rs molecules::umi_rules::tests::indel_neighbors_match_brute_force
+src/lib.rs molecules::umi_rules::tests::shifted_umi_is_an_indel_neighbor
 src/lib.rs orient::tests::fallback_off_marks_unknown
 src/lib.rs orient::tests::fixed_orientation_p7led_flips_and_locates
 src/lib.rs orient::tests::fixed_orientation_reanchors_past_false_homopolymer

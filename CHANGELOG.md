@@ -6,6 +6,55 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.4] — 2026-10-16
+
+### Fixed
+- SBX CRISPR guide capture no longer overcounts molecules about 6.5x.
+  On CAT06 L1, compared with Cell Ranger on full-depth Illumina in the cells
+  both called, sbxpress had 6–7x more UMIs wherever a guide was really
+  present. That pushed cells with 1–2 true guide UMIs over the 3-UMI
+  calling floor: RZ211 CD45 81% of cells called vs 58%, Neg 4.1% vs 0.9%.
+  On 3,000 RZ211 cells with depth-matched reads (10.1 M each), the cause
+  was UMI errors in a saturated library (~450 reads per molecule).
+  1-mismatch correction cannot merge SBX's 1-base UMI indels (6.1x Cell
+  Ranger's molecules), and rare low-quality reads with several UMI errors
+  each added one more. It is not an extract problem: these reads have normal
+  barcode routes, anchors and UMI position, but 50% have two or more
+  sub-Q20 UMI bases, vs 2.3% of real-molecule reads.
+  `scripts/run_flex_multi.sh` now runs CRISPR `molecules` with the two new
+  rules below. Recounting CP1 L1 CRISPR from its guide BAM with them:
+  - Molecules: 6.11 M → 2.08 M; 814 k singletons folded.
+  - Guide UMIs on shared cells: 1.01–1.12x Cell Ranger in every sample
+    (was 1.45–6.92x); per-cell median ratio 1.00.
+  - Cells called CD45 (Cell Ranger / before → after): Neg 0.5 / 4.1 → 0.8%,
+    Pos 1.6 / 11.1 → 2.2%, RZ213RD 25.7 / 43.5 → 26.9%.
+  - Cells called inactive: RZ212 3.3 / 17.4 → 4.8%.
+
+  RZ211 and RZ214 still call more cells (52.8% and 53.7% vs 30.8% and
+  30.1%), but not because of counts. On shared cells at Cell Ranger's own
+  threshold, sbxpress gives 38.9% vs 36.7% and 42.0% vs 37.9%. The rest
+  comes from two things, tracked in FUTURE_ROADMAP Priority 7:
+  - `protospacer-call` fits a lower threshold than Cell Ranger: 4 vs 6
+    and 3 vs 4.
+  - Cell Ranger calls 5–8 k more cells, few of them guide-positive.
+
+  Evidence: `CAT06/read_depth_comparison_out/diff_investigation/FINDINGS.md`.
+
+### Added
+- `molecules --umi-indel-correction`: also merge UMIs one insertion or
+  deletion apart (same-length window), under the same 2n−1 read-support
+  rule as 1-mismatch correction.
+- `molecules --fold-singletons-min-top K`: after correction, fold each
+  1-read molecule into its (cell, sample, gene) family's top molecule when
+  that top has at least `K` reads. New metric `umi_singletons_folded`; the
+  metrics JSON also records both settings.
+- Both are off by default, so GEX output and the golden files are unchanged.
+  They are meant for deeply sequenced feature-barcoding libraries; GEX
+  impact has not been measured. New `tests/crispr_umi_rules_e2e.rs`
+  (guide BAM fixture shaped like real `guides` output) checks that each
+  rule removes only its own error class and that the matrix agrees with
+  `molecules`.
+
 ## [0.6.3] — 2026-10-16
 
 ### Added

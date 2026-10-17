@@ -22,6 +22,7 @@
 | **Sharded Peak Memory Bounding** | `sbx10x-molecules --shards K` | `v0.5.6` | 🟢 **Completed** |
 | **Fractional UMI Collision Resolution** | `molecules --fractional-collisions` & `cr_bam_to_mtx` `ZW:f` | `v0.5.6` | 🟢 **Completed** |
 | **Automated Presentation & Reporting** | `scripts/build_presentation.py` & insert-size export | `v0.5.6` | 🟢 **Completed** |
+| **SBX CRISPR UMI Overcount Fix** (indel-aware UMI merge, deep-family singleton fold) | `molecules --umi-indel-correction --fold-singletons-min-top` (`src/molecules/umi_rules.rs`) | `v0.6.4` | 🟢 **Completed** |
 
 ---
 
@@ -186,3 +187,34 @@ flowchart TD
 - **Expected Impact**: Closes a gene-specific part of the Illumina gap to
   Cell Ranger and removes systematic undercounting of sex-chromosome
   homologs, which matters for any sex-aware analysis.
+
+### Priority 7: CRISPR Protospacer Thresholds vs Cell Ranger (raised 2026-10-16)
+
+- **Context**: 0.6.4 fixed SBX CRISPR molecule overcounting. CAT06 CP1 L1
+  guide UMIs now match Cell Ranger on shared cells (1.01–1.12x, per-cell
+  median ratio 1.00), and Neg, Pos, RZ212, RZ213* and RZ215 call rates are
+  close to Cell Ranger's. RZ211 and RZ214, the two samples with strong CD45
+  signal, still report 52.8% and 53.7% CD45 cells vs Cell Ranger's 30.8%
+  and 30.1%. Two causes, neither in the counts:
+  1. On the same counts, `protospacer-call`'s GMM threshold comes out lower
+     than Cell Ranger's: CD45 4 vs 6 (RZ211) and 3 vs 4 (RZ214). At Cell
+     Ranger's thresholds, sbxpress gives 38.9% vs 36.7% and 42.0% vs 37.9%
+     on shared cells.
+  2. Cell Ranger calls 5.3 k (RZ211) and 8.5 k (RZ214) more GEX cells, only
+     about 13% guide-positive, which lowers its reported rate.
+  Evidence: `CAT06/read_depth_comparison_out/diff_investigation/FINDINGS.md`
+  (Step 4).
+- **Proposed Work**:
+  1. Rerun only `protospacer-call` on the existing `rerun_cp1_L1` matrices.
+     Compare its fit against Cell Ranger's model: what it fits on (all
+     cells vs cells with a guide UMI), log vs linear scale, and how it picks
+     the decision boundary. Cell Ranger's per-sample
+     `protospacer_umi_thresholds.json` gives the target values.
+  2. Measure whether the GEX cell-calling difference matters for CRISPR
+     reporting: compare call rates on Cell Ranger's cell set.
+  3. Measure `--umi-indel-correction` (and, separately, the singleton fold)
+     on GEX (CAT02, DZEC04) before considering either beyond CRISPR. Both
+     are off for GEX today.
+  4. Repeat on CAT06 L2 to confirm the fix there.
+- **Expected Impact**: CRISPR call rates that match Cell Ranger in
+  high-signal samples, not just low-signal ones.

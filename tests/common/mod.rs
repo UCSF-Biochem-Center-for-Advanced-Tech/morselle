@@ -19,6 +19,8 @@ use rust_htslib::bam::{
     self, header::HeaderRecord, record::Aux, record::Cigar, record::CigarString, Read as _,
 };
 
+pub mod guides;
+
 /// Read a stage's gzip TSV into named integer counters without hiding sample rows.
 pub fn barcode_table(path: &Path) -> BTreeMap<(String, String), BTreeMap<String, u64>> {
     let mut text = String::new();

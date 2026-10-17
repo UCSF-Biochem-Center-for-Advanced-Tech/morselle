@@ -24,6 +24,7 @@ use super::evidence::{collate, collect_evidence_with, RecordFilter};
 use super::helpers::{require_bam_offsets, umi_key, MoleculeTags};
 use super::mapping_gate::{mapping_gate, MappingGate};
 use super::types::{merge_metrics, Decision, Dna, Metrics, RawKey, NO_SAMPLE};
+use super::umi_rules::UmiRules;
 
 /// Settings shared by the unsharded and sharded write paths.
 #[derive(Clone, Copy, Debug)]
@@ -41,9 +42,18 @@ pub struct MoleculeOptions {
     pub min_mapq: u8,
     /// BGZF level (0-9) for the output BAM; `None` keeps htslib's default.
     pub compression_level: Option<u32>,
+    /// Opt-in SBX UMI rules (`--umi-indel-correction`,
+    /// `--fold-singletons-min-top`); default off.
+    pub umi_rules: UmiRules,
 }
 
 impl MoleculeOptions {
+    /// The dedup policy these options imply.
+    pub fn dedup_policy(&self) -> DedupPolicy {
+        DedupPolicy::from_flags(self.tagseq, self.fractional, self.position_aware)
+            .with_umi_rules(self.umi_rules)
+    }
+
     /// The evidence-pass filter these options imply.
     pub fn record_filter(&self) -> RecordFilter {
         RecordFilter {
@@ -316,7 +326,7 @@ pub fn run_sharded(
                     &mut local,
                     None,
                     opts.evidence_workers,
-                    DedupPolicy::from_flags(opts.tagseq, opts.fractional, opts.position_aware),
+                    opts.dedup_policy(),
                 );
                 drop(evidence);
                 let tables = KeyTables {

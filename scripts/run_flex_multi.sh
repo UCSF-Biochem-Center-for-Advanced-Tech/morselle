@@ -144,7 +144,19 @@ if [ -n "$crispr_bam" ] && [ ! -f "$crispr_molecules" ]; then
   # each shared CB+UMI's "representative" read to an arbitrary sample,
   # collapsing real per-sample signal to zero even though the raw reads and
   # their PB tags are correct.
-  sbxpress molecules "$crispr_bam" -o "$crispr_molecules" --flex
+  #
+  # --umi-indel-correction --fold-singletons-min-top 10: found 2026-10-15 on
+  # CAT06 CP1 L1 against Cell Ranger on depth-matched Illumina (3,000 shared
+  # RZ211 cells, ~10.1 M guide reads each). The guide library is saturated
+  # (~450 reads per molecule), so SBX 1-base UMI indels (which 1-mismatch
+  # correction cannot merge) and rare low-quality reads with several UMI
+  # errors each became extra molecules: 6.1x Cell Ranger's count, lifting
+  # cells with 1-2 true guide UMIs over the 3-UMI call floor (RZ211 CD45
+  # 80% called vs 60%, Neg 4.5% vs 0.9%). With both rules: 0.99x, 59.4%
+  # and 0.80%. CRISPR only -- GEX singletons are mostly real molecules.
+  # Evidence: CAT06/read_depth_comparison_out/diff_investigation/FINDINGS.md.
+  sbxpress molecules "$crispr_bam" -o "$crispr_molecules" --flex \
+    --umi-indel-correction --fold-singletons-min-top 10
 fi
 
 [ -n "$jobs" ] || jobs=${#barcode_files[@]}

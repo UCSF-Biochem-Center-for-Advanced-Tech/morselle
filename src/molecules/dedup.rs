@@ -17,11 +17,23 @@ use tracing::info;
 use super::collisions::Resolved;
 use super::saturation::Saturation;
 use super::types::{Decision, Dna, Evidence, Metrics, RawKey};
+use super::umi_rules::{fold_deep_singletons, one_indel_neighbors, UmiRules};
 
 pub fn correct_group<S: BuildHasher>(
-    mut keys: Vec<RawKey>,
+    keys: Vec<RawKey>,
     evidence: &StdHashMap<RawKey, Evidence, S>,
 ) -> HashMap<RawKey, RawKey> {
+    correct_group_with(keys, evidence, UmiRules::default()).0
+}
+
+/// `correct_group` plus the opt-in SBX rules in `umi_rules`: one-indel
+/// neighbours as extra correction candidates, then folding 1-read molecules
+/// of deep families. Returns the roots and how many singletons were folded.
+pub fn correct_group_with<S: BuildHasher>(
+    mut keys: Vec<RawKey>,
+    evidence: &StdHashMap<RawKey, Evidence, S>,
+    rules: UmiRules,
+) -> (HashMap<RawKey, RawKey>, u64) {
     keys.sort_by_key(|key| (std::cmp::Reverse(evidence[key].reads), key.umi));
     // Every raw UMI in a (cell, gene) group is already distinct (RawKey
     // includes the UMI, and `evidence` is keyed on the full RawKey), so
@@ -35,7 +47,12 @@ pub fn correct_group<S: BuildHasher>(
     for &child in &keys {
         let mut parent = child;
         let threshold = evidence[&child].reads.saturating_mul(2).saturating_sub(1);
-        for neighbor in child.umi.one_mismatch_neighbors() {
+        let indels = rules
+            .indels
+            .then(|| one_indel_neighbors(child.umi))
+            .into_iter()
+            .flatten();
+        for neighbor in child.umi.one_mismatch_neighbors().chain(indels) {
             let Some(&candidate) = by_umi.get(&neighbor) else {
                 continue;
             };
@@ -51,7 +68,8 @@ pub fn correct_group<S: BuildHasher>(
         let root = roots.get(&parent).copied().unwrap_or(parent);
         roots.insert(child, root);
     }
-    roots
+    let folded = fold_deep_singletons(&keys, evidence, &mut roots, rules.fold_singletons_min_top);
+    (roots, folded)
 }
 
 pub fn merge_roots(
@@ -108,15 +126,20 @@ fn same_umi_group(a: &RawKey, b: &RawKey) -> bool {
 
 /// Roots for one (cell, sample, gene) group. Most groups hold a single raw
 /// UMI, whose root is itself -- skip `correct_group`'s allocations for them.
+/// Returns how many singletons `rules` folded.
 fn correct_run<S: BuildHasher>(
     run: &[RawKey],
     evidence: &StdHashMap<RawKey, Evidence, S>,
     roots: &mut HashMap<RawKey, RawKey>,
-) {
+    rules: UmiRules,
+) -> u64 {
     if let [only] = run {
         roots.insert(*only, *only);
+        0
     } else {
-        roots.extend(correct_group(run.to_vec(), evidence));
+        let (group, folded) = correct_group_with(run.to_vec(), evidence, rules);
+        roots.extend(group);
+        folded
     }
 }
 
@@ -126,7 +149,8 @@ fn correct_umis<S: BuildHasher + Sync>(
     total_groups: usize,
     workers: usize,
     skip: bool,
-) -> HashMap<RawKey, RawKey> {
+    rules: UmiRules,
+) -> (HashMap<RawKey, RawKey>, u64) {
     if skip {
         // Pooled-sample mode: directional UMI correction assumes a
         // low-count 1-mismatch neighbor is a sequencing error of a nearby
@@ -142,15 +166,16 @@ fn correct_umis<S: BuildHasher + Sync>(
             "[sbxpress molecules] phase=umi_correct skipped (--tagseq without --position-aware-umis) raw_nodes={}",
             evidence.len()
         );
-        return evidence.keys().map(|&key| (key, key)).collect();
+        return (evidence.keys().map(|&key| (key, key)).collect(), 0);
     }
     if workers <= 1 {
         eprintln!("[sbxpress molecules] phase=umi_correct mode=serial start groups={total_groups}");
         let mut roots = HashMap::with_capacity_and_hasher(sorted_keys.len(), Default::default());
+        let mut folded = 0;
         for run in sorted_keys.chunk_by(same_umi_group) {
-            correct_run(run, evidence, &mut roots);
+            folded += correct_run(run, evidence, &mut roots, rules);
         }
-        return roots;
+        return (roots, folded);
     }
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
@@ -169,17 +194,23 @@ fn correct_umis<S: BuildHasher + Sync>(
     pool.install(|| {
         sorted_keys
             .par_chunk_by(same_umi_group)
-            .fold(HashMap::default, |mut roots, run| {
-                correct_run(run, evidence, &mut roots);
-                let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
-                if done % checkpoint == 0 || done == total_groups {
-                    eprintln!(
-                        "[sbxpress molecules] phase=umi_correct groups={done}/{total_groups}"
-                    );
-                }
-                roots
-            })
-            .reduce(HashMap::default, merge_roots)
+            .fold(
+                || (HashMap::default(), 0_u64),
+                |(mut roots, mut folded), run| {
+                    folded += correct_run(run, evidence, &mut roots, rules);
+                    let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                    if done % checkpoint == 0 || done == total_groups {
+                        eprintln!(
+                            "[sbxpress molecules] phase=umi_correct groups={done}/{total_groups}"
+                        );
+                    }
+                    (roots, folded)
+                },
+            )
+            .reduce(
+                || (HashMap::default(), 0),
+                |(a, fa), (b, fb)| (merge_roots(a, b), fa + fb),
+            )
     })
 }
 
@@ -230,6 +261,7 @@ pub fn build_decisions<S: BuildHasher + Sync>(
         tagseq,
         fractional,
         correct_umis: !tagseq,
+        umi_rules: UmiRules::default(),
     };
     build_decisions_with(evidence, metrics, saturation_interval, workers, policy)
 }
@@ -243,6 +275,9 @@ pub struct DedupPolicy {
     pub fractional: bool,
     /// Directional 1-mismatch UMI correction within (cell, sample, gene).
     pub correct_umis: bool,
+    /// Opt-in SBX rules applied with the correction (no effect when
+    /// `correct_umis` is false). See `umi_rules`.
+    pub umi_rules: UmiRules,
 }
 
 impl DedupPolicy {
@@ -252,7 +287,13 @@ impl DedupPolicy {
             tagseq,
             fractional,
             correct_umis: !tagseq || position_aware,
+            umi_rules: UmiRules::default(),
         }
+    }
+
+    /// The same policy with the opt-in SBX UMI rules.
+    pub fn with_umi_rules(self, umi_rules: UmiRules) -> Self {
+        Self { umi_rules, ..self }
     }
 }
 
@@ -267,6 +308,7 @@ pub fn build_decisions_with<S: BuildHasher + Sync>(
         tagseq,
         fractional,
         correct_umis: correct,
+        umi_rules,
     } = policy;
     // Grouped by (cell, sample, gene), not just (cell, gene): the same CB
     // whitelist is shared across every sample in a pooled Flex run, so
@@ -299,7 +341,15 @@ pub fn build_decisions_with<S: BuildHasher + Sync>(
         }
     }
 
-    let roots = correct_umis(evidence, &sorted_keys, total_groups, workers, !correct);
+    let (roots, folded) = correct_umis(
+        evidence,
+        &sorted_keys,
+        total_groups,
+        workers,
+        !correct,
+        umi_rules,
+    );
+    metrics.umi_singletons_folded += folded;
     drop(sorted_keys);
     eprintln!(
         "[sbxpress molecules] phase=umi_correct complete roots={}",
