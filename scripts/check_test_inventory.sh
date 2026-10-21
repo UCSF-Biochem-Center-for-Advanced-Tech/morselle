@@ -13,7 +13,11 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 INVENTORY=tests/test_inventory.txt
 
 # "<test binary> <test name>" for every test in every target.
-current=$(cargo test --release -- --list --format terse 2>&1 \
+# --color never: CI sets CARGO_TERM_COLOR=always, and the ANSI codes around
+# "Running" broke the awk below so every test looked missing on CI only.
+# LC_ALL=C keeps sort and comm in the same collation on Linux and macOS.
+export LC_ALL=C
+current=$(cargo test --release --color never -- --list --format terse 2>&1 \
     | awk '/Running .*\(target/ { split($2, p, "/"); bin = p[length(p)]; sub(/\.rs$/, "", bin) }
            / Running unittests / { bin = $3 }
            /: test$/ { sub(/: test$/, ""); print bin " " $0 }' \

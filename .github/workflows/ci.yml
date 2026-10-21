@@ -33,9 +33,10 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y shellcheck cmake libhdf5-dev
       - name: macOS tools
         if: runner.os == 'macOS'
-        run: |
-          brew install shellcheck cmake hdf5
-          echo "HDF5_DIR=$(brew --prefix hdf5)" >> "$GITHUB_ENV"
+        # No Homebrew hdf5: hdf5-sys's `static` feature builds HDF5 from
+        # bundled source, and hdf5-sys 0.8.1 cannot parse Homebrew's 2.x
+        # version string ("Invalid H5_VERSION: 2.2.0").
+        run: brew install shellcheck cmake
       # The same single gate used locally; see scripts/check.sh for what
       # each step guards against.
       - name: scripts/check.sh

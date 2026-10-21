@@ -158,7 +158,8 @@ results/M2_GEX/M2_GEX/outs/
 
 ## Development
 
-Building from source needs the Rust toolchain and HDF5. The contributor checks
+Building from source needs the Rust toolchain and CMake (HDF5 is built from
+bundled source). The contributor checks
 also need Python 3 with `numpy`.
 
 ```bash
