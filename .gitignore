@@ -33,3 +33,10 @@ outputs/
 
 # Per-user Claude Code permissions (machine-specific, not project config)
 .claude/settings.local.json
+
+# Private, untracked working material: AI-assisted design notes, plans,
+# internal analysis scripts, and agent instructions. Kept locally only.
+/private/
+/CLAUDE.md
+/CLAUDE.local.md
+/AGENTS.md

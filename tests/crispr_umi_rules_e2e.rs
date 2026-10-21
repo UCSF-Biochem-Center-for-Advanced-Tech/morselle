@@ -1,7 +1,7 @@
 //! Flex CRISPR chain with the SBX UMI rules: guide BAM -> `molecules --flex`
 //! -> `matrix`, each stage the real binary on the previous stage's output.
 //!
-//! The fixture (`common::guides`) is shaped like real `sbxpress guides`
+//! The fixture (`common::guides`) is shaped like real `morselle guides`
 //! output and carries the errors that made CAT06 SBX CRISPR overcount 6.1x:
 //! 1-base UMI indels and garbled 1-read UMIs in saturated families. Each
 //! rule must remove exactly its own error class, shallow families' genuine
@@ -17,7 +17,10 @@ use common::{bin, molecule_counters, read_bam, read_mex, run};
 use rust_htslib::bam::record::Aux;
 
 fn molecules() -> std::path::PathBuf {
-    bin("sbx10x-molecules", env!("CARGO_BIN_EXE_sbx10x-molecules"))
+    bin(
+        "morselle-molecules",
+        env!("CARGO_BIN_EXE_morselle-molecules"),
+    )
 }
 fn matrix() -> std::path::PathBuf {
     bin("cr-bam-to-mtx", env!("CARGO_BIN_EXE_cr-bam-to-mtx"))

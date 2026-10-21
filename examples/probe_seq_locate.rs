@@ -18,8 +18,8 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
+use morselle::anchors::revcomp;
 use needletail::parse_fastx_file;
-use sbx10x::anchors::revcomp;
 
 fn main() -> anyhow::Result<()> {
     let mut probe_set_path = None;

@@ -6,13 +6,13 @@
 
 use std::env;
 
+use morselle::barcode::Whitelist;
+use morselle::demux::{index_anchor_starts, DemuxCfg, Demuxer};
+use morselle::extract::{extract, ExtractCfg};
+use morselle::orient::{orient, FallbackMode, OrientCfg};
+use morselle::pipeline::{CbStatus, Orientation};
+use morselle::sample_sheet::SampleSheet;
 use needletail::parse_fastx_file;
-use sbx10x::barcode::Whitelist;
-use sbx10x::demux::{index_anchor_starts, DemuxCfg, Demuxer};
-use sbx10x::extract::{extract, ExtractCfg};
-use sbx10x::orient::{orient, FallbackMode, OrientCfg};
-use sbx10x::pipeline::{CbStatus, Orientation};
-use sbx10x::sample_sheet::SampleSheet;
 
 #[derive(Clone, Copy)]
 enum Bucket {
@@ -130,8 +130,8 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn classify(
-    o: &sbx10x::orient::Oriented,
-    e: &sbx10x::extract::Extracted,
+    o: &morselle::orient::Oriented,
+    e: &morselle::extract::Extracted,
     wl: &Whitelist,
     demux: &Demuxer,
     cb_len: usize,

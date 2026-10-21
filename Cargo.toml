@@ -1,52 +1,52 @@
 [package]
-name = "sbxpress"
-version = "0.6.4"
+name = "morselle"
+version = "0.7.0"
 edition = "2021"
-description = "Convert raw Roche SBX reads into per-sample 10x-style FASTQs and expression matrices"
+description = "MORSELLE: MOlecular Read Structure, Extraction, Labeling & Enumeration -- raw Roche SBX and Illumina reads to 10x-style FASTQs and expression matrices"
 
 [lib]
-name = "sbx10x"
+name = "morselle"
 path = "src/lib.rs"
 
 [[bin]]
-name = "sbx10x"
+name = "morselle-extract"
 path = "src/main.rs"
 
 [[bin]]
-name = "sbx10x-annotate"
-path = "src/bin/sbx10x-annotate.rs"
+name = "morselle-annotate"
+path = "src/bin/morselle-annotate.rs"
 
 [[bin]]
-name = "sbx10x-molecules"
-path = "src/bin/sbx10x-molecules.rs"
+name = "morselle-molecules"
+path = "src/bin/morselle-molecules.rs"
 
 [[bin]]
-name = "sbxpress"
-path = "src/bin/sbxpress.rs"
+name = "morselle"
+path = "src/bin/morselle.rs"
 
 [[bin]]
-name = "sbxpress-illumina"
-path = "src/bin/sbxpress-illumina.rs"
+name = "morselle-illumina"
+path = "src/bin/morselle-illumina.rs"
 
 [[bin]]
-name = "sbxpress-cells"
-path = "src/bin/sbxpress-cells.rs"
+name = "morselle-cells"
+path = "src/bin/morselle-cells.rs"
 
 [[bin]]
-name = "sbxpress-probe-demux"
-path = "src/bin/sbxpress-probe-demux.rs"
+name = "morselle-probe-demux"
+path = "src/bin/morselle-probe-demux.rs"
 
 [[bin]]
-name = "sbxpress-guides"
-path = "src/bin/sbxpress-guides.rs"
+name = "morselle-guides"
+path = "src/bin/morselle-guides.rs"
 
 [[bin]]
-name = "sbxpress-protospacer-call"
-path = "src/bin/sbxpress-protospacer-call.rs"
+name = "morselle-protospacer-call"
+path = "src/bin/morselle-protospacer-call.rs"
 
 [[bin]]
-name = "sbxpress-probeset-align"
-path = "src/bin/sbxpress-probeset-align.rs"
+name = "morselle-probeset-align"
+path = "src/bin/morselle-probeset-align.rs"
 
 [dependencies]
 needletail = "0.5"
@@ -86,7 +86,7 @@ harness = false
 # sampling profiler (perf/samply) or gdb can resolve real function/line names.
 # Kept as a separate profile so normal `--release` builds (what gets
 # installed) stay lean. Build with `cargo build --profile profiling`. See
-# PROFILING.md.
+# docs/PROFILING.md.
 inherits = "release"
 debug = true
 strip = false

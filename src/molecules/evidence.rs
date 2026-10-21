@@ -71,7 +71,7 @@ pub fn collate<P: AsRef<Path>>(inputs: &[P], threads: usize, shard_paths: &[P]) 
     }
     // Uncompressed: shard files are pure ephemeral intermediates, deleted
     // right after quant reads each one exactly once -- same lesson as
-    // extract's --no-gzip finding (PROFILING.md: 53.9% of extract's CPU was
+    // extract's --no-gzip finding (docs/PROFILING.md: 53.9% of extract's CPU was
     // zlib, --no-gzip gave an 8x win). Collate was previously the dominant
     // cost of the whole --shards run for exactly this reason: 8 writers all
     // doing default-level BGZF compression, serialized onto the single
@@ -105,12 +105,12 @@ pub fn collate<P: AsRef<Path>>(inputs: &[P], threads: usize, shard_paths: &[P]) 
             writers[idx].write(&record)?;
             routed += 1;
             if routed % 25_000_000 == 0 {
-                eprintln!("[sbxpress molecules] phase=collate records={routed}");
+                eprintln!("[morselle molecules] phase=collate records={routed}");
             }
         }
     }
     eprintln!(
-        "[sbxpress molecules] phase=collate complete records={routed} inputs={}",
+        "[morselle molecules] phase=collate complete records={routed} inputs={}",
         inputs.len()
     );
     Ok(())
@@ -162,13 +162,13 @@ pub fn collect_evidence_with(
     let mut gene_ids = HashMap::<String, u32>::default();
     let mut samples = Vec::<String>::new();
     let mut sample_ids = HashMap::<String, u32>::default();
-    eprintln!("[sbxpress molecules] phase=evidence_collect mode=serial start");
+    eprintln!("[morselle molecules] phase=evidence_collect mode=serial start");
     for (ordinal, result) in reader.records().enumerate() {
         let record = result.context("reading BAM in evidence pass")?;
         metrics.records += 1;
         if metrics.records % 25_000_000 == 0 {
             eprintln!(
-                "[sbxpress molecules] phase=evidence_collect mode=serial records={} eligible={}",
+                "[morselle molecules] phase=evidence_collect mode=serial records={} eligible={}",
                 metrics.records, metrics.eligible_records
             );
         }
@@ -261,7 +261,7 @@ pub fn collect_evidence_with(
     }
     gate_counts.add_to(metrics);
     eprintln!(
-        "[sbxpress molecules] phase=evidence_collect mode=serial complete records={} eligible={} raw_nodes={}",
+        "[morselle molecules] phase=evidence_collect mode=serial complete records={} eligible={} raw_nodes={}",
         metrics.records,
         metrics.eligible_records,
         evidence.len()

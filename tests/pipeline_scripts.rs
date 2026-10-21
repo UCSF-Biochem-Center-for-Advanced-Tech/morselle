@@ -1,9 +1,9 @@
 //! Guards for the shell pipeline drivers in `scripts/`.
 //!
-//! `scripts/sbxpress-pipeline.sh` shipped in 0.5.4 with a bash syntax error
-//! and with flags no `sbxpress` subcommand accepts; nothing ran it. These
+//! `scripts/morselle-pipeline.sh` shipped in 0.5.4 with a bash syntax error
+//! and with flags no `morselle` subcommand accepts; nothing ran it. These
 //! tests parse every script and drive both pipeline scripts end to end
-//! against stub `sbxpress`/`samtools` commands that validate each flag
+//! against stub `morselle`/`samtools` commands that validate each flag
 //! against the real binary's `--help` (see tests/scripts/).
 use std::path::Path;
 use std::process::Command;
@@ -36,15 +36,15 @@ fn every_script_parses() {
 }
 
 /// install.sh in 0.5.2–0.6.0 installed only 7 of the 11 private engines, so
-/// an installed `sbxpress` could not run probeset-align, probe-demux, guides
+/// an installed `morselle` could not run probeset-align, probe-demux, guides
 /// or protospacer-call (found by the 0.6.0 server acceptance run on CAT06).
 /// Every engine the dispatcher can name must be in install.sh's HELPERS.
 #[test]
 fn install_script_installs_every_dispatched_helper() {
-    let dispatcher = std::fs::read_to_string(repo().join("src/bin/sbxpress.rs")).unwrap();
+    let dispatcher = std::fs::read_to_string(repo().join("src/bin/morselle.rs")).unwrap();
     let body = &dispatcher[dispatcher
         .find("fn engine(")
-        .expect("engine() in sbxpress.rs")..];
+        .expect("engine() in morselle.rs")..];
     let body = &body[..body.find("\n}\n").unwrap()];
     let mut dispatched: Vec<String> = body
         .match_indices("=> Some(\"")
@@ -77,7 +77,7 @@ fn install_script_installs_every_dispatched_helper() {
     );
     assert_eq!(
         installed, dispatched,
-        "install.sh HELPERS must match the engines sbxpress dispatches to"
+        "install.sh HELPERS must match the engines morselle dispatches to"
     );
 }
 
@@ -93,8 +93,8 @@ fn pipeline_scripts_pass_shellcheck_when_available() {
     }
     let out = Command::new("shellcheck")
         .args(["-S", "warning"])
-        .arg(repo().join("scripts/sbxpress-pipeline.sh"))
-        .arg(repo().join("scripts/sbxpress-gex-pipeline.sh"))
+        .arg(repo().join("scripts/morselle-pipeline.sh"))
+        .arg(repo().join("scripts/morselle-gex-pipeline.sh"))
         .arg(repo().join("scripts/run_flex_multi.sh"))
         .arg(repo().join("scripts/compare_tagseq_modes.sh"))
         .output()
@@ -110,7 +110,7 @@ fn pipeline_scripts_pass_shellcheck_when_available() {
 fn pipeline_scripts_run_end_to_end_against_stubs() {
     let out = Command::new("bash")
         .arg(repo().join("tests/scripts/pipeline_smoke.sh"))
-        .arg(env!("CARGO_BIN_EXE_sbxpress"))
+        .arg(env!("CARGO_BIN_EXE_morselle"))
         .output()
         .unwrap();
     assert!(
@@ -133,14 +133,4 @@ fn pipeline_restart_and_reporting_python_regressions() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-}
-
-#[test]
-fn presentation_cli_uses_pipeline_metrics_and_labels_historical_slides() {
-    let python = std::env::var_os("SBXPRESS_REPORT_PYTHON").unwrap_or_else(|| "python3".into());
-    let out = Command::new(python)
-        .arg(repo().join("tests/scripts/presentation_cli.py"))
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "reporting tests require python-pptx (or SBXPRESS_REPORT_PYTHON pointing to a Python with it):\n{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
 }

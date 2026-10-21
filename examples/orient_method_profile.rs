@@ -5,9 +5,9 @@
 
 use std::env;
 
+use morselle::extract::{extract, ExtractCfg};
+use morselle::orient::{orient, FallbackMode, OrientCfg, OrientMethod};
 use needletail::parse_fastx_file;
-use sbx10x::extract::{extract, ExtractCfg};
-use sbx10x::orient::{orient, FallbackMode, OrientCfg, OrientMethod};
 
 fn main() -> anyhow::Result<()> {
     let fastqs: Vec<String> = env::args().skip(1).collect();

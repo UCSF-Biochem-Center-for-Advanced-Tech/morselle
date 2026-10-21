@@ -1,4 +1,4 @@
-//! Unified public command for the SBX gene-expression workflow.
+//! Unified public `morselle` command for the SBX and Illumina expression workflows.
 //!
 //! The mature engines remain separate executables internally for now. Keeping
 //! dispatch at the process boundary preserves their streaming and memory
@@ -8,8 +8,9 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-const HELP: &str = "sbxpress — SBX single-cell gene-expression processing\n\n\
-Usage: sbxpress <COMMAND> [ARGUMENTS]\n\n\
+const HELP: &str = "morselle — MOlecular Read Structure, Extraction, Labeling & Enumeration\n\
+SBX and Illumina single-cell expression processing (alpha)\n\n\
+Usage: morselle <COMMAND> [ARGUMENTS]\n\n\
 Commands:\n\
   extract    Extract and demultiplex tagged cDNA FASTQs from raw SBX reads\n\
   illumina   Convert paired Illumina 10x FASTQs to tagged R2-only FASTQ\n\
@@ -23,15 +24,15 @@ Commands:\n\
   guides     Assign Feature Barcoding reads (CRISPR guides, antibody/CMO tags) to features\n\
   protospacer-call  Call CRISPR guide identity per cell (adaptive UMI threshold)\n\
   probeset-align  Assign 10x Flex GEX reads to genes via the real probe-set reference\n\n\
-Run 'sbxpress <COMMAND> --help' for command-specific options.\n";
+Run 'morselle <COMMAND> --help' for command-specific options.\n";
 
 fn helper_dir(executable: &Path) -> Option<PathBuf> {
-    if let Some(value) = env::var_os("SBXPRESS_LIBEXEC") {
+    if let Some(value) = env::var_os("MORSELLE_LIBEXEC") {
         return Some(PathBuf::from(value));
     }
     let bin = executable.parent()?;
-    // Installed layout: <prefix>/bin/sbxpress and <prefix>/libexec/sbxpress/*.
-    let installed = bin.parent()?.join("libexec/sbxpress");
+    // Installed layout: <prefix>/bin/morselle and <prefix>/libexec/morselle/*.
+    let installed = bin.parent()?.join("libexec/morselle");
     if installed.is_dir() {
         Some(installed)
     } else {
@@ -42,17 +43,17 @@ fn helper_dir(executable: &Path) -> Option<PathBuf> {
 
 fn engine(command: &str) -> Option<&'static str> {
     match command {
-        "extract" => Some("sbx10x"),
-        "illumina" => Some("sbxpress-illumina"),
-        "annotate" => Some("sbx10x-annotate"),
-        "molecules" => Some("sbx10x-molecules"),
+        "extract" => Some("morselle-extract"),
+        "illumina" => Some("morselle-illumina"),
+        "annotate" => Some("morselle-annotate"),
+        "molecules" => Some("morselle-molecules"),
         "audit" => Some("bam-audit"),
         "matrix" => Some("cr-bam-to-mtx"),
-        "cells" => Some("sbxpress-cells"),
-        "probe-demux" => Some("sbxpress-probe-demux"),
-        "guides" => Some("sbxpress-guides"),
-        "protospacer-call" => Some("sbxpress-protospacer-call"),
-        "probeset-align" => Some("sbxpress-probeset-align"),
+        "cells" => Some("morselle-cells"),
+        "probe-demux" => Some("morselle-probe-demux"),
+        "guides" => Some("morselle-guides"),
+        "protospacer-call" => Some("morselle-protospacer-call"),
+        "probeset-align" => Some("morselle-probeset-align"),
         _ => None,
     }
 }
@@ -61,7 +62,7 @@ fn run(mut command: Command) -> ExitCode {
     match command.status() {
         Ok(status) => ExitCode::from(status.code().unwrap_or(1) as u8),
         Err(error) => {
-            eprintln!("sbxpress: {error}");
+            eprintln!("morselle: {error}");
             ExitCode::FAILURE
         }
     }
@@ -69,7 +70,7 @@ fn run(mut command: Command) -> ExitCode {
 
 fn main() -> ExitCode {
     let mut args = env::args_os();
-    let argv0 = PathBuf::from(args.next().unwrap_or_else(|| "sbxpress".into()));
+    let argv0 = PathBuf::from(args.next().unwrap_or_else(|| "morselle".into()));
     let executable = env::current_exe().unwrap_or(argv0);
     let Some(subcommand) = args.next() else {
         print!("{HELP}");
@@ -81,7 +82,7 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     if matches!(subcommand_text.as_ref(), "-V" | "--version" | "version") {
-        println!("sbxpress {}", env!("CARGO_PKG_VERSION"));
+        println!("morselle {}", env!("CARGO_PKG_VERSION"));
         return ExitCode::SUCCESS;
     }
     if subcommand_text == "minimap" {
@@ -90,23 +91,23 @@ fn main() -> ExitCode {
         return run(child);
     }
     let Some(helper) = engine(&subcommand_text) else {
-        eprintln!("sbxpress: unknown command '{subcommand_text}'\n\n{HELP}");
+        eprintln!("morselle: unknown command '{subcommand_text}'\n\n{HELP}");
         return ExitCode::from(2);
     };
     let Some(directory) = helper_dir(&executable) else {
-        eprintln!("sbxpress: cannot determine helper executable directory");
+        eprintln!("morselle: cannot determine helper executable directory");
         return ExitCode::FAILURE;
     };
     let helper = directory.join(helper);
     if !helper.is_file() {
         eprintln!(
-            "sbxpress: helper not found: {} (set SBXPRESS_LIBEXEC to override)",
+            "morselle: helper not found: {} (set MORSELLE_LIBEXEC to override)",
             helper.display()
         );
         return ExitCode::FAILURE;
     }
     let mut child = Command::new(helper);
-    child.env("SBXPRESS_DISPATCH", "1");
+    child.env("MORSELLE_DISPATCH", "1");
     child.args(args);
     run(child)
 }
@@ -117,20 +118,20 @@ mod tests {
 
     #[test]
     fn every_public_engine_has_a_private_helper() {
-        assert_eq!(engine("extract"), Some("sbx10x"));
-        assert_eq!(engine("illumina"), Some("sbxpress-illumina"));
-        assert_eq!(engine("annotate"), Some("sbx10x-annotate"));
-        assert_eq!(engine("molecules"), Some("sbx10x-molecules"));
+        assert_eq!(engine("extract"), Some("morselle-extract"));
+        assert_eq!(engine("illumina"), Some("morselle-illumina"));
+        assert_eq!(engine("annotate"), Some("morselle-annotate"));
+        assert_eq!(engine("molecules"), Some("morselle-molecules"));
         assert_eq!(engine("audit"), Some("bam-audit"));
         assert_eq!(engine("matrix"), Some("cr-bam-to-mtx"));
-        assert_eq!(engine("cells"), Some("sbxpress-cells"));
-        assert_eq!(engine("probe-demux"), Some("sbxpress-probe-demux"));
-        assert_eq!(engine("guides"), Some("sbxpress-guides"));
+        assert_eq!(engine("cells"), Some("morselle-cells"));
+        assert_eq!(engine("probe-demux"), Some("morselle-probe-demux"));
+        assert_eq!(engine("guides"), Some("morselle-guides"));
         assert_eq!(
             engine("protospacer-call"),
-            Some("sbxpress-protospacer-call")
+            Some("morselle-protospacer-call")
         );
-        assert_eq!(engine("probeset-align"), Some("sbxpress-probeset-align"));
+        assert_eq!(engine("probeset-align"), Some("morselle-probeset-align"));
         assert_eq!(engine("minimap"), None);
     }
 }

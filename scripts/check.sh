@@ -12,7 +12,7 @@
 #                        output (golden_outputs), docs flags (docs_commands),
 #                        pipeline scripts (pipeline_scripts)
 #   test inventory       tests deleted during a "refactor" (0.5.7)
-#   500-line ceiling     project rule from AGENTS.md / CLAUDE.md
+#   500-line ceiling     project rule (keep code files modular)
 #   rustfmt, clippy      style drift; clippy's deny-by-default lints
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."

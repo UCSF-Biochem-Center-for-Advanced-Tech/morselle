@@ -61,7 +61,7 @@ pub struct MolAccum {
     pub region: u8, // bit2=exonic, bit1=intronic, bit0=intergenic (best kept)
     pub max_readlen: u32,
     pub counted: bool,    // any read is a counted representative (xf bit 8)
-    pub eligible: bool,   // any read has 10x reference/sbxpress xf bit 16
+    pub eligible: bool,   // any read has 10x reference/morselle xf bit 16
     pub rep_gene: String, // gene of the counted representative
 }
 
@@ -197,7 +197,7 @@ pub struct Audit {
     // molecules
     pub reads_with_cb_umi: u64,
     pub molecules: u64, // xf bit-8 representatives (10x reference's counted molecules)
-    /// Exact 10x reference/sbxpress xf values most relevant to molecule counting.
+    /// Exact 10x reference/morselle xf values most relevant to molecule counting.
     pub xf_17_eligible: u64,
     pub xf_25_representative: u64,
     /// Individual xf bit counts (a record may contribute to several fields).

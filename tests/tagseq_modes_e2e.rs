@@ -82,7 +82,10 @@ fn position_aware_mode_recovers_true_molecule_counts() {
     );
     let truth = truth(&fx.bam);
     let total_truth: f64 = truth.values().sum();
-    let molecules = bin("sbx10x-molecules", env!("CARGO_BIN_EXE_sbx10x-molecules"));
+    let molecules = bin(
+        "morselle-molecules",
+        env!("CARGO_BIN_EXE_morselle-molecules"),
+    );
     let matrix = bin("cr-bam-to-mtx", env!("CARGO_BIN_EXE_cr-bam-to-mtx"));
 
     let mut errors = BTreeMap::new();
@@ -163,7 +166,10 @@ fn position_aware_umis_keep_ub_clean_and_reject_overlong_umis() {
     );
     let out = dir.path().join("pos.bam");
     run(
-        &bin("sbx10x-molecules", env!("CARGO_BIN_EXE_sbx10x-molecules")),
+        &bin(
+            "morselle-molecules",
+            env!("CARGO_BIN_EXE_morselle-molecules"),
+        ),
         &[
             fx.bam.to_str().unwrap(),
             "-o",
@@ -201,8 +207,8 @@ fn position_aware_umis_keep_ub_clean_and_reject_overlong_umis() {
         }
     }
     let failed = std::process::Command::new(bin(
-        "sbx10x-molecules",
-        env!("CARGO_BIN_EXE_sbx10x-molecules"),
+        "morselle-molecules",
+        env!("CARGO_BIN_EXE_morselle-molecules"),
     ))
     .args([
         long.to_str().unwrap(),
@@ -297,7 +303,7 @@ fn compare_tagseq_modes_tool_ranks_modes_against_a_reference() {
             reference.to_str().unwrap(),
         ])
         .args(["--out-dir", out.to_str().unwrap(), "--threads", "1"])
-        .env("SBXPRESS", env!("CARGO_BIN_EXE_sbxpress"))
+        .env("MORSELLE", env!("CARGO_BIN_EXE_morselle"))
         .output()
         .unwrap();
     assert!(

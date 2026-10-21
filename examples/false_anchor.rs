@@ -7,12 +7,12 @@
 
 use std::env;
 
+use morselle::anchors::{hamming, R1_PRIMER_TAIL};
+use morselle::barcode::Whitelist;
+use morselle::extract::{extract, ExtractCfg};
+use morselle::orient::{orient, FallbackMode, OrientCfg};
+use morselle::pipeline::{CbStatus, Orientation};
 use needletail::parse_fastx_file;
-use sbx10x::anchors::{hamming, R1_PRIMER_TAIL};
-use sbx10x::barcode::Whitelist;
-use sbx10x::extract::{extract, ExtractCfg};
-use sbx10x::orient::{orient, FallbackMode, OrientCfg};
-use sbx10x::pipeline::{CbStatus, Orientation};
 
 /// Find an R1-primer tail (≤1 mm) anywhere in `seq` whose downstream 16 bp CB is
 /// on/near the whitelist. Returns the CB start (tail end) of the first such hit.

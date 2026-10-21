@@ -1,4 +1,4 @@
-//! Per-stage hot-path microbenchmarks (see `PROFILING.md`).
+//! Per-stage hot-path microbenchmarks (see `docs/PROFILING.md`).
 //!
 //! Portable (no external data files — synthetic-but-realistic reads, same
 //! shape as `orient.rs`'s own unit-test fixtures), so `cargo bench` runs
@@ -11,13 +11,13 @@ use std::io::Write as _;
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 
-use sbx10x::anchors::{revcomp, P5, P7, R1_PRIMER};
-use sbx10x::barcode::Whitelist;
-use sbx10x::extract::{extract, ExtractCfg};
-use sbx10x::hamming_index::HammingIndex;
-use sbx10x::orient::{orient, FallbackMode, OrientCfg};
-use sbx10x::probe_barcode::ProbeWhitelist;
-use sbx10x::probe_set::{Probe, ProbeMatcher};
+use morselle::anchors::{revcomp, P5, P7, R1_PRIMER};
+use morselle::barcode::Whitelist;
+use morselle::extract::{extract, ExtractCfg};
+use morselle::hamming_index::HammingIndex;
+use morselle::orient::{orient, FallbackMode, OrientCfg};
+use morselle::probe_barcode::ProbeWhitelist;
+use morselle::probe_set::{Probe, ProbeMatcher};
 
 fn orient_cfg() -> OrientCfg {
     OrientCfg {
@@ -61,7 +61,7 @@ fn gex_read() -> (Vec<u8>, Vec<u8>) {
     (seq, qual)
 }
 
-/// A Flex/CRISPR-shaped read, matching what docs/archive/FLEX_SUPPORT_PLAN.md's Phase 0
+/// A Flex/CRISPR-shaped read, matching what the Flex design notes' Phase 0
 /// found empirically: no real homopolymer (orient()'s TailFallback path
 /// fires, ~88% of real Flex reads per the orient_method_profile diagnostic),
 /// then a probe barcode 10bp past the CB+UMI bracket.
@@ -218,7 +218,7 @@ fn bench_probeset_align_matcher(c: &mut Criterion) {
 
 use std::collections::HashMap;
 
-use sbx10x::molecules::{
+use morselle::molecules::{
     build_decisions, correct_group, Dna, Evidence, Metrics, RawKey, NO_SAMPLE,
 };
 

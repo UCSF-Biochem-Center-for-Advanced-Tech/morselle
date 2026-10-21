@@ -1,4 +1,4 @@
-//! CRISPR protospacer calling (docs/archive/FLEX_SUPPORT_PLAN.md Phase 5) — the
+//! CRISPR protospacer calling (the Flex design notes Phase 5) — the
 //! published-algorithm gap a raw UMI-count passthrough would miss.
 //!
 //! Cellranger's real published algorithm (`cr-crispr-algorithm`): "models

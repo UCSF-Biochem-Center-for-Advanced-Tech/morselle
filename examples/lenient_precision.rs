@@ -13,7 +13,7 @@
 //!
 //! Usage: cargo run --release --example lenient_precision -- <whitelist> [samples_per_level]
 
-use sbx10x::barcode::{decode16, Whitelist};
+use morselle::barcode::{decode16, Whitelist};
 
 /// SplitMix64 deterministic PRNG.
 struct Rng(u64);

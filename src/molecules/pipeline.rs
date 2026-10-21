@@ -1,4 +1,4 @@
-//! BAM output for `sbx10x-molecules`: tag every eligible record with its
+//! BAM output for `morselle-molecules`: tag every eligible record with its
 //! corrected UMI (`UB`), representative flag (`xf:25` counted / `xf:17`
 //! not), collision degree (`XV`), outcome (`XW`), and, for fractional
 //! molecules, the matrix weight (`ZW:f`).
@@ -182,7 +182,7 @@ pub fn write_output(
     tables: &KeyTables,
     metrics: &mut Metrics,
 ) -> Result<()> {
-    eprintln!("[sbxpress molecules] phase=bam_write start");
+    eprintln!("[morselle molecules] phase=bam_write start");
     let mut reader = bam::Reader::from_path(input)?;
     if opts.evidence_workers > 1 {
         require_bam_offsets(&reader)?;
@@ -207,13 +207,13 @@ pub fn write_output(
         written += 1;
         if written % 25_000_000 == 0 {
             eprintln!(
-                "[sbxpress molecules] phase=bam_write records={} representatives={}",
+                "[morselle molecules] phase=bam_write records={} representatives={}",
                 written, metrics.representatives_tagged
             );
         }
     }
     eprintln!(
-        "[sbxpress molecules] phase=bam_write complete records={} representatives={}",
+        "[morselle molecules] phase=bam_write complete records={} representatives={}",
         written, metrics.representatives_tagged
     );
     Ok(())
@@ -266,7 +266,7 @@ pub fn run_sharded(
     let shard_paths: Vec<PathBuf> = (0..shards)
         .map(|i| shard_dir.join(format!("shard_{i:04}.bam")))
         .collect();
-    eprintln!("[sbxpress molecules] phase=collate start shards={shards}");
+    eprintln!("[morselle molecules] phase=collate start shards={shards}");
     collate(inputs, opts.threads, &shard_paths)?;
 
     let header = {
@@ -342,7 +342,7 @@ pub fn run_sharded(
                 }
                 let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
                 eprintln!(
-                    "[sbxpress molecules] phase=shard_quant complete shards={done}/{total_shards}"
+                    "[morselle molecules] phase=shard_quant complete shards={done}/{total_shards}"
                 );
                 Ok(local)
             })
@@ -354,7 +354,7 @@ pub fn run_sharded(
     drop(writer);
     if let Err(err) = fs::remove_dir_all(&shard_dir) {
         eprintln!(
-            "[sbxpress molecules] warning: failed to clean up shard directory {}: {err}",
+            "[morselle molecules] warning: failed to clean up shard directory {}: {err}",
             shard_dir.display()
         );
     }

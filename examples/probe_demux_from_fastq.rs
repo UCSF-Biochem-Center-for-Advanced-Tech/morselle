@@ -1,5 +1,5 @@
 //! Real-data exercise of the actual `probe_demux::assign`/`gem_overlap` logic
-//! (docs/archive/FLEX_SUPPORT_PLAN.md Phase 2), without needing a full alignment pipeline.
+//! (the Flex design notes Phase 2), without needing a full alignment pipeline.
 //!
 //! `probe_demux::read_bam_tally` (already unit-tested against a synthetic BAM)
 //! just turns a BAM into a `(CB, PB) -> molecule count` tally; this builds
@@ -17,9 +17,9 @@ use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::path::PathBuf;
 
+use morselle::probe_demux::{assign, gem_overlap, DemuxCfg};
+use morselle::probe_sample_sheet::ProbeSampleSheet;
 use needletail::parse_fastx_file;
-use sbx10x::probe_demux::{assign, gem_overlap, DemuxCfg};
-use sbx10x::probe_sample_sheet::ProbeSampleSheet;
 
 fn main() -> anyhow::Result<()> {
     let mut fastq = None;
@@ -90,7 +90,7 @@ fn main() -> anyhow::Result<()> {
     let mut high_occ = 0u64;
     let mut per_sample: std::collections::HashMap<&str, u64> = std::collections::HashMap::new();
     for a in &assignments {
-        use sbx10x::probe_demux::Status::*;
+        use morselle::probe_demux::Status::*;
         match a.status {
             Assigned => {
                 assigned += 1;

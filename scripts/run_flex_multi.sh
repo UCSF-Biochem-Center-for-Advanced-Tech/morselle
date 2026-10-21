@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# docs/archive/FLEX_SUPPORT_PLAN.md Phase 3 (GEX) + Phase 5 (CRISPR) per-sample counting.
+# the Flex design notes Phase 3 (GEX) + Phase 5 (CRISPR) per-sample counting.
 #
 # Zero new Rust for the GEX side -- loops the existing, fully general
-# `sbxpress matrix` and `sbxpress cells` commands over each sample's Phase 2
+# `morselle matrix` and `morselle cells` commands over each sample's Phase 2
 # `probe-demux` barcode list. The optional CRISPR side adds Phase 4's
-# `sbxpress guides` output and Phase 5's `sbxpress protospacer-call`. Needs:
-#   - a GEX-library BAM already through `sbxpress annotate` + `sbxpress molecules`
+# `morselle guides` output and Phase 5's `morselle protospacer-call`. Needs:
+#   - a GEX-library BAM already through `morselle annotate` + `morselle molecules`
 #     (carries CB/PB/xf, same input `probe-demux` itself consumes)
-#   - `sbxpress probe-demux`'s output directory (one <sample_id>.barcodes.txt
+#   - `morselle probe-demux`'s output directory (one <sample_id>.barcodes.txt
 #     per declared sample)
-#   - optionally, a CRISPR-library guides BAM (`sbxpress guides` output, same
+#   - optionally, a CRISPR-library guides BAM (`morselle guides` output, same
 #     pooled multi-sample shape as the GEX BAM) and its `--features-out` TSV,
 #     to also run Phase 5's CRISPR counting + protospacer calling per sample
 #
@@ -28,7 +28,7 @@
 # molecules for that shared GEM.
 #
 # CRISPR identity piggybacks on GEX-defined cell identity (matching real 10x
-# biology, and docs/archive/FLEX_SUPPORT_PLAN.md Phase 5's own design): the CRISPR side
+# biology, and the Flex design notes Phase 5's own design): the CRISPR side
 # uses each sample's Phase 3 GEX-*called* cell list (`gex_outs/filtered_barcodes.csv`,
 # barcode column only -- not the pre-cell-calling probe-demux list), so a
 # sample with no GEX cells called gets no CRISPR counting either.
@@ -36,7 +36,7 @@
 # CRISPR `molecules` does NOT use `--tagseq`: that mode exists for a
 # genuinely different protocol -- pooled, non-single-cell libraries where one
 # barcode is a whole sample at tens-of-millions-of-reads depth (see
-# `sbx10x-molecules --help`'s own doc comment on the flag). Real CAT06 CRISPR
+# `morselle-molecules --help`'s own doc comment on the flag). Real CAT06 CRISPR
 # Guide Capture data is ordinary single-cell depth (real per-cell counts:
 # 6-7 UMIs/cell against a 3-UMI call floor -- see `protospacer_calling.rs`),
 # same order of magnitude as GEX, so `--tagseq`'s skip of cross-guide UMI
@@ -47,7 +47,7 @@
 # Usage:
 #   scripts/run_flex_multi.sh [--crispr-bam BAM --guide-features TSV] \
 #     [--jobs N] \
-#     <gex.bam> <probe_demux_out_dir> <output_dir> [extra `sbxpress cells` args...]
+#     <gex.bam> <probe_demux_out_dir> <output_dir> [extra `morselle cells` args...]
 #
 # Output:
 #   <output_dir>/crispr_molecules.bam              (only with --crispr-bam; shared
@@ -82,7 +82,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $(basename "$0") [--crispr-bam BAM --guide-features TSV] [--jobs N] <gex.bam> <probe_demux_out_dir> <output_dir> [extra 'sbxpress cells' args...]" >&2
+  echo "usage: $(basename "$0") [--crispr-bam BAM --guide-features TSV] [--jobs N] <gex.bam> <probe_demux_out_dir> <output_dir> [extra 'morselle cells' args...]" >&2
   exit 1
 }
 
@@ -123,7 +123,7 @@ shopt -s nullglob
 barcode_files=("$demux_dir"/*.barcodes.txt)
 shopt -u nullglob
 [ ${#barcode_files[@]} -gt 0 ] || {
-  echo "error: no *.barcodes.txt in $demux_dir -- run 'sbxpress probe-demux' first" >&2
+  echo "error: no *.barcodes.txt in $demux_dir -- run 'morselle probe-demux' first" >&2
   exit 1
 }
 
@@ -135,7 +135,7 @@ if [ -n "$crispr_bam" ] && [ ! -f "$crispr_molecules" ]; then
   # --flex: real production bug found 2026-09-21 on CAT06 CP1 -- every
   # sample's real per-sample CRISPR molecule count came back exactly 0
   # despite real, substantial signal existing in the pooled library. Root
-  # cause: without --flex, sbx10x-molecules groups UMI evidence by cell
+  # cause: without --flex, morselle-molecules groups UMI evidence by cell
   # barcode alone -- the exact cross-sample contamination bug already found
   # and fixed for the GEX side (RawKey now includes PB) never got applied
   # here, since this script's CRISPR molecules call was never updated to
@@ -155,7 +155,7 @@ if [ -n "$crispr_bam" ] && [ ! -f "$crispr_molecules" ]; then
   # 80% called vs 60%, Neg 4.5% vs 0.9%). With both rules: 0.99x, 59.4%
   # and 0.80%. CRISPR only -- GEX singletons are mostly real molecules.
   # Evidence: CAT06/read_depth_comparison_out/diff_investigation/FINDINGS.md.
-  sbxpress molecules "$crispr_bam" -o "$crispr_molecules" --flex \
+  morselle molecules "$crispr_bam" -o "$crispr_molecules" --flex \
     --umi-indel-correction --fold-singletons-min-top 10
 fi
 
@@ -182,10 +182,10 @@ run_sample() {
   while IFS= read -r -d '' argument; do extra+=("$argument"); done < "$CELLS_EXTRA_ARGS_FILE"
 
   echo "-- $sample: matrix (GEX) --"
-  sbxpress matrix "$gex_bam" --cell-barcodes "$barcodes" --probe-barcodes "$probes" --skip-unlisted-barcodes -o "$gex_raw"
+  morselle matrix "$gex_bam" --cell-barcodes "$barcodes" --probe-barcodes "$probes" --skip-unlisted-barcodes -o "$gex_raw"
 
   echo "-- $sample: cells (GEX) --"
-  sbxpress cells "$gex_raw/raw_feature_bc_matrix.h5" -o "$gex_outs" ${extra[@]+"${extra[@]}"}
+  morselle cells "$gex_raw/raw_feature_bc_matrix.h5" -o "$gex_outs" ${extra[@]+"${extra[@]}"}
 
   [ -n "$crispr_bam" ] || { echo "== $sample: done =="; return 0; }
 
@@ -201,14 +201,14 @@ run_sample() {
   crispr_outs="$sample_dir/crispr_outs"
 
   echo "-- $sample: matrix (CRISPR) --"
-  sbxpress matrix "$crispr_molecules" --cell-barcodes "$gex_cells" --probe-barcodes "$probes" --skip-unlisted-barcodes \
+  morselle matrix "$crispr_molecules" --cell-barcodes "$gex_cells" --probe-barcodes "$probes" --skip-unlisted-barcodes \
     --features "$guide_features" -o "$crispr_raw"
 
   echo "-- $sample: cells (CRISPR, --tagseq-barcodes) --"
-  sbxpress cells "$crispr_raw/raw_feature_bc_matrix.h5" --tagseq-barcodes "$gex_cells" -o "$crispr_outs"
+  morselle cells "$crispr_raw/raw_feature_bc_matrix.h5" --tagseq-barcodes "$gex_cells" -o "$crispr_outs"
 
   echo "-- $sample: protospacer-call --"
-  sbxpress protospacer-call "$crispr_outs/filtered_feature_bc_matrix.h5" -o "$crispr_outs"
+  morselle protospacer-call "$crispr_outs/filtered_feature_bc_matrix.h5" -o "$crispr_outs"
   echo "== $sample: done =="
 }
 export -f run_sample

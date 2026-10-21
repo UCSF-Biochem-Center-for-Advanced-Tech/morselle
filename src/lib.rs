@@ -1,8 +1,8 @@
-//! sbx10x — convert raw Roche SBX reads into per-sample 10x R1/R2 FASTQs.
+//! MORSELLE — MOlecular Read Structure, Extraction, Labeling & Enumeration.
 //!
-//! See `sbx10x_implementation_plan.md` for the milestone-phased design. M0 wires
-//! up the crate, CLI, logging, and a FASTQ read->write passthrough; subsequent
-//! milestones fill in orientation, demux, extraction, gating, and realignment.
+//! Library behind the `morselle` command: converts raw Roche SBX long reads and
+//! Illumina paired-end reads into per-sample 10x-style FASTQs, annotated BAMs,
+//! molecule counts, and expression matrices.
 
 pub mod accounting;
 pub mod anchors;

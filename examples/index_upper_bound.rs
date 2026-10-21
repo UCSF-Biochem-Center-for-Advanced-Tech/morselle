@@ -9,14 +9,14 @@
 
 use std::env;
 
+use morselle::anchors::{hamming, ILLUMINA_3P_ADAPTER};
+use morselle::barcode::Whitelist;
+use morselle::demux::{index_regions, DemuxCfg, Demuxer};
+use morselle::extract::{extract, ExtractCfg};
+use morselle::orient::{orient, FallbackMode, OrientCfg};
+use morselle::pipeline::{CbStatus, Orientation};
+use morselle::sample_sheet::SampleSheet;
 use needletail::parse_fastx_file;
-use sbx10x::anchors::{hamming, ILLUMINA_3P_ADAPTER};
-use sbx10x::barcode::Whitelist;
-use sbx10x::demux::{index_regions, DemuxCfg, Demuxer};
-use sbx10x::extract::{extract, ExtractCfg};
-use sbx10x::orient::{orient, FallbackMode, OrientCfg};
-use sbx10x::pipeline::{CbStatus, Orientation};
-use sbx10x::sample_sheet::SampleSheet;
 
 /// Independent i7: find the 3' adapter anywhere, i7 = +rc(R2 primer) (34 bp).
 fn indep_i7<'a>(seq: &'a [u8], ilen: usize) -> Option<&'a [u8]> {
@@ -40,7 +40,7 @@ fn indep_i7<'a>(seq: &'a [u8], ilen: usize) -> Option<&'a [u8]> {
     })
 }
 
-fn cb_ok(o: &sbx10x::orient::Oriented, e: &sbx10x::extract::Extracted, wl: &Whitelist) -> bool {
+fn cb_ok(o: &morselle::orient::Oriented, e: &morselle::extract::Extracted, wl: &Whitelist) -> bool {
     let Some((r1s, _)) = e.r1 else { return false };
     let cb = &o.seq[r1s..r1s + 16];
     if !matches!(wl.classify(cb), CbStatus::Fail) {

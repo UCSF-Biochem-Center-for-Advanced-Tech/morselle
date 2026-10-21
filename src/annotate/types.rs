@@ -7,7 +7,7 @@ pub const BIN_SIZE: i64 = 16_384;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "sbx10x-annotate",
+    name = "morselle-annotate",
     version,
     about = "Add 10x-compatible GX/GN/TX/AN/RE tags to a genomic BAM"
 )]
@@ -50,7 +50,7 @@ pub struct Cli {
     /// Cell Ranger's confident-mapping MAPQ (60 for minimap2). A primary read
     /// below it whose genes come from compatible sense exonic transcripts of
     /// exactly one gene is tagged `mm:i:1` (rescued; MAPQ is kept), which
-    /// `sbxpress molecules --min-mapq` counts. Intronic hits are never rescued.
+    /// `morselle molecules --min-mapq` counts. Intronic hits are never rescued.
     /// With --multimap-tags the rule spans the query group. 0 restores the
     /// pre-0.6.2 tags (no `mm`; the looser group rule with --multimap-tags).
     #[arg(long, default_value_t = 60)]
@@ -75,7 +75,7 @@ pub struct Cli {
 
     /// Canonical gene feature manifest. Creates it from the filtered GTF when
     /// absent; when present, verifies byte-for-byte identity. Pass the same file
-    /// to `sbxpress matrix --features` for stable rows across experiments.
+    /// to `morselle matrix --features` for stable rows across experiments.
     #[arg(long, value_name = "GENES.MTX")]
     pub genes_mtx: Option<PathBuf>,
 

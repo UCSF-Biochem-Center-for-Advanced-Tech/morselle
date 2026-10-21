@@ -9,10 +9,10 @@ use std::path::Path;
 
 fn binary(name: &str) -> std::path::PathBuf {
     match name {
-        "sbxpress-illumina" => bin(name, env!("CARGO_BIN_EXE_sbxpress-illumina")),
-        "sbxpress-probeset-align" => bin(name, env!("CARGO_BIN_EXE_sbxpress-probeset-align")),
-        "sbx10x-annotate" => bin(name, env!("CARGO_BIN_EXE_sbx10x-annotate")),
-        "sbx10x-molecules" => bin(name, env!("CARGO_BIN_EXE_sbx10x-molecules")),
+        "morselle-illumina" => bin(name, env!("CARGO_BIN_EXE_morselle-illumina")),
+        "morselle-probeset-align" => bin(name, env!("CARGO_BIN_EXE_morselle-probeset-align")),
+        "morselle-annotate" => bin(name, env!("CARGO_BIN_EXE_morselle-annotate")),
+        "morselle-molecules" => bin(name, env!("CARGO_BIN_EXE_morselle-molecules")),
         _ => unreachable!(),
     }
 }
@@ -36,7 +36,7 @@ fn molecules(input: &Path, root: &Path) -> serde_json::Value {
     let output = root.join("molecules.bam");
     let metrics = root.join("molecules.json");
     run(
-        &binary("sbx10x-molecules"),
+        &binary("morselle-molecules"),
         &[
             input.to_str().unwrap(),
             "--output",
@@ -70,7 +70,7 @@ fn illumina_flags_low_complexity_and_molecules_names_the_gene() {
     let tagged = root.join("tagged.fastq.gz");
     let conversion = root.join("conversion.json");
     run(
-        &binary("sbxpress-illumina"),
+        &binary("morselle-illumina"),
         &[
             "--r1",
             root.join("R1.fastq").to_str().unwrap(),
@@ -101,7 +101,7 @@ fn illumina_flags_low_complexity_and_molecules_names_the_gene() {
     std::fs::write(&probe_csv, format!("#probe_set_file_format=3.0\n#panel_name=test\ngene_id,probe_seq,probe_id,included,region,gene_name\nENSG00000000001,{poly_g},ENSG00000000001|GRICH|p1,TRUE,spliced,GRICH\nENSG00000000002,{normal},ENSG00000000002|NORMAL|p1,TRUE,spliced,NORMAL\n")).unwrap();
     let aligned = root.join("aligned.bam");
     run(
-        &binary("sbxpress-probeset-align"),
+        &binary("morselle-probeset-align"),
         &[
             tagged.to_str().unwrap(),
             "--probe-set",
@@ -161,7 +161,7 @@ fn annotate_keeps_yl_and_low_mapq_intronic_gene_is_listed() {
     std::fs::write(&mapped, sam).unwrap();
     let annotated = root.join("annotated.bam");
     run(
-        &binary("sbx10x-annotate"),
+        &binary("morselle-annotate"),
         &[
             mapped.to_str().unwrap(),
             "--gtf",

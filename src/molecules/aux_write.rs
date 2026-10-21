@@ -3,7 +3,7 @@
 //! `Record::push_aux` first calls `self.aux(tag)` -- a full linear scan of
 //! the record's ~24 aux tags -- to refuse duplicates, and `remove_aux`
 //! allocates a `CString` per call. On a 2M-read benchmark those scans were
-//! ~17% of all instructions in `sbx10x-molecules`. The write pass already
+//! ~17% of all instructions in `morselle-molecules`. The write pass already
 //! knows (from one `MoleculeTags` pass, plus the removals it just did) that
 //! the tags it appends are absent, so these helpers call htslib directly.
 //! The resulting bytes are identical to `remove_aux` + `push_aux`: removal

@@ -26,8 +26,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Python reporting and comparison dependencies
-        run: python3 -m pip install numpy python-pptx
+      - name: Python comparison dependencies
+        run: python3 -m pip install numpy
       - name: Linux tools
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y shellcheck cmake libhdf5-dev

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use flate2::read::MultiGzDecoder;
-use sbx10x::config::Cli;
+use morselle::config::Cli;
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -44,7 +44,7 @@ fn extract_per_barcode_values_include_barcode_less_reads() {
     std::fs::write(&input, selected).unwrap();
     let out_dir = temp.path().join("out");
     let cli = Cli::parse_from([
-        "sbxpress",
+        "morselle",
         "--fastqs",
         input.to_str().unwrap(),
         "--out-dir",
@@ -54,7 +54,7 @@ fn extract_per_barcode_values_include_barcode_less_reads() {
         "--minimap2",
         "--barcode-metrics",
     ]);
-    sbx10x::run(&cli).unwrap();
+    morselle::run(&cli).unwrap();
     let table = read_gz(&out_dir.join("metrics_summary.barcodes.tsv.gz"));
     assert!(table.contains("TGGCCATCACCTGCCT-1\t.\t1\t0\t0\t1\t1\t0\t0"));
     assert!(table.contains("GGTAACTTCTTGATGA-1\t.\t1\t0\t0\t1\t1\t0\t0"));
@@ -68,7 +68,7 @@ fn failed_output_accounts_for_every_read() {
     let failed = temp.path().join("failed.fastq.gz");
 
     let cli = Cli::parse_from([
-        "sbxpress",
+        "morselle",
         "--fastqs",
         fixture("smoke.fastq.gz").to_str().unwrap(),
         "--out-dir",
@@ -79,7 +79,7 @@ fn failed_output_accounts_for_every_read() {
         failed.to_str().unwrap(),
         "--barcode-metrics",
     ]);
-    sbx10x::run(&cli).unwrap();
+    morselle::run(&cli).unwrap();
 
     assert!(failed.is_file(), "side channel must be created");
 
@@ -135,7 +135,7 @@ fn without_the_flag_no_side_channel_is_written() {
     let temp = tempfile::tempdir().unwrap();
     let out_dir = temp.path().join("out");
     let cli = Cli::parse_from([
-        "sbxpress",
+        "morselle",
         "--fastqs",
         fixture("smoke.fastq.gz").to_str().unwrap(),
         "--out-dir",
@@ -143,7 +143,7 @@ fn without_the_flag_no_side_channel_is_written() {
         "--threads",
         "1",
     ]);
-    sbx10x::run(&cli).unwrap();
+    morselle::run(&cli).unwrap();
 
     let metrics: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(out_dir.join("metrics_summary.json")).unwrap(),
@@ -157,7 +157,7 @@ fn barcode_table_is_written_only_with_barcode_metrics() {
     let temp = tempfile::tempdir().unwrap();
     let out_dir = temp.path().join("out");
     let cli = Cli::parse_from([
-        "sbxpress",
+        "morselle",
         "--fastqs",
         fixture("smoke.fastq.gz").to_str().unwrap(),
         "--out-dir",
@@ -165,7 +165,7 @@ fn barcode_table_is_written_only_with_barcode_metrics() {
         "--threads",
         "1",
     ]);
-    sbx10x::run(&cli).unwrap();
+    morselle::run(&cli).unwrap();
     assert!(out_dir.join("metrics_summary.json").is_file());
     assert!(!out_dir.join("metrics_summary.barcodes.tsv.gz").exists());
 }
@@ -180,7 +180,7 @@ fn low_complexity_reads_are_tagged_or_dropped_on_the_sbx_arm() {
         let out_dir = temp.path().join("out");
         let failed = temp.path().join("failed.fastq.gz");
         let mut args: Vec<String> = [
-            "sbxpress",
+            "morselle",
             "--fastqs",
             fixture("smoke.fastq.gz").to_str().unwrap(),
             "--out-dir",
@@ -198,12 +198,12 @@ fn low_complexity_reads_are_tagged_or_dropped_on_the_sbx_arm() {
         .map(|arg| arg.to_string())
         .collect();
         args.extend(extra.iter().map(|arg| arg.to_string()));
-        sbx10x::run(&Cli::parse_from(args)).unwrap();
+        morselle::run(&Cli::parse_from(args)).unwrap();
         let metrics: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(out_dir.join("metrics_summary.json")).unwrap(),
         )
         .unwrap();
-        let r2 = read_gz(&out_dir.join("sbxpress_S1_L001_R2_001.fastq.gz"));
+        let r2 = read_gz(&out_dir.join("morselle_S1_L001_R2_001.fastq.gz"));
         let table = read_gz(&out_dir.join("metrics_summary.barcodes.tsv.gz"));
         let header: Vec<String> = table
             .lines()

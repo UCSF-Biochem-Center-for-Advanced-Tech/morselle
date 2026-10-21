@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Fast GX-degree-by-length analysis for any sbxpress annotated BAM.
+Fast GX-degree-by-length analysis for any morselle annotated BAM.
 
 Works on coordinate-sorted BAMs with or without NH tags. Uses the GX tag
 (semicolon-separated gene IDs) and RE tag (E/I/N) that are present in all
-sbxpress annotate outputs. No name-sort required.
+morselle annotate outputs. No name-sort required.
 
 Output: TSV tables and a plain-text summary to stdout and --out directory.
 

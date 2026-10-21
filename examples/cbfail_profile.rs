@@ -6,14 +6,14 @@
 use std::collections::HashMap;
 use std::env;
 
-use needletail::parse_fastx_file;
-use sbx10x::anchors::{
+use morselle::anchors::{
     revcomp, ILLUMINA_3P_ADAPTER, P5, P7, R1_PRIMER, R2_PRIMER, SBX_LEADER, TSO,
 };
-use sbx10x::barcode::Whitelist;
-use sbx10x::extract::{extract, ExtractCfg};
-use sbx10x::orient::{orient, FallbackMode, OrientCfg};
-use sbx10x::pipeline::{CbStatus, Orientation};
+use morselle::barcode::Whitelist;
+use morselle::extract::{extract, ExtractCfg};
+use morselle::orient::{orient, FallbackMode, OrientCfg};
+use morselle::pipeline::{CbStatus, Orientation};
+use needletail::parse_fastx_file;
 
 fn ham(a: &[u8], b: &[u8]) -> u32 {
     a.iter().zip(b).filter(|(x, y)| x != y).count() as u32

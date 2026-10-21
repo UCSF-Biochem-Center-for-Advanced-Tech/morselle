@@ -213,7 +213,7 @@ fn fractional_saturation_final_depth_matches_molecule_and_matrix_totals() {
 
 #[test]
 fn legacy_annotation_module_retains_cli_and_run_entry_points() {
-    let _: fn(&sbx10x::annotate_bam::Cli) -> anyhow::Result<()> = sbx10x::annotate_bam::run;
+    let _: fn(&morselle::annotate_bam::Cli) -> anyhow::Result<()> = morselle::annotate_bam::run;
 }
 
 #[test]
@@ -437,8 +437,8 @@ fn fractional_molecule_weights_survive_protospacer_calls_without_rounding() {
         ],
     );
     let protospacer = bin(
-        "sbxpress-protospacer-call",
-        env!("CARGO_BIN_EXE_sbxpress-protospacer-call"),
+        "morselle-protospacer-call",
+        env!("CARGO_BIN_EXE_morselle-protospacer-call"),
     );
     run(
         &protospacer,

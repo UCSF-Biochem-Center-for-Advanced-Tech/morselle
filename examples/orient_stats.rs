@@ -4,9 +4,9 @@
 use std::env;
 use std::time::Instant;
 
+use morselle::orient::{orient, FallbackMode, OrientCfg, OrientMethod};
+use morselle::pipeline::Orientation;
 use needletail::parse_fastx_file;
-use sbx10x::orient::{orient, FallbackMode, OrientCfg, OrientMethod};
-use sbx10x::pipeline::Orientation;
 
 fn main() -> anyhow::Result<()> {
     let mut args = env::args().skip(1);

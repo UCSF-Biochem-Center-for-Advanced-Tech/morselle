@@ -6,10 +6,10 @@ use std::io::Read as _;
 
 fn binary(name: &str) -> std::path::PathBuf {
     match name {
-        "sbxpress-illumina" => bin(name, env!("CARGO_BIN_EXE_sbxpress-illumina")),
-        "sbxpress" => bin(name, env!("CARGO_BIN_EXE_sbxpress")),
-        "sbxpress-probeset-align" => bin(name, env!("CARGO_BIN_EXE_sbxpress-probeset-align")),
-        "sbx10x-molecules" => bin(name, env!("CARGO_BIN_EXE_sbx10x-molecules")),
+        "morselle-illumina" => bin(name, env!("CARGO_BIN_EXE_morselle-illumina")),
+        "morselle" => bin(name, env!("CARGO_BIN_EXE_morselle")),
+        "morselle-probeset-align" => bin(name, env!("CARGO_BIN_EXE_morselle-probeset-align")),
+        "morselle-molecules" => bin(name, env!("CARGO_BIN_EXE_morselle-molecules")),
         "cr-bam-to-mtx" => bin(name, env!("CARGO_BIN_EXE_cr-bam-to-mtx")),
         _ => unreachable!(),
     }
@@ -23,7 +23,7 @@ fn sbx_extract_probe_molecules_matrix_barcode_funnel() {
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/smoke.fastq.gz");
     let extracted = root.join("extracted");
     run(
-        &binary("sbxpress"),
+        &binary("morselle"),
         &[
             "extract",
             "--fastqs",
@@ -36,7 +36,7 @@ fn sbx_extract_probe_molecules_matrix_barcode_funnel() {
             "--barcode-metrics",
         ],
     );
-    let r2 = extracted.join("sbxpress_S1_L001_R2_001.fastq.gz");
+    let r2 = extracted.join("morselle_S1_L001_R2_001.fastq.gz");
     let mut fastq = String::new();
     flate2::read::MultiGzDecoder::new(std::fs::File::open(&r2).unwrap())
         .read_to_string(&mut fastq)
@@ -53,7 +53,7 @@ fn sbx_extract_probe_molecules_matrix_barcode_funnel() {
     std::fs::write(&probe_csv, format!("#probe_set_file_format=3.0\n#panel_name=test\ngene_id,probe_seq,probe_id,included,region,gene_name\nENSG00000000001,{probe},ENSG00000000001|GENE1|p1,TRUE,spliced,GENE1\n")).unwrap();
     let aligned = root.join("aligned.bam");
     run(
-        &binary("sbxpress-probeset-align"),
+        &binary("morselle-probeset-align"),
         &[
             r2.to_str().unwrap(),
             "--probe-set",
@@ -64,7 +64,7 @@ fn sbx_extract_probe_molecules_matrix_barcode_funnel() {
     );
     let molecules = root.join("molecules.bam");
     run(
-        &binary("sbx10x-molecules"),
+        &binary("morselle-molecules"),
         &[
             aligned.to_str().unwrap(),
             "--output",
@@ -135,7 +135,7 @@ fn illumina_probe_molecules_matrix_barcode_funnel() {
     let tagged = root.join("tagged.fastq.gz");
     let conversion_metrics = root.join("conversion.json");
     run(
-        &binary("sbxpress-illumina"),
+        &binary("morselle-illumina"),
         &[
             "--r1",
             r1.to_str().unwrap(),
@@ -165,7 +165,7 @@ fn illumina_probe_molecules_matrix_barcode_funnel() {
     std::fs::write(&probe_csv, format!("#probe_set_file_format=3.0\n#panel_name=test\ngene_id,probe_seq,probe_id,included,region,gene_name\nENSG00000000001,{probe},ENSG00000000001|GENE1|p1,TRUE,spliced,GENE1\n")).unwrap();
     let aligned = root.join("aligned.bam");
     run(
-        &binary("sbxpress-probeset-align"),
+        &binary("morselle-probeset-align"),
         &[
             tagged.to_str().unwrap(),
             "--probe-set",
@@ -177,7 +177,7 @@ fn illumina_probe_molecules_matrix_barcode_funnel() {
     let molecules = root.join("molecules.bam");
     let molecule_metrics = root.join("molecules.json");
     run(
-        &binary("sbx10x-molecules"),
+        &binary("morselle-molecules"),
         &[
             aligned.to_str().unwrap(),
             "--output",

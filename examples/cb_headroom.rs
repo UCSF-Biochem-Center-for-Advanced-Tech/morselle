@@ -10,11 +10,11 @@
 use std::collections::BTreeMap;
 use std::env;
 
+use morselle::barcode::Whitelist;
+use morselle::extract::{extract, ExtractCfg};
+use morselle::orient::{orient, FallbackMode, OrientCfg};
+use morselle::pipeline::{CbStatus, Orientation};
 use needletail::parse_fastx_file;
-use sbx10x::barcode::Whitelist;
-use sbx10x::extract::{extract, ExtractCfg};
-use sbx10x::orient::{orient, FallbackMode, OrientCfg};
-use sbx10x::pipeline::{CbStatus, Orientation};
 
 const FLANK: u16 = 10;
 

@@ -1,8 +1,8 @@
-//! 10x Flex probe-barcode location + identification (docs/archive/FLEX_SUPPORT_PLAN.md
+//! 10x Flex probe-barcode location + identification (the Flex design notes
 //! Phase 1).
 //!
 //! Empirically confirmed with the real `orient()`/`extract()` code path (see
-//! docs/archive/FLEX_SUPPORT_PLAN.md, "Phase 0 — results"): the 10bp probe barcode sits
+//! the Flex design notes, "Phase 0 — results"): the 10bp probe barcode sits
 //! ~10bp after `Extracted::polyt_end` in canonical (P5→P7) coordinates, as
 //! `revcomp(whitelist_seq)`. That offset has real per-read jitter — `polyt_end`
 //! is `dt_run_end`'s *measured* T-run boundary, which isn't always exactly at
@@ -22,7 +22,7 @@ use crate::hamming_index::{offset_order, HammingIndex};
 pub const PROBE_BARCODE_LEN: usize = 10;
 
 /// Empirically confirmed center of the probe-barcode window, in bp past
-/// `Extracted::polyt_end` (canonical coordinates). See docs/archive/FLEX_SUPPORT_PLAN.md
+/// `Extracted::polyt_end` (canonical coordinates). See the Flex design notes
 /// Phase 0 results: this offset hit ~62% of confidently-oriented reads,
 /// dwarfing the next-highest offset — the windowed search below is what
 /// absorbs the remaining per-read jitter around it.

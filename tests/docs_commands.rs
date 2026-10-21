@@ -2,9 +2,9 @@
 //! accept. 0.5.2–0.5.8 documented `probe-demux --r2-fastq`,
 //! `--probe-barcode-wl` and `--config`, none of which ever existed.
 //!
-//! Scans fenced code blocks in README.md, MANUAL.md and INSTALL.md, joins
+//! Scans fenced code blocks in README.md and docs/{MANUAL,INSTALL,USAGE}.md, joins
 //! `\`-continued lines, splits pipelines on `|`, and for each
-//! `sbxpress <subcommand> ...` or `scripts/sbxpress*-pipeline.sh ...`
+//! `morselle <subcommand> ...` or `scripts/morselle*-pipeline.sh ...`
 //! checks every `--flag` against that tool's `--help`.
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -12,9 +12,9 @@ use std::process::Command;
 
 const DOCS: &[&str] = &[
     "README.md",
-    "MANUAL.md",
-    "INSTALL.md",
-    "docs/SERVER_TESTING.md",
+    "docs/MANUAL.md",
+    "docs/INSTALL.md",
+    "docs/USAGE.md",
 ];
 
 fn code_block_commands(text: &str) -> Vec<(usize, String)> {
@@ -55,8 +55,8 @@ fn help_text(tool: &[&str], cache: &mut BTreeMap<String, String>) -> String {
     cache
         .entry(key)
         .or_insert_with(|| {
-            let mut cmd = if tool[0] == "sbxpress" {
-                let mut c = Command::new(env!("CARGO_BIN_EXE_sbxpress"));
+            let mut cmd = if tool[0] == "morselle" {
+                let mut c = Command::new(env!("CARGO_BIN_EXE_morselle"));
                 c.args(&tool[1..]);
                 c
             } else {
@@ -91,19 +91,19 @@ fn documented_commands_use_real_flags() {
             for segment in command.split('|') {
                 let words: Vec<&str> = segment.split_whitespace().collect();
                 let Some(pos) = words.iter().position(|w| {
-                    *w == "sbxpress"
+                    *w == "morselle"
                         || w.trim_matches('"')
-                            .ends_with("scripts/sbxpress-pipeline.sh")
+                            .ends_with("scripts/morselle-pipeline.sh")
                         || w.trim_matches('"')
-                            .ends_with("scripts/sbxpress-gex-pipeline.sh")
+                            .ends_with("scripts/morselle-gex-pipeline.sh")
                 }) else {
                     continue;
                 };
-                let tool: Vec<&str> = if words[pos] == "sbxpress" {
+                let tool: Vec<&str> = if words[pos] == "morselle" {
                     match words.get(pos + 1) {
                         // minimap forwards flags to minimap2; bare --version/--help are global.
                         Some(sub) if !sub.starts_with('-') && *sub != "minimap" => {
-                            vec!["sbxpress", sub]
+                            vec!["morselle", sub]
                         }
                         _ => continue,
                     }

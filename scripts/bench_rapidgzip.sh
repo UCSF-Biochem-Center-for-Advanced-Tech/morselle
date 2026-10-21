@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # A/B the serial (flate2) and parallel (rapidgzip) gzip input decoders.
 #
-# Runs `sbxpress extract` twice over the same inputs — once with the default
-# serial reader, once with SBXPRESS_RAPIDGZIP=1 — and reports reads/sec for each.
+# Runs `morselle extract` twice over the same inputs — once with the default
+# serial reader, once with MORSELLE_RAPIDGZIP=1 — and reports reads/sec for each.
 # Both runs use the same binary and the same data, so the difference is the
 # decoder and nothing else.
 #
-#   ./bench_rapidgzip.sh <fastqs> [outdir] [threads] [split] [extra sbxpress args...]
+#   ./bench_rapidgzip.sh <fastqs> [outdir] [threads] [split] [extra morselle args...]
 #
 # `fastqs` is a directory of raw SBX FASTQs or a single file. The single-file case
 # is the one worth measuring: that is where one serial reader feeds the whole
@@ -33,8 +33,8 @@ SPLIT=${4:-0}
 shift $(( $# < 4 ? $# : 4 ))
 EXTRA=("$@")
 
-SBXPRESS=${SBXPRESS:-sbxpress}
-command -v "$SBXPRESS" >/dev/null || { echo "sbxpress not found (set SBXPRESS=/path)" >&2; exit 1; }
+MORSELLE=${MORSELLE:-morselle}
+command -v "$MORSELLE" >/dev/null || { echo "morselle not found (set MORSELLE=/path)" >&2; exit 1; }
 
 if [[ "$THREADS" == "0" ]]; then
   THREADS=$( (nproc 2>/dev/null || sysctl -n hw.ncpu) )
@@ -59,12 +59,12 @@ fi
 echo
 
 # Run one configuration and print its throughput. $1 is a label, $2 is the value
-# of SBXPRESS_RAPIDGZIP for the run.
+# of MORSELLE_RAPIDGZIP for the run.
 run_one() {
   local label=$1 enable=$2 dir="$OUT/$1"
   rm -rf "$dir"
   local log="$OUT/$label.log"
-  SBXPRESS_RAPIDGZIP="$enable" "$SBXPRESS" extract \
+  MORSELLE_RAPIDGZIP="$enable" "$MORSELLE" extract \
     --fastqs "$FASTQS" --out-dir "$dir" \
     --threads "$THREADS" --split "$SPLIT" ${EXTRA[@]+"${EXTRA[@]}"} > "$log" 2>&1
 

@@ -434,7 +434,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         serde_json::to_string_pretty(&metrics)?,
     )?;
     eprintln!(
-        "[sbxpress cells] OrdMag={} EmptyDrops={} filtered={} molecules={} -> {}",
+        "[morselle cells] OrdMag={} EmptyDrops={} filtered={} molecules={} -> {}",
         metrics.ordmag_cells,
         metrics.emptydrops_cells,
         metrics.filtered_cells,

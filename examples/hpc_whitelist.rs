@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::env;
 
-use sbx10x::barcode::{decode16, Whitelist};
+use morselle::barcode::{decode16, Whitelist};
 
 // full RLE: "AAB CCC" -> bytes [A,B,C] (lengths dropped entirely)
 fn rle_full(cb: &[u8]) -> Vec<u8> {

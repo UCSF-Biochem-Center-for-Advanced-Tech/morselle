@@ -15,9 +15,9 @@ use flate2::Compression;
 /// compression level, not a footgun default-level-0 gzip stream.
 ///
 /// Exists because gzip encoding is real, measured CPU cost (~54% of
-/// `extract`'s time in a profiled run — see PROFILING.md) that's pure waste
+/// `extract`'s time in a profiled run — see docs/PROFILING.md) that's pure waste
 /// when the output is about to be read once by a co-located process (a
-/// mapper) rather than stored: `sbxpress extract --no-gzip` into a named
+/// mapper) rather than stored: `morselle extract --no-gzip` into a named
 /// pipe lets `minimap2` read raw FASTQ directly with no compress/decompress
 /// round trip on either end.
 enum ShardSink {

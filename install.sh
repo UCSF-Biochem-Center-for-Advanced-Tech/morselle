@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# sbxpress installer for Ubuntu/Debian and macOS.
+# morselle installer for Ubuntu/Debian and macOS.
 #
 # Installs build prerequisites, minimap2 companions, the Rust toolchain (if
 # missing), builds the release binaries, and installs them under a prefix.
@@ -23,9 +23,9 @@ PREFIX="/usr/local"
 SKIP_PACKAGES=0
 SKIP_RUST=0
 
-log()  { printf '\033[1;36m[sbxpress]\033[0m %s\n' "$*"; }
-warn() { printf '\033[1;33m[sbxpress] WARN:\033[0m %s\n' "$*" >&2; }
-die()  { printf '\033[1;31m[sbxpress] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
+log()  { printf '\033[1;36m[morselle]\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[morselle] WARN:\033[0m %s\n' "$*" >&2; }
+die()  { printf '\033[1;31m[morselle] ERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -40,7 +40,7 @@ done
 # Repo root = directory of this script, so it can be run from anywhere.
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$REPO_DIR"
-[[ -f Cargo.toml ]] || die "Cargo.toml not found in $REPO_DIR — run this from the sbxpress source tree."
+[[ -f Cargo.toml ]] || die "Cargo.toml not found in $REPO_DIR — run this from the morselle source tree."
 
 # Pick sudo only when the install prefix is not writable.
 writable_prefix() {
@@ -103,23 +103,23 @@ if [[ -f Cargo.lock ]]; then
 else
   cargo build --release
 fi
-# Every private engine `sbxpress` dispatches to (engine() in src/bin/sbxpress.rs).
+# Every private engine `morselle` dispatches to (engine() in src/bin/morselle.rs).
 # 0.5.2-0.6.0 omitted the four Flex/CRISPR helpers here, so an installed
-# sbxpress could not run probeset-align, probe-demux, guides or
+# morselle could not run probeset-align, probe-demux, guides or
 # protospacer-call; tests/pipeline_scripts.rs now checks this list against
 # the dispatch table.
-HELPERS=(sbx10x sbxpress-illumina sbxpress-cells sbx10x-annotate sbx10x-molecules bam-audit cr-bam-to-mtx
-  sbxpress-probe-demux sbxpress-guides sbxpress-protospacer-call sbxpress-probeset-align)
-for binary in sbxpress "${HELPERS[@]}"; do
+HELPERS=(morselle-extract morselle-illumina morselle-cells morselle-annotate morselle-molecules bam-audit cr-bam-to-mtx
+  morselle-probe-demux morselle-guides morselle-protospacer-call morselle-probeset-align)
+for binary in morselle "${HELPERS[@]}"; do
   [[ -x target/release/$binary ]] || die "build did not produce target/release/$binary"
 done
 
 # 4. Install public CLI and private engines ------------------------------------
 BIN_DIR="$PREFIX/bin"
-LIBEXEC_DIR="$PREFIX/libexec/sbxpress"
-log "installing public command -> $BIN_DIR/sbxpress"
+LIBEXEC_DIR="$PREFIX/libexec/morselle"
+log "installing public command -> $BIN_DIR/morselle"
 $SUDO install -d "$BIN_DIR"
-$SUDO install -m 0755 target/release/sbxpress "$BIN_DIR/sbxpress"
+$SUDO install -m 0755 target/release/morselle "$BIN_DIR/morselle"
 $SUDO install -d "$LIBEXEC_DIR"
 for helper in "${HELPERS[@]}"; do
   log "installing private engine -> $LIBEXEC_DIR/$helper"
@@ -161,7 +161,7 @@ grep -qi '^Usage:' <<< "$PAFTOOLS_HELP" || die "paftools.js verification failed"
 log "using k8 $K8_VERSION and paftools.js (minimap2 $MM2_VERSION)"
 
 # 6. Install staged barcode resources (optional) --------------------------------
-SHARE_DIR="$PREFIX/share/sbxpress"
+SHARE_DIR="$PREFIX/share/morselle"
 BARCODE_SHARE_DIR="$SHARE_DIR/barcodes"
 if compgen -G "resources/10x_barcodes/*" >/dev/null; then
   log "installing 10x barcode resources -> $BARCODE_SHARE_DIR/"
@@ -173,21 +173,21 @@ if compgen -G "resources/10x_barcodes/*" >/dev/null; then
 fi
 
 # 7. Verify + smoke test --------------------------------------------------------
-log "installed: $("$BIN_DIR/sbxpress" --version 2>/dev/null || echo '(version check failed)')"
+log "installed: $("$BIN_DIR/morselle" --version 2>/dev/null || echo '(version check failed)')"
 log "installed: $(sed -n '1p' <<< "$PAFTOOLS_HELP")"
 SMOKE_FQ="tests/fixtures/smoke.fastq.gz"
 SMOKE_SS="tests/fixtures/CE15204_bclconvert_input.csv"
 if [[ -f "$SMOKE_FQ" && -f "$SMOKE_SS" ]]; then
   SMOKE_OUT="$(mktemp -d)"
   log "running smoke test on $SMOKE_FQ ..."
-  if "$BIN_DIR/sbxpress" extract --fastqs "$SMOKE_FQ" -o "$SMOKE_OUT" --sample-sheet "$SMOKE_SS" \
+  if "$BIN_DIR/morselle" extract --fastqs "$SMOKE_FQ" -o "$SMOKE_OUT" --sample-sheet "$SMOKE_SS" \
        >/dev/null 2>&1 \
      && [[ -f "$SMOKE_OUT/metrics_summary.json" ]]; then
     log "smoke test OK (metrics_summary.json written)."
   else
-    warn "smoke test did not complete cleanly — check 'sbxpress extract --help' manually."
+    warn "smoke test did not complete cleanly — check 'morselle extract --help' manually."
   fi
   rm -rf "$SMOKE_OUT"
 fi
 
-log "done. Ensure $BIN_DIR is on your PATH, then run: sbxpress --help"
+log "done. Ensure $BIN_DIR is on your PATH, then run: morselle --help"

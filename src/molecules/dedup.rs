@@ -1,6 +1,6 @@
 //! UMI correction and cross-gene collision resolution.
 //!
-//! Restored from the pre-0.5.7 `sbx10x-molecules` implementation (commit
+//! Restored from the pre-0.5.7 `morselle-molecules` implementation (commit
 //! `4d42a18`), with fractional collision resolution layered on top as an
 //! opt-in fourth policy. See `resolve_collisions` for the policy table.
 // FxHash: these maps hold billions of fixed-size integer keys at real
@@ -163,13 +163,13 @@ fn correct_umis<S: BuildHasher + Sync>(
         // errors in the UMI itself are no longer corrected either, so
         // molecule counts trend slightly high rather than slightly low.
         eprintln!(
-            "[sbxpress molecules] phase=umi_correct skipped (--tagseq without --position-aware-umis) raw_nodes={}",
+            "[morselle molecules] phase=umi_correct skipped (--tagseq without --position-aware-umis) raw_nodes={}",
             evidence.len()
         );
         return (evidence.keys().map(|&key| (key, key)).collect(), 0);
     }
     if workers <= 1 {
-        eprintln!("[sbxpress molecules] phase=umi_correct mode=serial start groups={total_groups}");
+        eprintln!("[morselle molecules] phase=umi_correct mode=serial start groups={total_groups}");
         let mut roots = HashMap::with_capacity_and_hasher(sorted_keys.len(), Default::default());
         let mut folded = 0;
         for run in sorted_keys.chunk_by(same_umi_group) {
@@ -187,7 +187,7 @@ fn correct_umis<S: BuildHasher + Sync>(
         "correcting UMI groups in parallel"
     );
     eprintln!(
-        "[sbxpress molecules] phase=umi_correct start workers={workers} groups={total_groups}"
+        "[morselle molecules] phase=umi_correct start workers={workers} groups={total_groups}"
     );
     let completed = Arc::new(AtomicUsize::new(0));
     let checkpoint = (total_groups / 100).max(1_000);
@@ -201,7 +201,7 @@ fn correct_umis<S: BuildHasher + Sync>(
                     let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
                     if done % checkpoint == 0 || done == total_groups {
                         eprintln!(
-                            "[sbxpress molecules] phase=umi_correct groups={done}/{total_groups}"
+                            "[morselle molecules] phase=umi_correct groups={done}/{total_groups}"
                         );
                     }
                     (roots, folded)
@@ -281,7 +281,7 @@ pub struct DedupPolicy {
 }
 
 impl DedupPolicy {
-    /// The policy `sbx10x-molecules` uses for its flags.
+    /// The policy `morselle-molecules` uses for its flags.
     pub fn from_flags(tagseq: bool, fractional: bool, position_aware: bool) -> Self {
         Self {
             tagseq,
@@ -324,7 +324,7 @@ pub fn build_decisions_with<S: BuildHasher + Sync>(
     sorted_keys.par_sort_unstable_by_key(|k| (k.cell, k.sample, k.gene, k.umi));
     let total_groups = sorted_keys.chunk_by(same_umi_group).count();
     eprintln!(
-        "[sbxpress molecules] phase=umi_group_index complete groups={} raw_nodes={}",
+        "[morselle molecules] phase=umi_group_index complete groups={} raw_nodes={}",
         total_groups,
         evidence.len()
     );
@@ -352,7 +352,7 @@ pub fn build_decisions_with<S: BuildHasher + Sync>(
     metrics.umi_singletons_folded += folded;
     drop(sorted_keys);
     eprintln!(
-        "[sbxpress molecules] phase=umi_correct complete roots={}",
+        "[morselle molecules] phase=umi_correct complete roots={}",
         roots.len()
     );
     // `+=`, not `=`: the sharded path calls build_decisions() once per shard
@@ -366,12 +366,12 @@ pub fn build_decisions_with<S: BuildHasher + Sync>(
         .filter(|(key, root)| key.umi != root.umi)
         .count() as u64;
 
-    eprintln!("[sbxpress molecules] phase=molecule_aggregate start");
+    eprintln!("[morselle molecules] phase=molecule_aggregate start");
     let mut molecules = aggregate_molecules(evidence, &roots);
     metrics.corrected_umi_nodes += molecules.len() as u64;
     metrics.molecules_before_gene_resolution += molecules.len() as u64;
     eprintln!(
-        "[sbxpress molecules] phase=molecule_aggregate complete corrected_nodes={}",
+        "[morselle molecules] phase=molecule_aggregate complete corrected_nodes={}",
         molecules.len()
     );
 
@@ -395,7 +395,7 @@ pub fn build_decisions_with<S: BuildHasher + Sync>(
             curve.add_molecule(cell, hash);
         }
     }
-    eprintln!("[sbxpress molecules] phase=decision_materialize start");
+    eprintln!("[morselle molecules] phase=decision_materialize start");
     let decisions: HashMap<RawKey, Decision> = evidence
         .keys()
         .map(|&key| {
@@ -415,7 +415,7 @@ pub fn build_decisions_with<S: BuildHasher + Sync>(
         })
         .collect();
     eprintln!(
-        "[sbxpress molecules] phase=decision_materialize complete decisions={}",
+        "[morselle molecules] phase=decision_materialize complete decisions={}",
         decisions.len()
     );
     (decisions, saturation)

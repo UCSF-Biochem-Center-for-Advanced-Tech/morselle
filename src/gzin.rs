@@ -15,9 +15,9 @@
 //!
 //! | Variable | Default | Meaning |
 //! |---|---|---|
-//! | `SBXPRESS_RAPIDGZIP` | off | `1`/`true`/`on`/`yes` enables parallel decode |
-//! | `SBXPRESS_RAPIDGZIP_THREADS` | worker count | Per-file decoder worker budget |
-//! | `SBXPRESS_RAPIDGZIP_POOL` | worker count | Process-wide ceiling on decode slots |
+//! | `MORSELLE_RAPIDGZIP` | off | `1`/`true`/`on`/`yes` enables parallel decode |
+//! | `MORSELLE_RAPIDGZIP_THREADS` | worker count | Per-file decoder worker budget |
+//! | `MORSELLE_RAPIDGZIP_POOL` | worker count | Process-wide ceiling on decode slots |
 //!
 //! The pool matters on the one-file-per-thread path, where many files decode at
 //! once: without an aggregate ceiling each file would claim its own worker budget
@@ -70,12 +70,12 @@ fn env_usize(key: &str) -> Option<usize> {
 fn config() -> Option<&'static Config> {
     CONFIG
         .get_or_init(|| {
-            if !env_flag("SBXPRESS_RAPIDGZIP") {
+            if !env_flag("MORSELLE_RAPIDGZIP") {
                 return None;
             }
             let workers = rayon::current_num_threads().max(1);
-            let threads = env_usize("SBXPRESS_RAPIDGZIP_THREADS").unwrap_or(workers);
-            let pool_workers = env_usize("SBXPRESS_RAPIDGZIP_POOL").unwrap_or(workers);
+            let threads = env_usize("MORSELLE_RAPIDGZIP_THREADS").unwrap_or(workers);
+            let pool_workers = env_usize("MORSELLE_RAPIDGZIP_POOL").unwrap_or(workers);
 
             let pool = DecoderPool::builder().workers(pool_workers).build().ok()?;
             let decoder = Decoder::builder()

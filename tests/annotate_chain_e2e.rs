@@ -14,9 +14,9 @@ type Table = BTreeMap<(String, String), BTreeMap<String, u64>>;
 
 fn binary(name: &str) -> std::path::PathBuf {
     match name {
-        "sbxpress-illumina" => bin(name, env!("CARGO_BIN_EXE_sbxpress-illumina")),
-        "sbx10x-annotate" => bin(name, env!("CARGO_BIN_EXE_sbx10x-annotate")),
-        "sbx10x-molecules" => bin(name, env!("CARGO_BIN_EXE_sbx10x-molecules")),
+        "morselle-illumina" => bin(name, env!("CARGO_BIN_EXE_morselle-illumina")),
+        "morselle-annotate" => bin(name, env!("CARGO_BIN_EXE_morselle-annotate")),
+        "morselle-molecules" => bin(name, env!("CARGO_BIN_EXE_morselle-molecules")),
         _ => unreachable!(),
     }
 }
@@ -111,7 +111,7 @@ fn illumina_annotate_molecules_barcode_funnel() {
     let tagged = root.join("tagged.fastq.gz");
     let conversion_metrics = root.join("conversion.json");
     run(
-        &binary("sbxpress-illumina"),
+        &binary("morselle-illumina"),
         &[
             "--r1",
             r1.to_str().unwrap(),
@@ -137,7 +137,7 @@ fn illumina_annotate_molecules_barcode_funnel() {
     let (annotated, annotation_metrics) =
         (root.join("annotated.bam"), root.join("annotation.json"));
     run(
-        &binary("sbx10x-annotate"),
+        &binary("morselle-annotate"),
         &[
             mapped.to_str().unwrap(),
             "--gtf",
@@ -152,7 +152,7 @@ fn illumina_annotate_molecules_barcode_funnel() {
     );
     let (molecules, molecule_metrics) = (root.join("molecules.bam"), root.join("molecules.json"));
     run(
-        &binary("sbx10x-molecules"),
+        &binary("morselle-molecules"),
         &[
             annotated.to_str().unwrap(),
             "--output",

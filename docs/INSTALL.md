@@ -1,8 +1,14 @@
-# sbxpress — Installation & Operations Manual (Ubuntu and macOS)
+# MORSELLE — Installation & Operations Manual (Ubuntu and macOS)
 
-`sbxpress` converts raw Roche SBX long reads (one full library molecule per read,
-P5→P7) into per-sample 10x R1/R2 FASTQs ready for 10x reference ARC. This guide
-covers installing and running it on Ubuntu/Debian and macOS.
+MORSELLE (MOlecular Read Structure, Extraction, Labeling & Enumeration)
+converts raw Roche SBX long reads (one full library molecule per read, P5→P7)
+and paired Illumina 10x reads into per-sample 10x-style FASTQs, annotated BAMs,
+and feature-barcode matrices. This guide covers installing and running it on
+Ubuntu/Debian and macOS.
+
+MORSELLE is alpha software; contact Matt Settles
+([matt.settles@ucsf.edu](mailto:matt.settles@ucsf.edu)) before using it for
+your own data.
 
 ---
 
@@ -26,7 +32,7 @@ more physical cores scale further.
 
 ## 2. Quick install
 
-From the `sbxpress` source directory:
+From the `morselle` source directory:
 
 ```bash
 ./install.sh
@@ -36,11 +42,11 @@ This will:
 
 1. Install build prerequisites, `minimap2`, and `samtools` using `apt-get` on
    Ubuntu/Debian or Homebrew on macOS, then install the official `k8` runtime and matching
-   `paftools.js` sbxpress minimap companion script.
+   `paftools.js` minimap2 companion script.
 2. Install the Rust toolchain via rustup if `cargo` is not already on `PATH`.
 3. Build the optimized release binaries (`cargo build --release --locked`).
-4. Install the unified `sbxpress` command to `/usr/local/bin/`; its processing
-   engines are installed privately under `/usr/local/libexec/sbxpress/`.
+4. Install the unified `morselle` command to `/usr/local/bin/`; its processing
+   engines are installed privately under `/usr/local/libexec/morselle/`.
 5. Run a built-in smoke test.
 
 Common variants:
@@ -61,17 +67,17 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc && source ~/.bashrc
 Verify:
 
 ```bash
-sbxpress --version
-sbxpress --help
-sbxpress annotate --version
-sbxpress annotate --help
-sbxpress molecules --version
-sbxpress molecules --help
-sbxpress audit --version
-sbxpress audit --help
-sbxpress matrix --version
-sbxpress matrix --help
-sbxpress minimap --version
+morselle --version
+morselle --help
+morselle annotate --version
+morselle annotate --help
+morselle molecules --version
+morselle molecules --help
+morselle audit --version
+morselle audit --help
+morselle matrix --version
+morselle matrix --help
+morselle minimap --version
 samtools --version
 paftools.js
 ```
@@ -86,19 +92,19 @@ Use the same prefix used during installation:
 ./uninstall.sh --prefix "$HOME/.local"
 ```
 
-This removes `sbxpress`, its private engines, and `share/sbxpress`. Because `k8`
+This removes `morselle`, its private engines, and `share/morselle`. Because `k8`
 and `paftools.js` may be shared with other minimap2 workflows, they are preserved
 unless `--remove-companions` is supplied. Use `--keep-data` to retain the
 installed whitelist.
 
 ### BAM gene/transcript annotation
 
-`sbxpress annotate` adds 10x-compatible `GX`, `GN`, `TX`, `AN`, and `RE`
+`morselle annotate` adds 10x-compatible `GX`, `GN`, `TX`, `AN`, and `RE`
 tags to a coordinate-sorted genomic BAM using the same GTF used to build the
-sbxpress minimap reference. Coordinate order is preserved; index the output afterward.
+morselle minimap reference. Coordinate order is preserved; index the output afterward.
 
 ```bash
-sbxpress annotate sample.coordinate.bam \
+morselle annotate sample.coordinate.bam \
   --gtf gencode.v50.primary_assembly.annotation.gtf.gz \
   --output sample.annotated.bam \
   --three-prime \
@@ -110,8 +116,8 @@ The annotator also supports streaming BAM/SAM input and BAM output with `-`. Thi
 allows annotation before the only coordinate sort:
 
 ```bash
-sbxpress minimap -a -x splice -m 20 -s 30 --secondary=no -y reference.mmi reads.fastq.gz \
-| sbxpress annotate - --gtf genes.gtf.gz --output - \
+morselle minimap -a -x splice -m 20 -s 30 --secondary=no -y reference.mmi reads.fastq.gz \
+| morselle annotate - --gtf genes.gtf.gz --output - \
     --metrics sample.annotation.metrics.json --three-prime \
 | samtools sort -@ 8 -o sample.annotated.coordinate.bam -
 samtools index -@ 8 sample.annotated.coordinate.bam
@@ -123,13 +129,13 @@ GEX behavior; use `--include-introns false` for exon-only gene assignment. The
 also enabled by default; each can be disabled explicitly for custom references.
 This stage does not correct UMIs or set `xf` molecule flags.
 
-Follow annotation with `sbxpress molecules`. It performs directional Hamming-1
+Follow annotation with `morselle molecules`. It performs directional Hamming-1
 UMI correction within each cell/gene, resolves cross-gene corrected-UMI
 collisions by read support, writes corrected `UB`, and sets `xf=25` on exactly
 one representative of each counted molecule (`xf=17` on other eligible reads).
 
 ```bash
-sbxpress molecules sample.annotated.bam --output sample.molecules.bam --threads 8
+morselle molecules sample.annotated.bam --output sample.molecules.bam --threads 8
 samtools index -@ 8 sample.molecules.bam
 ```
 
@@ -142,13 +148,13 @@ and their JSON resolution metrics are not emitted for other assay types.
 ### Convert matched Illumina FASTQs
 
 For a platform-controlled comparison, convert standard 10x Illumina R1/R2 files
-to the same tagged R2-only handoff produced by `sbxpress extract --minimap2`:
+to the same tagged R2-only handoff produced by `morselle extract --minimap2`:
 
 ```bash
-sbxpress illumina \
+morselle illumina \
   --r1 sample_L001_R1_001.fastq.gz \
   --r2 sample_L001_R2_001.fastq.gz \
-  --whitelist /usr/local/share/sbxpress/barcodes/3M-february-2018.txt.gz \
+  --whitelist /usr/local/share/morselle/barcodes/3M-february-2018.txt.gz \
   --output sample.illumina.minimap.fastq.gz
 ```
 
@@ -164,9 +170,9 @@ The second installed app reconstructs 10x reference molecule counts from a compl
 files so zero-count features/barcodes and original ordering are retained:
 
 ```bash
-sbxpress matrix /data/outs/possorted_genome_bam.bam \
+morselle matrix /data/outs/possorted_genome_bam.bam \
   --features /data/outs/raw_feature_bc_matrix/features.tsv.gz \
-  --cell-barcodes /usr/local/share/sbxpress/barcodes/737K-arc-v1.txt.gz \
+  --cell-barcodes /usr/local/share/morselle/barcodes/737K-arc-v1.txt.gz \
   --genome GRCh38 \
   --output /data/reconstructed/outs
 ```
@@ -183,23 +189,21 @@ molecule-representative alignment lies outside the retained interval.
 
 ## 3. Getting the source onto the server
 
-Clone the release from the configured GitHub repository (authenticate if required),
-or transfer a checkout from your workstation:
+Clone a tagged release from GitHub, or transfer a checkout from your workstation:
 
 ```bash
-# A) rsync the working tree (recommended — includes the whitelist if you have it)
-rsync -av --exclude target/ /path/to/sbxpress/ user@server:~/sbxpress/
-
-# B) tarball
-tar czf sbxpress.tgz --exclude=target sbxpress/ && scp sbxpress.tgz user@server:~/
-
-# C) clone the v0.6.0 release
-git clone --branch v0.6.0 https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbxpress.git sbxpress
+# A) clone the v0.7.0 release (recommended)
+git clone --branch v0.7.0 https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle.git
 # NOTE: clone does NOT include the whitelist
+
+# B) rsync a working tree (includes a locally staged whitelist)
+rsync -av --exclude target/ /path/to/morselle/ user@server:~/morselle/
+
+# C) tarball
+tar czf morselle.tgz --exclude=target morselle/ && scp morselle.tgz user@server:~/
 ```
 
 `rsync`/`tar` bring a locally staged whitelist along; `git clone` does **not** (§4).
-For release acceptance runs, follow [server testing](docs/SERVER_TESTING.md).
 
 ---
 
@@ -241,10 +245,10 @@ Without a whitelist the pipeline still runs but cannot gate/rescue cell barcodes
 Single directory of run files, all cores:
 
 ```bash
-sbxpress extract \
+morselle extract \
   --fastqs /data/CAT02/raw_fastqs_run1/device_0/out \
   --bclconvert-samplesheet /data/CE15204_bclconvert_input.csv \
-  --whitelist /usr/local/share/sbxpress/737K-arc-v1.txt.gz \
+  --whitelist /usr/local/share/morselle/737K-arc-v1.txt.gz \
   --out-dir /data/out/run1 \
   --threads 0          # 0 = use all cores
 ```
@@ -252,7 +256,7 @@ sbxpress extract \
 Explicit files / multiple devices:
 
 ```bash
-sbxpress extract --fastqs /data/.../device_{0,1,2,3}/out/PrimaryAnalysis_*.fastq.gz \
+morselle extract --fastqs /data/.../device_{0,1,2,3}/out/PrimaryAnalysis_*.fastq.gz \
   --bclconvert-samplesheet sheet.csv --whitelist 737K-arc-v1.txt.gz -o /data/out/run1
 ```
 
@@ -269,14 +273,14 @@ orientations; orientation is auto-detected and enforced per file). Useful flags:
 | `--lenient` | off | within-2 CB rescue — **leave off** (only ~51% precise on the dense ARC whitelist) |
 | `--cb-gate` | on | drop pairs whose CB isn't on/near the whitelist |
 | `--cellranger` | off | 10x reference compatibility preset — applies the settings it requires (currently `--max-r2-len 649`; explicit flags override). **Use this for 10x reference input.** |
-| `--minimap2` | off | R2-only sbxpress minimap preset. Puts `CR`, `CB`, `UR`, `UB`, `CY`, and `UY` SAM-style tags in the R2 FASTQ comment; use sbxpress minimap `-y`. Mutually exclusive with `--cellranger`. |
+| `--minimap2` | off | R2-only minimap2 preset. Puts `CR`, `CB`, `UR`, `UB`, `CY`, and `UY` SAM-style tags in the R2 FASTQ comment; use `morselle minimap` `-y`. Mutually exclusive with `--cellranger`. |
 | `--processing-tags` | off | Add SBX provenance tags (`XO`, `XB`, `XI`, `XA`, `XL`) to R2 comments; automatically enabled by `--minimap2`. |
 | `--max-r2-len` | 0 (uncapped) | cap R2 (cDNA) length, seq+qual together; 0 = full-length. 10x reference hard-caps at 649 bp (`--cellranger` sets this) |
 | `--gzip-level` | 4 | output gzip compression level (lower = faster/larger); output compression is the wall-clock floor at scale |
 | `--split` | 1 | split each sample across N gzip files (`_001`..`_00N`); N>1 parallelizes per-sample compression |
 | `--reader-threads` | 0 (auto) | I/O strategy. Auto: with few input files (e.g. a single large one) decode is decoupled from processing so every core is used; with many files the classic one-file-per-thread path is used. `N>0` forces the pipelined path with N reader threads |
 
-Tune logging with `RUST_LOG` (e.g. `RUST_LOG=debug sbxpress ...`).
+Tune logging with `RUST_LOG` (e.g. `RUST_LOG=debug morselle ...`).
 
 ---
 
@@ -288,7 +292,7 @@ In `--out-dir`:
   10x reference naming (R1 = 28 bp CB+UMI, R2 = cDNA).
 - With `--minimap2`, only the R2 files are written. Their comments carry raw and
   corrected barcode/UMI tags (`CR`/`CB`, `UR`/provisional `UB`) and qualities
-  (`CY`, `UY`). Align with `sbxpress minimap -a -y`; `-y` copies these comments to SAM/BAM.
+  (`CY`, `UY`). Align with `morselle minimap -a -y`; `-y` copies these comments to SAM/BAM.
   `--minimap2` also adds SBX provenance tags for orientation (`XO`), barcode
   processing route (`XB`), index route (`XI`), anchor evidence (`XA` bitmask),
   and extracted pre-cap cDNA length (`XL`).
@@ -318,7 +322,7 @@ correction. Keep barcode and UMI separate: group `(CB, UR)` before correction an
 650 bp or longer fails with STAR `quality string length is not equal to sequence length`.
 SBX cDNA routinely exceeds this. Pass **`--cellranger`** to apply the 10x reference
 compatibility preset (currently `--max-r2-len 649`), which caps R2 to 649 bp (sequence +
-quality together; read counts unchanged). sbxpress also trims the 3′ read-through adapter
+quality together; read counts unchanged). morselle also trims the 3′ read-through adapter
 itself — including SBX homopolymer-indel variants (`AAGAGC`→`AAAGAGC`) and 3′-end
 partials — so the emitted cDNA is adapter-free; the cap simply keeps every read inside
 10x reference's length limit. STAR uses ~90 bp for gene mapping regardless of R2 length.
@@ -338,7 +342,7 @@ Within each file R1/R2 stay mate-ordered.
 |---|---|
 | `cargo: command not found` after install | `source "$HOME/.cargo/env"` or open a new shell |
 | Permission denied installing to `/usr/local` | re-run with `sudo`, or `--prefix "$HOME/.local"` |
-| `sbxpress: command not found` | add the prefix `bin/` to `PATH` (§2) |
+| `morselle: command not found` | add the prefix `bin/` to `PATH` (§2) |
 | Very low yield / everything Undetermined | missing/wrong `--whitelist`, or wrong `--orientation` |
 | Build fails on old Ubuntu | update Rust: `rustup update stable` |
 | `is cmake not installed?` / `libz-sys` build error | you're on an old checkout — update the source (the `gzp`/zlib-ng dependency was removed; gzip is now pure-Rust and needs no cmake). As a one-off workaround: `sudo apt-get install -y cmake` |

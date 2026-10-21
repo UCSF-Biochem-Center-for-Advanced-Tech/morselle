@@ -1,8 +1,6 @@
-//! sbx10x — convert raw Roche SBX reads into per-sample 10x R1/R2 FASTQs.
-//!
-//! See `sbx10x_implementation_plan.md` for the milestone-phased design. M0 wires
-//! up the crate, CLI, logging, and a FASTQ read->write passthrough; subsequent
-//! milestones fill in orientation, demux, extraction, gating, and realignment.
+//! `morselle extract` pipeline runner: convert raw Roche SBX reads into
+//! per-sample 10x R1/R2 FASTQs (orientation, demux, extraction, gating, and
+//! realignment).
 pub(crate) mod barcode_metrics;
 pub(crate) mod engine;
 pub(crate) mod formatting;

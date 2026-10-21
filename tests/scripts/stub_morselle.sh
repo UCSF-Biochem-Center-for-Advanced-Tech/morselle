@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# Test stub for `sbxpress` used by pipeline_smoke.sh. For every subcommand it
+# Test stub for `morselle` used by pipeline_smoke.sh. For every subcommand it
 # (1) checks each --flag the pipeline passes is accepted by the REAL binary
-# (REAL_SBXPRESS <sub> --help), and (2) creates the outputs the next stage
+# (REAL_MORSELLE <sub> --help), and (2) creates the outputs the next stage
 # expects. Calls are appended to $STUB_LOG.
 set -euo pipefail
 sub=${1:?subcommand}; shift
-echo "sbxpress $sub $*" >> "$STUB_LOG"
-if [[ $sub == --version ]]; then echo "sbxpress stub"; exit 0; fi
+echo "morselle $sub $*" >> "$STUB_LOG"
+if [[ $sub == --version ]]; then echo "morselle stub"; exit 0; fi
 if [[ $sub != minimap ]]; then
-    help=$("$REAL_SBXPRESS" "$sub" --help 2>&1) || { echo "stub: unknown subcommand $sub" >&2; exit 2; }
+    help=$("$REAL_MORSELLE" "$sub" --help 2>&1) || { echo "stub: unknown subcommand $sub" >&2; exit 2; }
     for arg in "$@"; do
         [[ $arg == --* ]] || continue
         flag=${arg%%=*}
         grep -qE -- "(^|[ ,])$flag([ ,=<]|$)" <<< "$help" \
-            || { echo "stub: 'sbxpress $sub' does not accept $flag" >&2; exit 2; }
+            || { echo "stub: 'morselle $sub' does not accept $flag" >&2; exit 2; }
     done
 fi
 # value OPT...: value following the first matching option

@@ -4,7 +4,7 @@
 use super::*;
 
 fn annotate() -> std::path::PathBuf {
-    bin("sbx10x-annotate", env!("CARGO_BIN_EXE_sbx10x-annotate"))
+    bin("morselle-annotate", env!("CARGO_BIN_EXE_morselle-annotate"))
 }
 
 const CELL: &str = "AAACCCAAGAAACACT-1";
@@ -96,7 +96,7 @@ fn chain(
     let metrics_path = std::path::PathBuf::from(format!("{}.metrics.json", output.display()));
     let metrics = json(&metrics_path);
     // The per-barcode gate columns reconcile with the pool counters.
-    let table = barcode_table(&sbx10x::barcode_metrics::barcode_path(&metrics_path));
+    let table = barcode_table(&morselle::barcode_metrics::barcode_path(&metrics_path));
     for (column, field) in [
         ("rescued_reads", "rescued_records"),
         ("low_mapq_reads", "low_mapq_records"),

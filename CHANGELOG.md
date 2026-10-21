@@ -1,17 +1,47 @@
 # Changelog
 
-All notable changes to `sbxpress` are documented here. The format is based on
+All notable changes to `morselle` are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.7.0] — 2026-10-21
+
+First public (alpha) release, under the name **MORSELLE** (MOlecular Read
+Structure, Extraction, Labeling & Enumeration). Counting behaviour is
+unchanged from 0.6.4: the golden outputs of `molecules` and `matrix` are
+identical in every mode.
+
+### Changed
+- Renamed the project, crate, library, and every command from its internal
+  pre-release name to `morselle`. The public command is `morselle`; its
+  private engines are `morselle-extract`, `morselle-annotate`,
+  `morselle-molecules`, `morselle-illumina`, `morselle-cells`,
+  `morselle-probe-demux`, `morselle-guides`, `morselle-protospacer-call`,
+  and `morselle-probeset-align` (plus `bam-audit` and `cr-bam-to-mtx`).
+- Pipeline drivers are `scripts/morselle-pipeline.sh` and
+  `scripts/morselle-gex-pipeline.sh`.
+- Environment variables use the `MORSELLE_` prefix (`MORSELLE_LIBEXEC`,
+  `MORSELLE_RAPIDGZIP`, ...). `install.sh` installs to
+  `<prefix>/bin/morselle`, `<prefix>/libexec/morselle/` and
+  `<prefix>/share/morselle/`. `extract`'s default output directory is
+  `morselle_out`.
+- Repository moved to
+  <https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle>.
+
+### Removed
+- Presentation decks, presentation-building scripts, internal design and
+  planning notes, and dataset-specific analysis scripts are no longer part
+  of the repository.
+- `uninstall.sh --remove-legacy` (it only removed pre-release binaries).
 
 ## [0.6.4] — 2026-10-16
 
 ### Fixed
 - SBX CRISPR guide capture no longer overcounts molecules about 6.5x.
   On CAT06 L1, compared with Cell Ranger on full-depth Illumina in the cells
-  both called, sbxpress had 6–7x more UMIs wherever a guide was really
+  both called, morselle had 6–7x more UMIs wherever a guide was really
   present. That pushed cells with 1–2 true guide UMIs over the 3-UMI
   calling floor: RZ211 CD45 81% of cells called vs 58%, Neg 4.1% vs 0.9%.
   On 3,000 RZ211 cells with depth-matched reads (10.1 M each), the cause
@@ -32,7 +62,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
   RZ211 and RZ214 still call more cells (52.8% and 53.7% vs 30.8% and
   30.1%), but not because of counts. On shared cells at Cell Ranger's own
-  threshold, sbxpress gives 38.9% vs 36.7% and 42.0% vs 37.9%. The rest
+  threshold, morselle gives 38.9% vs 36.7% and 42.0% vs 37.9%. The rest
   comes from two things, tracked in FUTURE_ROADMAP Priority 7:
   - `protospacer-call` fits a lower threshold than Cell Ranger: 4 vs 6
     and 3 vs 4.
@@ -58,7 +88,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [0.6.3] — 2026-10-16
 
 ### Added
-- `sbxpress illumina --trim-tso` now also trims the template-switch oligo
+- `morselle illumina --trim-tso` now also trims the template-switch oligo
   from the start of a non-merged R2 (before, it acted only on `--overlap`
   merged fragments, so unmerged R2 was never trimmed). In 3' GEX a fragment
   that reached the transcript's 5' end starts R2 in the TSO: 8.5% of 1 M raw
@@ -83,7 +113,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [0.6.2] — 2026-10-16
 
 ### Changed
-- **Counts change:** `sbxpress-pipeline.sh` and `sbxpress-gex-pipeline.sh`
+- **Counts change:** `morselle-pipeline.sh` and `morselle-gex-pipeline.sh`
   map with `minimap2 -x splice -m 20 -s 30` instead of `-x splice:sr`.
   minimap2 2.28 accepts `-x splice:sr` but runs the long-read `splice`
   preset (2.29 added a real short-read preset; 2.30's `-x splice` gives the
@@ -98,7 +128,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   countable keep their gene, and the repeat-artifact genes do not rise.
   `-f 0.00002` (keep more repeat seeds) added little for 4.3x the CPU and
   is not used.
-- **Counts change:** `sbxpress illumina` now trims poly-A read-through in
+- **Counts change:** `morselle illumina` now trims poly-A read-through in
   unmerged R2 by default (`--trim-r2-polya`; 3' GEX and tag-seq both read
   into the tail). `--trim-r2-polya false` restores the old behaviour. The
   bare flag still works.
@@ -150,7 +180,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   struct literals must set them.
 
 ### Fixed
-- `sbxpress-pipeline.sh --input-mode illumina` with more than one `--r1`/
+- `morselle-pipeline.sh --input-mode illumina` with more than one `--r1`/
   `--r2` pair (e.g. one per lane) failed after conversion: `illumina` writes
   one `.shard-NNN` output per pair, and the script looked for a single
   file. It now converts into a scratch directory, moves every shard out,
@@ -166,7 +196,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `low_complexity` in the per-barcode tables), with a warning above 5% of
   reads that are poly-G/N (all flagged reads for `illumina` without
   `--trim-r2-polya false`, where poly-A read-through is expected). Normal
-  reads are written exactly as before. `sbxpress-probeset-align` copies `YL` into its BAM.
+  reads are written exactly as before. `morselle-probeset-align` copies `YL` into its BAM.
 - `molecules` metrics gain an `artifacts` report: gene-assigned reads, how
   many are low-complexity (`YL:i:1`) or MAPQ < 60 without `mm:i:1`, and the
   genes where at least half of >= 100 reads are flagged; a listed gene with
@@ -199,7 +229,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 - `--barcode-metrics` on `illumina`, `extract`, `annotate` and `molecules`
-  (and on `sbxpress-pipeline.sh` / `sbxpress-gex-pipeline.sh`, which pass it
+  (and on `morselle-pipeline.sh` / `morselle-gex-pipeline.sh`, which pass it
   to every stage) writes a per-barcode gzip TSV next to the stage's metrics
   JSON (`<metrics>.barcodes.tsv.gz`). Each count column sums exactly to the
   matching run-wide counter; `__no_barcode__` and `__unresolved_barcode__`
@@ -242,12 +272,12 @@ peak memory (DZEC04 full depth: 27:20 -> 15:54, 45.9 -> 27.8 GB).
 
 ### Fixed
 - `install.sh` installs all 11 private engines. Since 0.5.2 it installed
-  only 7, omitting `sbxpress-probeset-align`, `sbxpress-probe-demux`,
-  `sbxpress-guides` and `sbxpress-protospacer-call`, so an installed
-  `sbxpress` failed every Flex and CRISPR command with "helper not found"
+  only 7, omitting `morselle-probeset-align`, `morselle-probe-demux`,
+  `morselle-guides` and `morselle-protospacer-call`, so an installed
+  `morselle` failed every Flex and CRISPR command with "helper not found"
   (found by the server acceptance run on CAT06). The helper list is
   now one `HELPERS` array, and `tests/pipeline_scripts.rs` checks it
-  against the dispatch table in `src/bin/sbxpress.rs`.
+  against the dispatch table in `src/bin/morselle.rs`.
 - Molecule output now uses the same present `PB` identity as evidence collection
   in every assay; `--flex` still requires it. Indexed representatives use unique
   physical BAM offsets, preventing duplicate representatives and selecting the
@@ -272,7 +302,7 @@ peak memory (DZEC04 full depth: 27:20 -> 15:54, 45.9 -> 27.8 GB).
   to the intentional indexed tie-break and fractional MEX precision changes.
 
 ### Changed
-- **`sbxpress molecules --tagseq` counts every gene in a UMI collision in
+- **`morselle molecules --tagseq` counts every gene in a UMI collision in
   full again (`XW:S`, the 0.5.6 behaviour); fractional splitting is opt-in
   (`--fractional-collisions`).** At tag-seq depth collisions are mostly
   distinct molecules that drew the same UMI (DZEC03: 81% of `(cell, UMI)`
@@ -284,7 +314,7 @@ peak memory (DZEC04 full depth: 27:20 -> 15:54, 45.9 -> 27.8 GB).
 ### Added
 - `docs/SERVER_TESTING.md`: release installation, fresh-output real-data runs,
   indexed/sharded parity checks, tag-seq mode comparison, and acceptance criteria.
-- `sbxpress molecules --position-aware-umis`: molecules keyed on
+- `morselle molecules --position-aware-umis`: molecules keyed on
   `(cell, gene, UMI, strand-aware unclipped 5′ start)`, so chance UMI
   matches stay separate across and within genes; UMI correction then runs
   per start, even with `--tagseq`. No memory cost (the start is a 24-bit
@@ -293,7 +323,7 @@ peak memory (DZEC04 full depth: 27:20 -> 15:54, 45.9 -> 27.8 GB).
 - `scripts/compare_tagseq_modes.sh` / `.py`: run a BAM through each mode
   and compare with a reference matrix (e.g. Illumina) on normalised
   correlation, per-gene log2 ratio, and expression-dependent bias.
-- `scripts/sbxpress-pipeline.sh --fractional-collisions`,
+- `scripts/morselle-pipeline.sh --fractional-collisions`,
   `--position-aware-umis`.
 - molecules metrics JSON records `fractional_collisions` and
   `position_aware_umis`.
@@ -306,7 +336,7 @@ Review and repair of the 0.5.2–0.5.8 changes made on 2026-10-06. Replaces
 (verified by `tests/golden_outputs.rs` against the 0.5.6 binaries).
 
 ### Fixed
-- `sbxpress molecules`: restored the 0.5.6 UMI-correction, collision and BAM
+- `morselle molecules`: restored the 0.5.6 UMI-correction, collision and BAM
   tagging logic that the 0.5.7 modularization rewrote (crash on existing `UB`;
   missing `xf`/`XV`/`XW`; serial-mode representatives never matched; `ZG`
   overwritten with won/lost; `--tagseq` ignored; O(n²) decision step;
@@ -316,13 +346,13 @@ Review and repair of the 0.5.2–0.5.8 changes made on 2026-10-06. Replaces
   `xf:25` on the representative, `ZG` untouched. Under `--tagseq` UMI
   correction is skipped again (as in 0.5.6). A fractional collision group adds
   1 to `molecules_counted`.
-- `sbxpress cells` (and `protospacer-call`) read `f32` fractional matrices
+- `morselle cells` (and `protospacer-call`) read `f32` fractional matrices
   without truncating (2.5 was read as 2, 0.25 as 0); filtered matrices keep
   fractional values.
-- `scripts/sbxpress-pipeline.sh` never parsed (syntax error since 0.5.4) and
+- `scripts/morselle-pipeline.sh` never parsed (syntax error since 0.5.4) and
   passed flags no subcommand accepts; rewritten so the GEX path matches the
   production GEX script and Flex follows `run_full_cat06.sh`.
-  `scripts/sbxpress-gex-pipeline.sh` is restored to the standalone 0.5.6 script.
+  `scripts/morselle-gex-pipeline.sh` is restored to the standalone 0.5.6 script.
 - `probeset-align --threads`: output BAM is in input order again (was
   scheduling order); record-construction errors are no longer ignored; BAM
   compression uses the worker pool.
@@ -338,21 +368,21 @@ Review and repair of the 0.5.2–0.5.8 changes made on 2026-10-06. Replaces
 Measured on a synthetic 2M-read annotated BAM with real tag layout (24 aux
 tags per record); outputs byte-identical to before (SAM text incl. tag
 order; MEX/H5 equal):
-- `sbxpress molecules`: 16.2 s → 7.6 s wall (2.1×), 18.0 G → 7.6 G
+- `morselle molecules`: 16.2 s → 7.6 s wall (2.1×), 18.0 G → 7.6 G
   instructions; peak RSS −24% (−29% with `--tagseq`). Single raw aux-tag
   pass per record instead of ~6 `aux()` scans + String allocations;
   FxHash tables; tag appends without `push_aux`'s duplicate pre-scan;
   sorted-run grouping instead of `HashMap<_, Vec<_>>` indexes; collision
   outcomes stored inline.
-- `sbxpress matrix`: 4.2 s → 2.7 s (1.6×); one aux pass per record and
+- `morselle matrix`: 4.2 s → 2.7 s (1.6×); one aux pass per record and
   interned barcodes (~16 B instead of ~70 B per counted molecule).
 - All BAM I/O: rust-htslib `libdeflate` feature (BGZF via libdeflate).
-- `scripts/sbxpress-pipeline.sh --extract-no-gzip` (opt-in; PROFILING.md:
+- `scripts/morselle-pipeline.sh --extract-no-gzip` (opt-in; PROFILING.md:
   7.3× extract, 2.2× extract+map, ~4× intermediate disk).
 
 ### Added
-- `sbxpress molecules --compression-level 0-9` (default unchanged) and
-  `scripts/sbxpress-pipeline.sh --molecule-compression-level`; level 1 was
+- `morselle molecules --compression-level 0-9` (default unchanged) and
+  `scripts/morselle-pipeline.sh --molecule-compression-level`; level 1 was
   ~24% faster overall for a ~12% larger BAM on a 1M-read benchmark.
 - Test gaps that let 0.5.7/0.5.8 pass every test while broken are closed:
   `tests/pipeline_chain_e2e.rs` (each stage on the previous stage's real
@@ -362,7 +392,7 @@ order; MEX/H5 equal):
   `scripts/check.sh` (single gate), GitHub Actions CI, a pre-push hook
   (`git config core.hooksPath scripts/hooks`), and testing rules in
   AGENTS.md/CLAUDE.md. All nine new chain/golden cases fail on 0.5.8.
-- `tests/molecules_matrix_e2e.rs`: runs the real `sbx10x-molecules` and
+- `tests/molecules_matrix_e2e.rs`: runs the real `morselle-molecules` and
   `cr-bam-to-mtx` binaries on a fixture with `UB`/`UR`/`ZG` and multi-gene
   `GX`, in serial, indexed and sharded modes and every collision policy.
 - `tests/pipeline_scripts.rs`: `bash -n` on every script, shellcheck when
@@ -371,42 +401,42 @@ order; MEX/H5 equal):
 
 ## [0.5.8] — 2026-10-06
 
-> **BROKEN — do not use; use 0.5.9.** `sbxpress molecules` aborts on any
+> **BROKEN — do not use; use 0.5.9.** `morselle molecules` aborts on any
 > BAM carrying `UB` (every extracted library) and otherwise writes no `xf:25`
-> representatives, so GEX/tagseq matrices are empty; `sbxpress cells`
-> truncates fractional counts; `scripts/sbxpress-pipeline.sh` (and the
-> `sbxpress-gex-pipeline.sh` forwarder in 0.5.7+) does not parse.
+> representatives, so GEX/tagseq matrices are empty; `morselle cells`
+> truncates fractional counts; `scripts/morselle-pipeline.sh` (and the
+> `morselle-gex-pipeline.sh` forwarder in 0.5.7+) does not parse.
 
 ### Documentation
-- Updated `MANUAL.md` Section 7 with detailed technical documentation for fractional UMI collision resolution (`--fractional-collisions` in `sbxpress molecules --tagseq`) and real Matrix Market MTX / `f32` HDF5 count matrix materialization in `cr-bam-to-mtx`.
+- Updated `MANUAL.md` Section 7 with detailed technical documentation for fractional UMI collision resolution (`--fractional-collisions` in `morselle molecules --tagseq`) and real Matrix Market MTX / `f32` HDF5 count matrix materialization in `cr-bam-to-mtx`.
 - Updated `TECHNICAL_DESCRIPTION.md` IP metadata specification to v0.5.8 (~19,400 lines of Rust across 25 library modules and 12 binary engines).
 - Archived completed historic plan markdown files (`FLEX_SUPPORT_PLAN.md`, `GENE_COLLISION_RESOLUTION_PLAN.md`, `OVERLAP_PLAN.md`, `PRESENTATION_PLAN.md`, `mapping.md`) into `docs/archive/`.
 
 ## [0.5.7] — 2026-10-06
 
-> **BROKEN — do not use; use 0.5.9.** `sbxpress molecules` aborts on any
+> **BROKEN — do not use; use 0.5.9.** `morselle molecules` aborts on any
 > BAM carrying `UB` (every extracted library) and otherwise writes no `xf:25`
-> representatives, so GEX/tagseq matrices are empty; `sbxpress cells`
-> truncates fractional counts; `scripts/sbxpress-pipeline.sh` (and the
-> `sbxpress-gex-pipeline.sh` forwarder in 0.5.7+) does not parse.
+> representatives, so GEX/tagseq matrices are empty; `morselle cells`
+> truncates fractional counts; `scripts/morselle-pipeline.sh` (and the
+> `morselle-gex-pipeline.sh` forwarder in 0.5.7+) does not parse.
 
 ### Added
 - Expanded hot-path microbenchmarks in `benches/pipeline_hot_paths.rs` (`bench_molecules_dedup`) benchmarking UMI directional graph collapse (~23 µs per 50 UMIs) and fractional vs winner-take-all decision matrix building (~128 µs per 1,000 UMIs).
 - Comprehensive codebase gap analysis report (`codebase_gap_analysis.md`) evaluating input format and output table equivalence across SBX and Illumina input modes and GEX, TagSeq, and Flex analysis modes.
 
 ### Refactored
-- Consolidated stub module `src/annotate_bam.rs` into `src/annotate/mod.rs` and updated `src/bin/sbx10x-annotate.rs`.
-- Converted `scripts/sbxpress-gex-pipeline.sh` into a clean forwarder script invoking the unified multi-mode driver script `scripts/sbxpress-pipeline.sh`.
+- Consolidated stub module `src/annotate_bam.rs` into `src/annotate/mod.rs` and updated `src/bin/morselle-annotate.rs`.
+- Converted `scripts/morselle-gex-pipeline.sh` into a clean forwarder script invoking the unified multi-mode driver script `scripts/morselle-pipeline.sh`.
 
 ## [0.5.6] — 2026-10-06
 
-> 0.5.4–0.5.6: the new `scripts/sbxpress-pipeline.sh` does not parse; the
+> 0.5.4–0.5.6: the new `scripts/morselle-pipeline.sh` does not parse; the
 > Rust tools are fine. Fixed in 0.5.9.
 
 ### Added
 - Automated presentation & insert-size distribution reporting (`scripts/build_presentation.py`). Ingests pipeline metrics JSON files (`illumina_metrics.json`, `molecules_metrics.json`, `cell_calling_metrics.json`), exports cDNA insert-size distribution TSVs via `--export-insert-sizes`, and builds 10-slide PowerPoint presentations (`.pptx`).
-- Fractional / proportional UMI collision resolution (`--fractional-collisions`) in `sbx10x-molecules` (`molecules` stage). Designed for high-depth bulk/pooled samples (e.g. DZEC03, 2–25M reads/sample) where 12bp UMI space is oversubscribed (~2.1x, ~81% collision rate). Instead of deterministic winner-take-all discards, fractional resolution distributes proportional molecule weights $w_i = r_i / \sum r$ across competing genes based on read support, tagging records with `ZG:Z:fractional` and emitting `ZW:f:<weight>` tags. `cr-bam-to-mtx` parses `ZW:f` weight tags and materializes `real` Matrix Market MTX files (`%%MatrixMarket matrix coordinate real general`) and `f32` CSC HDF5 matrices (`raw_feature_bc_matrix.h5`).
-- Default fractional collision resolution in `--tagseq` mode (`sbx10x-molecules --tagseq`), with explicit control via `--fractional-collisions` and `--no-fractional-collisions`.
+- Fractional / proportional UMI collision resolution (`--fractional-collisions`) in `morselle-molecules` (`molecules` stage). Designed for high-depth bulk/pooled samples (e.g. DZEC03, 2–25M reads/sample) where 12bp UMI space is oversubscribed (~2.1x, ~81% collision rate). Instead of deterministic winner-take-all discards, fractional resolution distributes proportional molecule weights $w_i = r_i / \sum r$ across competing genes based on read support, tagging records with `ZG:Z:fractional` and emitting `ZW:f:<weight>` tags. `cr-bam-to-mtx` parses `ZW:f` weight tags and materializes `real` Matrix Market MTX files (`%%MatrixMarket matrix coordinate real general`) and `f32` CSC HDF5 matrices (`raw_feature_bc_matrix.h5`).
+- Default fractional collision resolution in `--tagseq` mode (`morselle-molecules --tagseq`), with explicit control via `--fractional-collisions` and `--no-fractional-collisions`.
 - Consolidated master tracking roadmap `FUTURE_ROADMAP.md` organizing completed v0.3.3–v0.5.5 milestones and open future priorities (sharded RAM bounding for `molecules`, fractional UMI assignment, automated slide deck reporting).
 - Updated status headers across `FLEX_SUPPORT_PLAN.md`, `GENE_COLLISION_RESOLUTION_PLAN.md`, `OVERLAP_PLAN.md`, and `PIPELINE_NOTES.md` linking to `FUTURE_ROADMAP.md`.
 
@@ -418,18 +448,18 @@ order; MEX/H5 equal):
 ## [0.5.4] — 2026-10-06
 
 ### Added
-- Unified multi-mode pipeline script `scripts/sbxpress-pipeline.sh` supporting all combinations of `--input-mode {sbx|illumina}` and `--analysis-mode {gex|flex|tagseq}` with stage restartability and thread management.
+- Unified multi-mode pipeline script `scripts/morselle-pipeline.sh` supporting all combinations of `--input-mode {sbx|illumina}` and `--analysis-mode {gex|flex|tagseq}` with stage restartability and thread management.
 
 ## [0.5.3] — 2026-10-06
 
 ### Added
-- Native multi-threading (`--threads N`) and chunk/batch processing via Rayon and crossbeam channels in `sbxpress probeset-align` (`src/probe_set.rs`), enabling multi-core scaling without requiring shell FASTQ splitting.
+- Native multi-threading (`--threads N`) and chunk/batch processing via Rayon and crossbeam channels in `morselle probeset-align` (`src/probe_set.rs`), enabling multi-core scaling without requiring shell FASTQ splitting.
 
 ## [0.5.2] — 2026-10-06
 
 ### Added
 - Comprehensive integration test suite for Illumina + 10x Flex and Illumina + CAT Tagseq modes (`tests/illumina_modes_integration.rs`).
-- Detailed documentation for 10x Flex (`sbxpress probe-demux`, `sbxpress probeset-align`) and CAT Tagseq (`sbxpress molecules --tagseq`, `sbxpress cells --tagseq-barcodes`) in `MANUAL.md` and `README.md`.
+- Detailed documentation for 10x Flex (`morselle probe-demux`, `morselle probeset-align`) and CAT Tagseq (`morselle molecules --tagseq`, `morselle cells --tagseq-barcodes`) in `MANUAL.md` and `README.md`.
 
 ### Changed
 - Exported `resolve_tagseq_barcodes` as `pub fn` in `src/cell_calling.rs` for integration testing.
@@ -469,7 +499,7 @@ order; MEX/H5 equal):
 ### Fixed
 - 16 example binaries (`examples/*.rs`) failed to compile:
   `ExtractCfg::flex_min_cdna_len_no_anchor` was added in `e36ee39` but only
-  `sbxpress-illumina.rs` was updated for it at the time (`4a7d760`). All
+  `morselle-illumina.rs` was updated for it at the time (`4a7d760`). All
   affected examples now set it to `65` (matching Flex's own default;
   `flex_r2_boundary` is `false` in every one of these examples, so the value
   is never consulted).
@@ -477,11 +507,11 @@ order; MEX/H5 equal):
 ## [0.4.1] — 2026-09-21
 
 ### Added
-- `sbxpress molecules --flex` explicitly enables Flex pooled-sample handling
+- `morselle molecules --flex` explicitly enables Flex pooled-sample handling
   and requires a non-empty `PB` probe/sample barcode on counted records.
 
 ### Changed
-- `sbxpress molecules --tagseq` no longer requires `PB`. Pooled tag-seq
+- `morselle molecules --tagseq` no longer requires `PB`. Pooled tag-seq
   chemistry does not produce Flex probe-barcode tags, so tag-seq molecule
   counting now uses the cell barcode without imposing a Flex-only gate.
 - `--flex` and `--tagseq` are mutually exclusive to make the molecule
@@ -500,7 +530,7 @@ order; MEX/H5 equal):
   set, or a shared GEM's other-sample molecules leak into both matrices.
   New `probe_barcodes_skipped` metric records how many counted molecules
   the allow-list excluded.
-- `sbxpress extract --no-gzip` writes plain, uncompressed FASTQ instead of
+- `morselle extract --no-gzip` writes plain, uncompressed FASTQ instead of
   gzip. Profiling `extract` (see `PROFILING.md`) found gzip output
   compression consuming 54% of its CPU time — worse, since every worker
   thread shares one mutex-protected encoder per output target, it's a
@@ -564,7 +594,7 @@ order; MEX/H5 equal):
 ## [0.3.8] — 2026-09-14
 
 ### Added
-- `sbx10x-molecules --tagseq` opts a run out of two single-cell-shaped
+- `morselle-molecules --tagseq` opts a run out of two single-cell-shaped
   assumptions that stop holding at pooled-sample depth (tens of millions of
   reads per barcode rather than a single cell's tens of thousands):
   - **Cross-gene UMI collision adjudication is skipped.** At this depth the
@@ -588,7 +618,7 @@ order; MEX/H5 equal):
   - `Metrics.tagseq` records which policy a run used. Default (single-cell)
     runs are unaffected by either change — `Outcome::Shared` is never
     produced and UMI correction still runs unless the flag is passed.
-- `sbxpress cells --tagseq-barcodes <FILE>` calls exactly the listed
+- `morselle cells --tagseq-barcodes <FILE>` calls exactly the listed
   barcodes as cells/samples, skipping OrdMag and EmptyDrops entirely.
   Both algorithms are shaped around droplet single-cell data (a few real
   cells against a large empty-droplet background with a shared ambient-RNA
@@ -599,7 +629,7 @@ order; MEX/H5 equal):
   extraction whitelist format (a gem-group `-1` suffix, if present, is
   ignored); an unrecognized barcode is a hard error rather than a silent
   skip.
-- `sbxpress illumina --trim-r2-polya` (default off) catches poly-A
+- `morselle illumina --trim-r2-polya` (default off) catches poly-A
   read-through in R2 on the non-merged path — either `--overlap` is off
   entirely, or this particular pair failed to merge. On a fragment shorter
   than R2's read length, R2 reads past the cDNA insert into the poly-A tail
@@ -620,16 +650,16 @@ order; MEX/H5 equal):
 ## [0.3.7] — 2026-09-03
 
 ### Added
-- `sbx10x::yc` encodes and decodes the Roche SBX `YC` duplex-consensus tag,
+- `morselle::yc` encodes and decodes the Roche SBX `YC` duplex-consensus tag,
   written from the published XOOS specification (not derived from Roche's
   reference implementation, whose licence restricts derivatives to Roche
   instrument data). Covers parse/serialise, reverse-complement, trim, and
   per-position provenance, with the four published worked examples as fixtures.
-- `sbx10x::overlap` merges overlapping Illumina mates into the full fragment — a
+- `morselle::overlap` merges overlapping Illumina mates into the full fragment — a
   port of HTStream's `hts_Overlapper` adapted to 10x geometry. Merges the *raw*
   mates before any trimming, which is what makes the alignment gapless, and
   removes adapter read-through by geometry rather than sequence matching.
-- `sbxpress illumina --overlap` (default off) reconstructs the fragment before
+- `morselle illumina --overlap` (default off) reconstructs the fragment before
   extraction. Merged pairs (`sins`/`mins`) carry the same canonical layout as an
   SBX read and go through the same `extract`, gaining a `YC:Z:` tag; unmerged
   pairs (`lins`) fall back to the existing R1-barcode / R2-cDNA path unchanged.
@@ -644,17 +674,17 @@ order; MEX/H5 equal):
 - `--trim-tso` (default off, both arms) trims the template-switch oligo where it
   sits between the cDNA and the 3' read-through adapter. Anchored rather than
   scanned, so a chance match inside the cDNA cannot truncate real sequence.
-- `SBXPRESS_RAPIDGZIP=1` enables parallel `rapidgzip` input decoding for
-  `sbxpress illumina`; `SBXPRESS_RAPIDGZIP_THREADS` and
-  `SBXPRESS_RAPIDGZIP_POOL` tune decoder workers and pooled input slots.
-- `sbxpress illumina --split N` uses a total logical gzip-writer budget across
+- `MORSELLE_RAPIDGZIP=1` enables parallel `rapidgzip` input decoding for
+  `morselle illumina`; `MORSELLE_RAPIDGZIP_THREADS` and
+  `MORSELLE_RAPIDGZIP_POOL` tune decoder workers and pooled input slots.
+- `morselle illumina --split N` uses a total logical gzip-writer budget across
   all main and failed-output classes, producing disjoint numbered shards for
   parallel compression.
-- `sbxpress molecules --saturation <path>` emits an order-independent,
+- `morselle molecules --saturation <path>` emits an order-independent,
   one-evidence-pass gzip TSV saturation curve at configurable eligible-read
   intervals. It includes run-wide and per-cell detected genes and resolved,
   gene-aware molecules.
-- `sbxpress molecules --evidence-workers N` uses a BAM index to collect
+- `morselle molecules --evidence-workers N` uses a BAM index to collect
   disjoint genomic regions concurrently, then merges evidence before global UMI
   correction and gene-collision resolution. Independent `(CB, gene)` UMI groups
   and regional-map reduction are parallelized as well.
@@ -669,22 +699,22 @@ order; MEX/H5 equal):
 ## [0.3.5] — 2026-07-16
 
 ### Added
-- `sbxpress annotate --multimap-tags` processes query-grouped minimap2 primary
+- `morselle annotate --multimap-tags` processes query-grouped minimap2 primary
   and secondary alignments in one stream, adding reported-hit `NH`, hit-index
   `HI`, and an `mm:i:1` single-compatible-gene multimap-rescue signal while
   retaining minimap2's native MAPQ.
-- `scripts/sbxpress-gex-pipeline.sh --multimap-tags` retains up to ten minimap2
+- `scripts/morselle-gex-pipeline.sh --multimap-tags` retains up to ten minimap2
   secondary hits (`-N 10`), yielding top-coded `NH=11` values that match the
   audit's `NH=11+` ambiguity bucket without an intermediate name-sorted BAM.
 
 ## [0.3.4] — 2026-07-15
 
 ### Added
-- `sbxpress annotate --unordered` performs feature assignment across parallel
+- `morselle annotate --unordered` performs feature assignment across parallel
   record workers for pipelines that immediately coordinate-sort the BAM.
-- `scripts/sbxpress-gex-pipeline.sh` provides a restart-safe raw-SBX-to-counts
+- `scripts/morselle-gex-pipeline.sh` provides a restart-safe raw-SBX-to-counts
   workflow with independent mapping, annotation, and sorting thread controls.
-- `sbxpress audit --cells` accounts for representative molecules retained in a
+- `morselle audit --cells` accounts for representative molecules retained in a
   final called-cell barcode set.
 - Audit JSON now includes `NH`/MAPQ/soft-clip/score-gap ambiguity diagnostics,
   aligned-length bins, top ambiguous genes, a raw-UMI-to-representative molecule
@@ -695,25 +725,25 @@ order; MEX/H5 equal):
 ## [0.3.3] — 2026-07-14
 
 ### Added
-- `sbxpress cells` implements 10x-style GEX cell calling with bootstrapped
+- `morselle cells` implements 10x-style GEX cell calling with bootstrapped
   OrdMag, Simple Good-Turing ambient profiling, multinomial EmptyDrops Monte Carlo
   testing, BH FDR correction, and filtered MEX/HDF5 outputs.
-- `sbxpress illumina` converts multiple R1/R2 lanes concurrently into numbered
+- `morselle illumina` converts multiple R1/R2 lanes concurrently into numbered
   minimap2 FASTQ shards instead of serializing every lane through one
   gzip stream.
 
 ### Fixed
-- `sbxpress annotate --output -` sends diagnostics to stderr so logging cannot
+- `morselle annotate --output -` sends diagnostics to stderr so logging cannot
   corrupt the streamed BAM consumed by `samtools`.
-- `sbxpress illumina` removes Illumina mate/control/index comments and `/1` or
+- `morselle illumina` removes Illumina mate/control/index comments and `/1` or
   `/2` suffixes before appending minimap2-compatible SAM tags to read names.
 
 ## [0.3.2] — 2026-07-13
 
 ### Added
-- `sbxpress illumina` converts paired 10x Illumina R1/R2 FASTQs into the same
+- `morselle illumina` converts paired 10x Illumina R1/R2 FASTQs into the same
   whitelist-corrected, minimap2-tagged R2-only handoff produced by SBX extraction.
-- `sbxpress audit` now reports explicit mapped/unique-gene counts, 10x reference
+- `morselle audit` now reports explicit mapped/unique-gene counts, 10x reference
   `xf` values and bits, UMI correction impact, SBX collision outcome records,
   detected genes/cells, and molecules-per-cell distributions. The comparison
   report adds platform-only molecules and per-cell/per-gene concordance.
@@ -726,24 +756,24 @@ order; MEX/H5 equal):
   matches are rejected rather than assigned arbitrarily.
 
 ### Added
-- `sbxpress matrix --cell-barcodes` reads a plain/gzipped 10x reference whitelist,
+- `morselle matrix --cell-barcodes` reads a plain/gzipped 10x reference whitelist,
   applies a configurable gem-group suffix, and retains every zero-count cell column.
-- `sbxpress annotate --genes-mtx` creates or verifies a canonical filtered gene
-  manifest; `sbxpress matrix --features` now enforces it strictly for stable rows.
+- `morselle annotate --genes-mtx` creates or verifies a canonical filtered gene
+  manifest; `morselle matrix --features` now enforces it strictly for stable rows.
 - Formal `resources/10x_barcodes/` staging and installation of the full
-  available 10x barcode-resource collection under `share/sbxpress/barcodes/`.
+  available 10x barcode-resource collection under `share/morselle/barcodes/`.
 - Idempotent `uninstall.sh` with custom-prefix, dry-run, data-preservation, and
   optional minimap2-companion removal controls.
-- Unified `sbxpress` CLI with `extract`, `minimap`, `annotate`, `molecules`,
+- Unified `morselle` CLI with `extract`, `minimap`, `annotate`, `molecules`,
   `audit`, and `matrix` subcommands. `minimap` transparently wraps minimap2;
-  processing engines are installed privately under `libexec/sbxpress`.
-- `sbx10x-molecules`: two-pass, coordinate-order-preserving gene-aware UMI
+  processing engines are installed privately under `libexec/morselle`.
+- `morselle-molecules`: two-pass, coordinate-order-preserving gene-aware UMI
   correction, read-support collision resolution, corrected `UB`, 10x reference
   `xf=17/25` eligibility/representative tagging, and `XV`/`XW` collision audit tags.
 - `--processing-tags` emits `XO`, `XB`, `XI`, `XA`, and `XL` per-read SBX
   provenance in R2 FASTQ comments for minimap2 `-y` propagation. The
   `--minimap2` preset enables it automatically.
-- `sbx10x-annotate`: strand-aware GTF feature assignment that preserves existing
+- `morselle-annotate`: strand-aware GTF feature assignment that preserves existing
   barcode/UMI tags and adds 10x-compatible `GX`, `GN`, `TX`, `AN`, and
   `RE` tags to coordinate-sorted minimap2 BAMs, with default 10x GENCODE filtering,
   optional intron inclusion, collision-degree tags (`XC`/`XT`), non-destructive
@@ -851,10 +881,11 @@ R1/R2 FASTQs for 10x reference ARC.
 - End-of-run RUN SUMMARY report: timing, throughput, and lost breakdown.
 - Ubuntu install script (`install.sh`) and installation manual (`INSTALL.md`).
 
-[Unreleased]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbxpress/compare/v0.6.0...HEAD
-[0.6.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbxpress/compare/v0.5.9...v0.6.0
-[0.3.3]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbxpress/compare/v0.3.2...v0.3.3
-[0.3.2]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbxpress/compare/v0.3.1...v0.3.2
-[0.3.1]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbxpress/compare/v0.3.0...v0.3.1
-[0.3.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbxpress/releases/tag/v0.3.0
-[0.2.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/sbxpress/releases/tag/v0.2.0
+[Unreleased]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/compare/v0.6.4...v0.7.0
+[0.6.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/compare/v0.5.9...v0.6.0
+[0.3.3]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/compare/v0.3.2...v0.3.3
+[0.3.2]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/compare/v0.3.1...v0.3.2
+[0.3.1]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/releases/tag/v0.3.0
+[0.2.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/releases/tag/v0.2.0

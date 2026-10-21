@@ -60,7 +60,7 @@ pub struct Cli {
 /// 10x-style CSC feature-barcode matrix (features x barcodes, `indptr`
 /// column/barcode-indexed, `indices` = feature row per nonzero entry).
 ///
-/// `data` is `f64` so that fractional matrices (`sbxpress molecules
+/// `data` is `f64` so that fractional matrices (`morselle molecules
 /// --fractional-collisions`, written by `cr-bam-to-mtx` as an `f32`
 /// dataset) are read without truncation; integer (`u32`) matrices convert
 /// exactly. Algorithms that need integer UMI totals (OrdMag ranking,

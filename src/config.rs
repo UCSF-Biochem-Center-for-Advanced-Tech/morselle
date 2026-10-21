@@ -10,14 +10,14 @@ use crate::orient::{FallbackMode, OrientCfg, OrientMode};
 
 /// Convert raw Roche SBX reads into per-sample 10x R1/R2 FASTQs.
 #[derive(Parser, Debug, Clone)]
-#[command(name = "sbx10x", version, about)]
+#[command(name = "morselle-extract", version, about)]
 pub struct Cli {
     /// Raw SBX FASTQ(s): a directory of `PrimaryAnalysis_*.fastq.gz` or explicit files.
     #[arg(long, num_args = 1.., required = true)]
     pub fastqs: Vec<PathBuf>,
 
     /// Output directory for per-sample FASTQs and metrics.
-    #[arg(long, short = 'o', default_value = "sbxpress_out")]
+    #[arg(long, short = 'o', default_value = "morselle_out")]
     pub out_dir: PathBuf,
 
     /// BCL Convert v2 sample sheet (or flat `sample,i7,i5` CSV) for i5/i7
@@ -181,7 +181,7 @@ pub struct Params {
 
     /// Write plain, uncompressed FASTQ instead of gzip (overrides
     /// --gzip-level). Measured to remove ~54% of extract's CPU time (see
-    /// PROFILING.md) — gzip encoding is pure overhead when the output is
+    /// docs/PROFILING.md) — gzip encoding is pure overhead when the output is
     /// about to be read once by a co-located process (e.g. piped straight
     /// into a mapper via a named pipe) rather than stored.
     #[arg(long, default_value_t = false)]
@@ -242,7 +242,7 @@ pub struct Params {
     /// derivation: 50bp probe length (confirmed from
     /// `Chromium_Human_Transcriptome_Probe_Set_v2.0.0_GRCh38-2024-A.csv`)
     /// plus `ProbeMatcher`'s own real default search jitter (`--window 15`
-    /// on `sbxpress-probeset-align`) = 65bp worst case. See
+    /// on `morselle-probeset-align`) = 65bp worst case. See
     /// `ExtractCfg::flex_min_cdna_len_no_anchor`'s doc comment for the full
     /// real-data rationale.
     #[arg(long, default_value_t = 65)]
@@ -251,7 +251,7 @@ pub struct Params {
     /// 10x Flex probe-barcode whitelist (e.g. `flex-v2-384.txt`). When set,
     /// locates + identifies the probe barcode on each read and adds
     /// `PR:Z:<raw>`/`PB:Z:<corrected id>` to the FASTQ comment (requires
-    /// `--minimap2`, same as CR/CB). See docs/archive/FLEX_SUPPORT_PLAN.md Phase 1.
+    /// `--minimap2`, same as CR/CB). See the Flex design notes Phase 1.
     #[arg(long, requires = "minimap2")]
     pub probe_barcode_whitelist: Option<PathBuf>,
 
@@ -260,7 +260,7 @@ pub struct Params {
     pub probe_barcode_max_mm: u32,
 
     /// Max bp each side of the empirically-confirmed offset (see
-    /// docs/archive/FLEX_SUPPORT_PLAN.md Phase 0) searched for the probe barcode, to absorb
+    /// the Flex design notes Phase 0) searched for the probe barcode, to absorb
     /// per-read jitter in the measured dT-run boundary.
     #[arg(long, default_value_t = 10)]
     pub probe_barcode_window: isize,
@@ -346,7 +346,8 @@ mod tests {
 
     fn parse(args: &[&str]) -> Params {
         // The Params group carries no required fields, so it parses standalone.
-        let mut p = Params::parse_from(std::iter::once("sbx10x").chain(args.iter().copied()));
+        let mut p =
+            Params::parse_from(std::iter::once("morselle-extract").chain(args.iter().copied()));
         p.apply_presets();
         p
     }

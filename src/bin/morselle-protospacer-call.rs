@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::{CommandFactory, FromArgMatches, Parser};
 use tracing_subscriber::EnvFilter;
 
-use sbx10x::protospacer_calling::{self, Cli};
+use morselle::protospacer_calling::{self, Cli};
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -11,10 +11,10 @@ fn main() -> Result<()> {
         )
         .with_target(false)
         .init();
-    let cli = if std::env::var_os("SBXPRESS_DISPATCH").is_some() {
+    let cli = if std::env::var_os("MORSELLE_DISPATCH").is_some() {
         Cli::from_arg_matches(
             &Cli::command()
-                .bin_name("sbxpress protospacer-call")
+                .bin_name("morselle protospacer-call")
                 .get_matches(),
         )?
     } else {

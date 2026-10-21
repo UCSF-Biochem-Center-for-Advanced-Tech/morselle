@@ -1,6 +1,6 @@
 # 10x reference barcode whitelists
 
-10x Genomics barcode whitelists / translation tables used by `sbxpress` for the
+10x Genomics barcode whitelists / translation tables used by `morselle` for the
 cell-barcode validate-gate (plan §4 step 5, M4). **These files are not committed**
 — they are external reference data shipped with 10x reference. Populate this folder
 locally before running with `--whitelist`.

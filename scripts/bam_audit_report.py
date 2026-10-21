@@ -100,7 +100,7 @@ def contamination(js):
                 line += f"{fn(a):>15.3f}%"
         print(line)
     print("\n  Residual adapter lands at R2's 5' end and residual polyT at its 3' end as")
-    print("  polyA, because sbx10x emits R2 reverse-complemented. Both motifs are tested")
+    print("  polyA, because morselle extract emits R2 reverse-complemented. Both motifs are tested")
     print("  at both ends with indel-robust 8-mer matching.")
 
 

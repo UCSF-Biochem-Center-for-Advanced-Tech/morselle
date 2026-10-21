@@ -5,7 +5,7 @@ use std::path::PathBuf;
 /// Assign cell barcodes to samples by probe barcode (10x Flex).
 #[derive(Debug, Parser)]
 #[command(
-    name = "sbxpress-probe-demux",
+    name = "morselle-probe-demux",
     version,
     about = "Assign cell barcodes to samples by probe barcode (10x Flex)"
 )]

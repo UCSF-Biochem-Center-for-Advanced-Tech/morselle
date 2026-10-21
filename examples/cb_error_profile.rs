@@ -12,11 +12,11 @@
 
 use std::env;
 
+use morselle::barcode::{decode16, Whitelist};
+use morselle::extract::{extract, ExtractCfg};
+use morselle::orient::{orient, FallbackMode, OrientCfg};
+use morselle::pipeline::Orientation;
 use needletail::parse_fastx_file;
-use sbx10x::barcode::{decode16, Whitelist};
-use sbx10x::extract::{extract, ExtractCfg};
-use sbx10x::orient::{orient, FallbackMode, OrientCfg};
-use sbx10x::pipeline::Orientation;
 
 fn bi(b: u8) -> usize {
     match b {

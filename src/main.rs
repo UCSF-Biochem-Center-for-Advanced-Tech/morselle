@@ -1,14 +1,14 @@
-//! CLI wiring for the sbx10x binary.
+//! CLI wiring for the morselle-extract binary.
 
 use anyhow::Result;
 use clap::{CommandFactory, FromArgMatches, Parser};
 use tracing_subscriber::EnvFilter;
 
-use sbx10x::config::Cli;
+use morselle::config::Cli;
 
 fn main() -> Result<()> {
-    let mut cli = if std::env::var_os("SBXPRESS_DISPATCH").is_some() {
-        Cli::from_arg_matches(&Cli::command().bin_name("sbxpress extract").get_matches())?
+    let mut cli = if std::env::var_os("MORSELLE_DISPATCH").is_some() {
+        Cli::from_arg_matches(&Cli::command().bin_name("morselle extract").get_matches())?
     } else {
         Cli::parse()
     };
@@ -29,5 +29,5 @@ fn main() -> Result<()> {
             .ok();
     }
 
-    sbx10x::run(&cli)
+    morselle::run(&cli)
 }

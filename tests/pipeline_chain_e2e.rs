@@ -19,18 +19,21 @@ use common::{
 use rust_htslib::bam::{self, record::Aux};
 
 fn molecules() -> std::path::PathBuf {
-    bin("sbx10x-molecules", env!("CARGO_BIN_EXE_sbx10x-molecules"))
+    bin(
+        "morselle-molecules",
+        env!("CARGO_BIN_EXE_morselle-molecules"),
+    )
 }
 fn matrix() -> std::path::PathBuf {
     bin("cr-bam-to-mtx", env!("CARGO_BIN_EXE_cr-bam-to-mtx"))
 }
 fn cells() -> std::path::PathBuf {
-    bin("sbxpress-cells", env!("CARGO_BIN_EXE_sbxpress-cells"))
+    bin("morselle-cells", env!("CARGO_BIN_EXE_morselle-cells"))
 }
 fn probe_demux() -> std::path::PathBuf {
     bin(
-        "sbxpress-probe-demux",
-        env!("CARGO_BIN_EXE_sbxpress-probe-demux"),
+        "morselle-probe-demux",
+        env!("CARGO_BIN_EXE_morselle-probe-demux"),
     )
 }
 

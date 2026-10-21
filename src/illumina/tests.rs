@@ -1,5 +1,5 @@
 //! Convert standard paired Illumina 10x GEX FASTQs into the tagged R2-only
-//! FASTQ contract consumed by `minimap2 -y` in the sbxpress workflow.
+//! FASTQ contract consumed by `minimap2 -y` in the morselle workflow.
 use super::converter::run;
 use super::types::{canonical_id, metrics_path, Cli};
 use flate2::read::MultiGzDecoder;

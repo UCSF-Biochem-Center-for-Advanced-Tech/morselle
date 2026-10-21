@@ -8,7 +8,7 @@ use crate::cell_calling::RawMatrix;
 /// matrix, fitting a per-guide adaptive UMI threshold.
 #[derive(Debug, Parser)]
 #[command(
-    name = "sbxpress-protospacer-call",
+    name = "morselle-protospacer-call",
     version,
     about = "Call CRISPR guide identity per cell (Gaussian-mixture adaptive UMI threshold)"
 )]

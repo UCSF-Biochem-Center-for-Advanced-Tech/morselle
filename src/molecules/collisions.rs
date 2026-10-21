@@ -53,7 +53,7 @@ pub(crate) fn resolve_collisions(
     tagseq: bool,
     fractional: bool,
 ) {
-    eprintln!("[sbxpress molecules] phase=gene_collision_index start");
+    eprintln!("[morselle molecules] phase=gene_collision_index start");
     // (cell, sample, umi): without `sample`, two different samples'
     // molecules sharing a cell+UMI would look like one real molecule
     // colliding across two genes. Sorted runs instead of a
@@ -63,10 +63,10 @@ pub(crate) fn resolve_collisions(
     roots.par_sort_unstable_by_key(|r| (r.cell, r.sample, r.umi, r.gene));
     let same_umi = |a: &RawKey, b: &RawKey| (a.cell, a.sample, a.umi) == (b.cell, b.sample, b.umi);
     eprintln!(
-        "[sbxpress molecules] phase=gene_collision_index complete collision_keys={}",
+        "[morselle molecules] phase=gene_collision_index complete collision_keys={}",
         roots.chunk_by(same_umi).count()
     );
-    eprintln!("[sbxpress molecules] phase=gene_collision_resolve start");
+    eprintln!("[morselle molecules] phase=gene_collision_resolve start");
     // Outcomes for one group are computed from shared reads of `molecules`,
     // then written back; `pending` is reused across groups.
     let mut pending: Vec<(RawKey, Resolved)> = Vec::new();
@@ -101,7 +101,7 @@ pub(crate) fn resolve_collisions(
         }
     }
     eprintln!(
-        "[sbxpress molecules] phase=gene_collision_resolve complete molecules={} collision_groups={}",
+        "[morselle molecules] phase=gene_collision_resolve complete molecules={} collision_groups={}",
         metrics.molecules_counted, metrics.collision_groups
     );
 }

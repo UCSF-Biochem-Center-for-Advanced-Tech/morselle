@@ -1,4 +1,4 @@
-//! A Flex CRISPR guide-capture BAM shaped like real `sbxpress guides`
+//! A Flex CRISPR guide-capture BAM shaped like real `morselle guides`
 //! output (CAT06 `aligned/TSeq100_L1_CRI.bam`): one synthetic contig per
 //! guide (`CD45`, `inactive`), records mapped at its start with MAPQ 60,
 //! `GX`/`GN` = the guide, then `CR`/`CB`/`UR`/`UB`/`PR`/`PB` in that order.

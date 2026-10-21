@@ -16,7 +16,7 @@
 //!   * molecules  — counted molecules (xf bit 8 representatives), reads/molecule,
 //!                  and UMIs per read.
 //!
-//! Geometry note: sbx10x emits R2 reverse-complemented, so residual 3' read-through
+//! Geometry note: morselle extract emits R2 reverse-complemented, so residual 3' read-through
 //! adapter lands at the 5' end of R2 and residual polyT lands at the 3' end as polyA.
 //! Both motifs are tested at BOTH ends so the result isn't biased by that expectation.
 //!

@@ -5,9 +5,9 @@ use std::io::Write;
 use std::path::PathBuf;
 use tempfile::tempdir;
 
+use morselle::cell_calling;
+use morselle::probe_set::{self, Cli as ProbeSetCli};
 use rust_htslib::bam::{self, Read as _};
-use sbx10x::cell_calling;
-use sbx10x::probe_set::{self, Cli as ProbeSetCli};
 
 fn write_file(path: &PathBuf, content: &str) {
     let mut f = File::create(path).expect("failed to create temp file");
@@ -53,7 +53,7 @@ IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII
     );
     write_file(&r2_fastq_path, &fastq_content);
 
-    // 3. Run sbxpress probeset-align engine
+    // 3. Run morselle probeset-align engine
     let cli = ProbeSetCli {
         r2_fastq: r2_fastq_path,
         probe_set: probe_set_path,

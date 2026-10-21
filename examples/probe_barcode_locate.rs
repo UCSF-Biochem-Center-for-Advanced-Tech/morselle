@@ -1,4 +1,4 @@
-//! Phase 0 of docs/archive/FLEX_SUPPORT_PLAN.md: confirm, with the real orient()/extract()
+//! Phase 0 of the Flex design notes: confirm, with the real orient()/extract()
 //! code path (not an ad hoc Python k-mer scan), where the 10x Flex probe
 //! barcode and the CRISPR Guide Capture anchor+capture-barcode sit relative to
 //! coordinates `extract()` already computes.
@@ -28,10 +28,10 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
+use morselle::anchors::{hamming, revcomp};
+use morselle::extract::{extract, ExtractCfg};
+use morselle::orient::{orient, FallbackMode, OrientCfg};
 use needletail::parse_fastx_file;
-use sbx10x::anchors::{hamming, revcomp};
-use sbx10x::extract::{extract, ExtractCfg};
-use sbx10x::orient::{orient, FallbackMode, OrientCfg};
 
 struct Whitelist {
     // (forward 10bp, id)

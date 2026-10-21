@@ -7,14 +7,14 @@
 use std::collections::HashMap;
 use std::env;
 
+use morselle::anchors::revcomp;
+use morselle::barcode::Whitelist;
+use morselle::demux::{index_regions, DemuxCfg, Demuxer};
+use morselle::extract::{extract, ExtractCfg};
+use morselle::orient::{orient, FallbackMode, OrientCfg};
+use morselle::pipeline::{CbStatus, Orientation};
+use morselle::sample_sheet::SampleSheet;
 use needletail::parse_fastx_file;
-use sbx10x::anchors::revcomp;
-use sbx10x::barcode::Whitelist;
-use sbx10x::demux::{index_regions, DemuxCfg, Demuxer};
-use sbx10x::extract::{extract, ExtractCfg};
-use sbx10x::orient::{orient, FallbackMode, OrientCfg};
-use sbx10x::pipeline::{CbStatus, Orientation};
-use sbx10x::sample_sheet::SampleSheet;
 
 fn ham(a: &[u8], b: &[u8]) -> u32 {
     a.iter().zip(b).filter(|(x, y)| x != y).count() as u32 + (a.len().abs_diff(b.len())) as u32

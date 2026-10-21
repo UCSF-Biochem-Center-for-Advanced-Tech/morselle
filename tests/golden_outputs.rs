@@ -9,7 +9,7 @@
 //! change is *meant* to alter output, regenerate and explain why in the
 //! commit message:
 //!
-//!     SBXPRESS_UPDATE_GOLDEN=1 cargo test --release --test golden_outputs
+//!     MORSELLE_UPDATE_GOLDEN=1 cargo test --release --test golden_outputs
 //!
 //! The non-fractional cases were seeded from 0.5.6. The indexed BAM golden
 //! now deliberately selects the first physical occurrence on a quality tie,
@@ -17,11 +17,12 @@
 //! Integer matrices remain unchanged. Fractional MEX goldens now retain full
 //! precision instead of four decimal places. To compare another build:
 //!
-//!     SBXPRESS_TEST_BIN_DIR=/path/to/old/target/release SBXPRESS_GOLDEN_LEGACY=1 \
+//!     MORSELLE_TEST_BIN_DIR=/path/to/old/target/release MORSELLE_GOLDEN_LEGACY=1 \
 //!         cargo test --release --test golden_outputs
 //!
-//! (`SBXPRESS_GOLDEN_LEGACY` maps flags to their pre-0.5.9 spelling and skips
-//! the fractional cases, which 0.5.6 did not have.)
+//! (`MORSELLE_GOLDEN_LEGACY` maps flags to their pre-0.5.9 spelling and skips
+//! the fractional cases, which 0.5.6 did not have. Builds before 0.7.0 used pre-release
+//! binary names: symlink them to the `morselle-*` names in that directory first.)
 mod common;
 
 use std::collections::BTreeMap;
@@ -150,7 +151,10 @@ fn run_case(dir: &Path, fixture: &Path, case: &Case, args: &[&str]) -> Value {
     all.extend(args);
     let all: Vec<&str> = all.iter().map(String::as_str).collect();
     run(
-        &bin("sbx10x-molecules", env!("CARGO_BIN_EXE_sbx10x-molecules")),
+        &bin(
+            "morselle-molecules",
+            env!("CARGO_BIN_EXE_morselle-molecules"),
+        ),
         &all,
     );
     let outs = dir.join(format!("{}.outs", case.name));
@@ -179,8 +183,8 @@ fn run_case(dir: &Path, fixture: &Path, case: &Case, args: &[&str]) -> Value {
 
 #[test]
 fn molecules_and_matrix_outputs_match_golden() {
-    let update = std::env::var_os("SBXPRESS_UPDATE_GOLDEN").is_some();
-    let legacy = std::env::var_os("SBXPRESS_GOLDEN_LEGACY").is_some();
+    let update = std::env::var_os("MORSELLE_UPDATE_GOLDEN").is_some();
+    let legacy = std::env::var_os("MORSELLE_GOLDEN_LEGACY").is_some();
     let dir = tempfile::tempdir().unwrap();
     let gex_dir = dir.path().join("gex");
     let flex_dir = dir.path().join("flex");
@@ -267,7 +271,7 @@ fn molecules_and_matrix_outputs_match_golden() {
         failures.is_empty(),
         "molecules/matrix output changed versus tests/golden/outputs.json.\n\
          If this is unintended, it is a regression. If intended, regenerate with\n\
-         SBXPRESS_UPDATE_GOLDEN=1 cargo test --release --test golden_outputs\n\
+         MORSELLE_UPDATE_GOLDEN=1 cargo test --release --test golden_outputs\n\
          and say why in the commit.\n\n{}",
         failures.join("\n")
     );

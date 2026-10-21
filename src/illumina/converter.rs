@@ -138,12 +138,12 @@ pub fn run(cli: Cli) -> Result<()> {
     }
     .max(1);
     eprintln!(
-        "[sbxpress illumina] converting {} pair(s) with {} worker(s)",
+        "[morselle illumina] converting {} pair(s) with {} worker(s)",
         cli.r1.len(),
         workers
     );
     eprintln!(
-        "[sbxpress illumina] gzip input decoder: {}",
+        "[morselle illumina] gzip input decoder: {}",
         backend_description()
     );
     let pool = rayon::ThreadPoolBuilder::new()
@@ -175,7 +175,7 @@ pub fn run(cli: Cli) -> Result<()> {
                 );
                 if let Ok(value) = &result {
                     eprintln!(
-                        "[sbxpress illumina] shard {}/{} complete: read={} emitted={} \
+                        "[morselle illumina] shard {}/{} complete: read={} emitted={} \
                          sins={} mins={} lins={} output={}",
                         index + 1,
                         cli.r1.len(),
@@ -250,7 +250,7 @@ pub fn run(cli: Cli) -> Result<()> {
         ],
     )?;
     eprintln!(
-        "[sbxpress illumina] read={} emitted={} rejected={} metrics={}",
+        "[morselle illumina] read={} emitted={} rejected={} metrics={}",
         metrics.records_read,
         metrics.records_emitted,
         metrics.barcode_rejected,
@@ -260,7 +260,7 @@ pub fn run(cli: Cli) -> Result<()> {
     // --trim-r2-polya false every flagged read counts toward the warning;
     // otherwise G/N only.
     crate::complexity::warn_if_high(
-        "sbxpress illumina",
+        "morselle illumina",
         &metrics.low_complexity_by_base,
         metrics.records_emitted + metrics.failed_by_reason.get("low_complexity").unwrap_or(&0),
         cli.trim_r2_polya,
@@ -274,7 +274,7 @@ pub fn run(cli: Cli) -> Result<()> {
             .collect::<Vec<_>>()
             .join(" ");
         eprintln!(
-            "[sbxpress illumina] failed: {} pair(s) [{}] -> {}",
+            "[morselle illumina] failed: {} pair(s) [{}] -> {}",
             metrics.records_failed,
             reasons,
             metrics
@@ -301,7 +301,7 @@ pub fn run(cli: Cli) -> Result<()> {
             }
         };
         eprintln!(
-            "[sbxpress illumina] overlap: sins(short)={} ({:.1}%) mins(medium)={} ({:.1}%) \
+            "[morselle illumina] overlap: sins(short)={} ({:.1}%) mins(medium)={} ({:.1}%) \
              lins(long)={} ({:.1}%)",
             metrics.overlap_short_sins,
             pct(metrics.overlap_short_sins),
@@ -321,7 +321,7 @@ pub fn run(cli: Cli) -> Result<()> {
             0.0
         };
         eprintln!(
-            "[sbxpress illumina] merged: fragments={} mean_cdna={:.1}bp discordance={:.4}% \
+            "[morselle illumina] merged: fragments={} mean_cdna={:.1}bp discordance={:.4}% \
              no_cdna={}",
             merged,
             insert_mean,
@@ -334,7 +334,7 @@ pub fn run(cli: Cli) -> Result<()> {
         );
         if cli_trim_tso {
             eprintln!(
-                "[sbxpress illumina] merged: tso_trimmed={} ({:.1}% of merged)",
+                "[morselle illumina] merged: tso_trimmed={} ({:.1}% of merged)",
                 metrics.tso_trimmed,
                 if merged > 0 {
                     100.0 * metrics.tso_trimmed as f64 / merged as f64
@@ -346,13 +346,13 @@ pub fn run(cli: Cli) -> Result<()> {
     }
     if cli_trim_tso {
         eprintln!(
-            "[sbxpress illumina] r2 TSO trim: trimmed={} discarded={} bases_trimmed={}",
+            "[morselle illumina] r2 TSO trim: trimmed={} discarded={} bases_trimmed={}",
             metrics.r2_tso_trimmed, metrics.r2_tso_discarded, metrics.r2_tso_bases_trimmed,
         );
     }
     if cli.trim_r2_polya {
         eprintln!(
-            "[sbxpress illumina] r2 poly-A trim: trimmed={} discarded={} bases_trimmed={}",
+            "[morselle illumina] r2 poly-A trim: trimmed={} discarded={} bases_trimmed={}",
             metrics.r2_polya_trimmed, metrics.r2_polya_discarded, metrics.r2_polya_bases_trimmed,
         );
     }

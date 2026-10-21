@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Compare sbxpress molecule-counting modes against a reference matrix.
+"""Compare morselle molecule-counting modes against a reference matrix.
 
-Reads one raw matrix per mode (MEX directories written by `sbxpress matrix`)
+Reads one raw matrix per mode (MEX directories written by `morselle matrix`)
 and a reference matrix (MEX directory or 10x .h5, e.g. the same library
 sequenced on Illumina and counted independently), restricts all of them to
 the shared barcodes and genes, and reports per mode how well it agrees with

@@ -4,12 +4,6 @@ Three complementary tools, from coarsest to finest. Use them in that order:
 find which *stage* is slow first, then which *function within that stage*,
 then (once available) which *instruction*.
 
-See `PIPELINE_NOTES.md` for real, measured CPU/memory/I/O resource profiles
-of every pipeline stage at true production scale (32.6B-read full-dataset
-runs) — complementary to this doc's per-function profiling: that one is
-about *whole-pipeline resource planning and scheduling*, this one is about
-*finding the hot function once you know which stage to look at*.
-
 ## 1. Cross-stage comparison (works today, zero setup)
 
 Every stage (`extract`, `annotate`, `molecules`, `matrix`, `cells`,
@@ -24,7 +18,7 @@ faults, context switches, CPU%), wrap any stage in `/usr/bin/time -v`
 (**not** the bash builtin `time` — use the full path):
 
 ```sh
-/usr/bin/time -v sbxpress extract --fastqs ... -o out --minimap2 2>&1 | tail -20
+/usr/bin/time -v morselle extract --fastqs ... -o out --minimap2 2>&1 | tail -20
 ```
 
 ## 2. Hot-path microbenchmarks: `cargo bench` (works today, zero setup)
@@ -61,7 +55,7 @@ to reach for once (1) or (2) has told you *which* stage/function to look
 inside. It's currently blocked on this machine:
 
 ```
-$ samply record -- ./target/release/sbx10x ...
+$ samply record -- ./target/release/morselle-extract ...
 '/proc/sys/kernel/perf_event_paranoid' is currently set to 4.
 In order for samply to work with a non-root user, this level needs
 to be set to 1 or lower.
@@ -83,14 +77,14 @@ normal installed `--release` binaries stay lean and unaffected):
 
 ```sh
 cargo build --profile profiling
-samply record -- ./target/profiling/sbx10x --fastqs ... -o out --minimap2
+samply record -- ./target/profiling/morselle-extract --fastqs ... -o out --minimap2
 # opens a local web UI (firefox-profiler) with the flamegraph;
 # --save-only -o profile.json.gz to save without opening a browser (e.g. over SSH)
 ```
 
-Do this once per stage binary (`sbx10x`, `sbx10x-annotate`,
-`sbx10x-molecules`, `cr-bam-to-mtx`, `sbxpress-cells`,
-`sbxpress-probe-demux`) against a representative-sized real input (a handful
+Do this once per stage binary (`morselle-extract`, `morselle-annotate`,
+`morselle-molecules`, `cr-bam-to-mtx`, `morselle-cells`,
+`morselle-probe-demux`) against a representative-sized real input (a handful
 of the CAT06 shards, not the full 754-file run) to find that stage's actual
 hot spots.
 
@@ -116,7 +110,7 @@ extra wall-clock isn't worth it for a stable profile).
 
 ### Real finding (2026-09-14): `extract` is gzip-bound, not algorithm-bound
 
-First real flamegraph run — `sbx10x extract --minimap2
+First real flamegraph run — `morselle extract --minimap2
 --probe-barcode-whitelist flex-v2-384.txt` on a 2M-read CAT06 slice,
 `--threads 64`, 37,613 samples aggregated across all threads:
 
@@ -165,9 +159,9 @@ end — `minimap2` read all 1,649,018 records with zero loss, and the
 `CR`/`CB`/`UR`/`UB` tags survived through minimap2's `-y` untouched:
 
 ```sh
-mkfifo out/sbxpress_S1_L001_R2_001.fastq
-sbx10x --fastqs in.fastq.gz -o out --minimap2 --no-gzip &
-minimap2 -a -y ref.mmi out/sbxpress_S1_L001_R2_001.fastq > aligned.sam
+mkfifo out/morselle_S1_L001_R2_001.fastq
+morselle-extract --fastqs in.fastq.gz -o out --minimap2 --no-gzip &
+minimap2 -a -y ref.mmi out/morselle_S1_L001_R2_001.fastq > aligned.sam
 ```
 
 `--gzip-level`/`--split` are still there for when the output genuinely needs
@@ -200,12 +194,12 @@ inflating our gzip output on the way in — `--no-gzip` removes a
 compress/decompress round trip on *both* ends of that handoff, not just the
 encode side.
 
-Molecules/matrix/cells ran clean end-to-end too (`sbx10x-molecules` →
-`cr-bam-to-mtx` → `sbxpress-cells`, no errors), but surfaced something
+Molecules/matrix/cells ran clean end-to-end too (`morselle-molecules` →
+`cr-bam-to-mtx` → `morselle-cells`, no errors), but surfaced something
 independently worth knowing, unrelated to compression: only 59 of the
 1,649,018 records were real countable molecules (55 genes, 59 barcodes).
 That's expected, not a bug — CAT06 is 10x Flex/CRISPR data, whose R2 is a
-probe-barcode + probe/guide payload (see docs/archive/FLEX_SUPPORT_PLAN.md), not free
+probe-barcode + probe/guide payload (see the Flex design notes), not free
 poly-dT cDNA, so splice-aware whole-genome alignment of that payload
 finding almost nothing real is exactly what the architecture predicts.
 This run confirms the mechanics of the full binary chain on real data, but
@@ -215,13 +209,13 @@ strategy, not standard genome mapping, and is Phase 6 territory.
 
 ### `molecules` / `matrix` per-record cost (2026-10-07)
 
-Investigated the open question in PIPELINE_NOTES.md ("`molecules` alone is
+Investigated an open question from whole-pipeline resource profiling ("`molecules` alone is
 2.7x longer than Cell Ranger's whole ALIGN_AND_COUNT"). Callgrind on a
 synthetic 200k-record annotated BAM with the real tag layout (minimap2 +
 extract comment + annotate tags, 24 per record) showed the time was
 per-record overhead, not the UMI algorithms:
 
-| cost (baseline `sbx10x-molecules`) | share of instructions |
+| cost (baseline `morselle-molecules`) | share of instructions |
 |---|---|
 | zlib deflate + crc32 (BGZF output) | ~35% |
 | `bam_aux_next`/`bam_aux_get` — every `record.aux()` / `push_aux` / `remove_aux` rescans all 24 tags | ~21% |
@@ -244,6 +238,6 @@ instead of building the `decisions` table would cut it roughly another
 quarter, but changes `build_decisions`' public return type.
 
 Reproduce: generate a BAM with the real tag set, then
-`valgrind --tool=callgrind sbx10x-molecules in.bam -o out.bam --threads 1`
+`valgrind --tool=callgrind morselle-molecules in.bam -o out.bam --threads 1`
 and `callgrind_annotate`. Instruction counts are deterministic, unlike
 wall time on a shared box.

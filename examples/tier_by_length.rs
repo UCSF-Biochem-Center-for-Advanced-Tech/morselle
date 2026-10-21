@@ -6,11 +6,11 @@
 
 use std::env;
 
+use morselle::barcode::Whitelist;
+use morselle::extract::{extract, ExtractCfg};
+use morselle::orient::{orient, FallbackMode, OrientCfg};
+use morselle::pipeline::{CbStatus, Orientation};
 use needletail::parse_fastx_file;
-use sbx10x::barcode::Whitelist;
-use sbx10x::extract::{extract, ExtractCfg};
-use sbx10x::orient::{orient, FallbackMode, OrientCfg};
-use sbx10x::pipeline::{CbStatus, Orientation};
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tier {
@@ -160,8 +160,8 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn classify(
-    o: &sbx10x::orient::Oriented,
-    e: &sbx10x::extract::Extracted,
+    o: &morselle::orient::Oriented,
+    e: &morselle::extract::Extracted,
     wl: &Whitelist,
     cb_len: usize,
     umi_len: usize,

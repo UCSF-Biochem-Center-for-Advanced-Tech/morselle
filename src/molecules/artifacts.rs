@@ -140,7 +140,7 @@ impl ArtifactReport {
     pub fn warn(&self) {
         for gene in self.genes.iter().filter(|g| g.share_of_reads >= WARN_SHARE) {
             eprintln!(
-                "[sbxpress molecules] WARNING: {} ({}) has {:.1}% of gene-assigned reads and \
+                "[morselle molecules] WARNING: {} ({}) has {:.1}% of gene-assigned reads and \
                  {:.0}% of them are low-complexity ({}) or low-MAPQ ({}); likely a library \
                  artifact (see `artifacts` in the metrics JSON)",
                 gene.gene_name,

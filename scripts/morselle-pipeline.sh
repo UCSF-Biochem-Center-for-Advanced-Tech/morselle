@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
-# Unified, restartable sbxpress pipeline:
+# Unified, restartable morselle pipeline:
 #   input:    raw Roche SBX device output (--input-mode sbx, default)
 #             or paired Illumina R1/R2 FASTQs (--input-mode illumina)
 #   analysis: 3' GEX (default), pooled CAT tagseq, or 10x Flex probe sets.
 #
-# The GEX path is stage-for-stage the production sbxpress-gex-pipeline.sh
+# The GEX path is stage-for-stage the production morselle-gex-pipeline.sh
 # (same commands, flags, file names, and restart markers). Tagseq differs
 # only in `molecules --tagseq` and optional whitelist cell calling. Flex
-# follows scripts/run_full_cat06.sh: extract --flex, probeset-align per
+# runs extract --flex, probeset-align per
 # extracted chunk, molecules --flex, then either single-sample counting or
 # probe-demux + scripts/run_flex_multi.sh for multiplexed samples.
 #
 # Every stage checks for its finished output first, so a killed run can be
 # restarted with the same command line. Intermediate BAMs are kept for that
-# reason. Set SBXPRESS_PIPELINE_DRY_RUN=1 to print commands without running.
+# reason. Set MORSELLE_PIPELINE_DRY_RUN=1 to print commands without running.
 set -euo pipefail
 
 usage() {
     cat <<'EOF'
 Usage:
-  sbxpress-pipeline.sh [--input-mode sbx|illumina] [--analysis-mode gex|tagseq|flex] \
+  morselle-pipeline.sh [--input-mode sbx|illumina] [--analysis-mode gex|tagseq|flex] \
     --sample NAME --whitelist 10X_BARCODES.txt.gz --out-dir OUTPUT_DIRECTORY \
     <input options> <analysis options> [options]
 
@@ -72,13 +72,13 @@ Options:
   --split N                Extracted FASTQ shards per sample (SBX); default 16.
   --extract-no-gzip        Write extracted FASTQs uncompressed (SBX). Measured 7.3x
                            faster extraction and 2.2x faster extract+mapping
-                           (PROFILING.md) at ~4x the intermediate disk space.
+                           (docs/PROFILING.md) at ~4x the intermediate disk space.
   --molecule-compression-level N
                            BGZF level 0-9 for the molecule BAM (default: htslib's 6;
                            1 was ~24% faster overall for a ~12% larger file).
   --sort-mem SIZE          samtools memory per sort worker; default 1G.
   --tmp-dir DIR            Sort temporary directory; default OUT/tmp.
-  --expect-cells N         Expected recovered cells; passed to sbxpress cells.
+  --expect-cells N         Expected recovered cells; passed to morselle cells.
   --audit                  Also emit comparison audit JSON and molecule sample.
   --audit-label TEXT       Audit label; default SBX_SAMPLE / ILLUMINA_SAMPLE.
   --molecule-sample N      Audit 1-in-N molecule sample; default 64.
@@ -97,7 +97,7 @@ require_path() { [[ -e "$1" ]] || die "required input not found: $1"; }
 # run LOG cmd...: execute (or print, in dry-run) with stderr to LOG.
 run() {
     local log=$1; shift
-    if [[ ${SBXPRESS_PIPELINE_DRY_RUN:-0} == 1 ]]; then
+    if [[ ${MORSELLE_PIPELINE_DRY_RUN:-0} == 1 ]]; then
         printf '+'; printf ' %q' "$@"; printf '  2> %s\n' "$log"
     else
         "$@" 2> "$log"
@@ -201,7 +201,7 @@ if [[ $ANALYSIS_MODE == flex ]]; then
     [[ -n $PROBE_SET ]] || die "--probe-set is required for --analysis-mode flex"
     INPUTS+=("$PROBE_SET")
     if [[ $INPUT_MODE == illumina ]]; then
-        # sbxpress illumina does not locate probe barcodes (no PB tag), so
+        # morselle illumina does not locate probe barcodes (no PB tag), so
         # multiplexed samples cannot be separated.
         [[ -z $PROBE_SAMPLE_SHEET && -z $PROBE_BARCODE_WL ]] \
             || die "Illumina Flex input is single-sample only: probe-barcode demultiplexing needs --input-mode sbx"
@@ -217,8 +217,8 @@ else
     INPUTS+=("$MMI" "$GTF" "$JUNCTIONS")
 fi
 [[ -z $TAGSEQ_BARCODES ]] || INPUTS+=("$TAGSEQ_BARCODES")
-if [[ ${SBXPRESS_PIPELINE_DRY_RUN:-0} != 1 ]]; then
-    for command in sbxpress samtools; do require_command "$command"; done
+if [[ ${MORSELLE_PIPELINE_DRY_RUN:-0} != 1 ]]; then
+    for command in morselle samtools; do require_command "$command"; done
     for path in "${INPUTS[@]}"; do require_path "$path"; done
 fi
 
@@ -270,8 +270,8 @@ bind_pipeline_state "$SAMPLE_OUT" "$INPUT_MODE" "$ANALYSIS_MODE" "$SAMPLE" \
 mkdir -p "$EXTRACT_DIR" "$ANNOTATION_DIR" "$MOLECULES_DIR" "$MATRIX_DIR" "$LOG_DIR" "$TMP_DIR" "$(dirname "$GENES_MTX")"
 (( AUDIT == 0 )) || mkdir -p "$AUDIT_DIR"
 
-if [[ ${SBXPRESS_PIPELINE_DRY_RUN:-0} != 1 ]]; then
-    echo "sbxpress version: $(sbxpress --version)"
+if [[ ${MORSELLE_PIPELINE_DRY_RUN:-0} != 1 ]]; then
+    echo "morselle version: $(morselle --version)"
 fi
 echo "sample:           $SAMPLE ($INPUT_MODE input, $ANALYSIS_MODE analysis)"
 echo "output:           $SAMPLE_OUT"
@@ -285,7 +285,7 @@ if [[ $INPUT_MODE == sbx ]]; then
             --split "$SPLIT" --lenient --minimap2 ${BARCODE_METRICS[@]+"${BARCODE_METRICS[@]}"})
         [[ $ANALYSIS_MODE != flex ]] || EXTRACT_ARGS+=(--flex --probe-barcode-whitelist "$PROBE_BARCODE_WL")
         (( EXTRACT_NO_GZIP == 0 )) || EXTRACT_ARGS+=(--no-gzip)
-        run "$LOG_DIR/extract.log" sbxpress extract "${EXTRACT_ARGS[@]}"
+        run "$LOG_DIR/extract.log" morselle extract "${EXTRACT_ARGS[@]}"
     else
         echo "[1/5] extraction already complete; reusing $EXTRACT_DIR"
     fi
@@ -295,14 +295,14 @@ if [[ $INPUT_MODE == sbx ]]; then
     shopt -u nullglob
 else
     # One input pair gives $SAMPLE.tagged.R2.fastq.gz; several (lanes) give
-    # $SAMPLE.tagged.R2.shard-NNN.fastq.gz, one per pair (sbxpress illumina
+    # $SAMPLE.tagged.R2.shard-NNN.fastq.gz, one per pair (morselle illumina
     # shards its output by input). 0.6.1 and earlier expected the single file
     # and failed on multi-lane input.
     TAGGED_PREFIX="$EXTRACT_DIR/$SAMPLE.tagged.R2"
     ILLUMINA_DONE="$EXTRACT_DIR/.$SAMPLE.illumina.done"
     # A single finished file from an older run counts as done.
     [[ ! -s "$TAGGED_PREFIX.fastq.gz" ]] || [[ -e "$ILLUMINA_DONE" ]] \
-        || [[ ${SBXPRESS_PIPELINE_DRY_RUN:-0} == 1 ]] || touch "$ILLUMINA_DONE"
+        || [[ ${MORSELLE_PIPELINE_DRY_RUN:-0} == 1 ]] || touch "$ILLUMINA_DONE"
     if [[ ! -e "$ILLUMINA_DONE" ]]; then
         echo "[1/5] converting Illumina R1/R2 to tagged cDNA FASTQ"
         ILLUMINA_ARGS=()
@@ -311,12 +311,12 @@ else
         # the conversion has finished, so an interrupted run is never
         # mistaken for a finished one.
         ILLUMINA_PARTIAL="$EXTRACT_DIR/.$SAMPLE.illumina.partial"
-        [[ ${SBXPRESS_PIPELINE_DRY_RUN:-0} == 1 ]] || { rm -rf "$ILLUMINA_PARTIAL"; mkdir -p "$ILLUMINA_PARTIAL"; }
-        run "$LOG_DIR/illumina.log" sbxpress illumina "${ILLUMINA_ARGS[@]}" \
+        [[ ${MORSELLE_PIPELINE_DRY_RUN:-0} == 1 ]] || { rm -rf "$ILLUMINA_PARTIAL"; mkdir -p "$ILLUMINA_PARTIAL"; }
+        run "$LOG_DIR/illumina.log" morselle illumina "${ILLUMINA_ARGS[@]}" \
             --whitelist "$WHITELIST" --output "$ILLUMINA_PARTIAL/$SAMPLE.tagged.R2.fastq.gz" \
             --metrics "$EXTRACT_DIR/$SAMPLE.illumina.metrics.json" --threads "$EXTRACT_THREADS" \
             ${BARCODE_METRICS[@]+"${BARCODE_METRICS[@]}"}
-        if [[ ${SBXPRESS_PIPELINE_DRY_RUN:-0} != 1 ]]; then
+        if [[ ${MORSELLE_PIPELINE_DRY_RUN:-0} != 1 ]]; then
             mv "$ILLUMINA_PARTIAL"/"$SAMPLE".tagged.R2*.fastq.gz "$EXTRACT_DIR"/
             rmdir "$ILLUMINA_PARTIAL"
             touch "$ILLUMINA_DONE"
@@ -331,7 +331,7 @@ else
     CDNA_FASTQS+=("$TAGGED_PREFIX".shard-*.fastq.gz)
     shopt -u nullglob
 fi
-if [[ ${SBXPRESS_PIPELINE_DRY_RUN:-0} != 1 ]]; then
+if [[ ${MORSELLE_PIPELINE_DRY_RUN:-0} != 1 ]]; then
     (( ${#CDNA_FASTQS[@]} > 0 )) || die "no tagged cDNA FASTQs found for $SAMPLE in $EXTRACT_DIR"
 fi
 
@@ -350,12 +350,12 @@ if [[ ! -s "$ANNOTATED_BAM.bai" ]]; then
             # probeset-align writes the BAM directly; build under a partial
             # name so a killed chunk is redone rather than reused.
             run "$LOG_DIR/probeset_align.$chunk_name.log" \
-                sbxpress probeset-align "$fq" --probe-set "$PROBE_SET" \
+                morselle probeset-align "$fq" --probe-set "$PROBE_SET" \
                 --genes-out "$GENES_MTX" --threads "$ALIGN_THREADS" \
                 --metrics "$chunk.metrics.json" --output "$chunk.partial.bam"
-            [[ ${SBXPRESS_PIPELINE_DRY_RUN:-0} == 1 ]] || mv "$chunk.partial.bam" "$chunk"
+            [[ ${MORSELLE_PIPELINE_DRY_RUN:-0} == 1 ]] || mv "$chunk.partial.bam" "$chunk"
         done
-        if [[ ${SBXPRESS_PIPELINE_DRY_RUN:-0} == 1 ]]; then
+        if [[ ${MORSELLE_PIPELINE_DRY_RUN:-0} == 1 ]]; then
             echo "+ samtools cat ${CHUNK_BAMS[*]} | samtools sort ... -o $ANNOTATED_BAM"
         else
             samtools cat -o - "${CHUNK_BAMS[@]}" \
@@ -376,14 +376,14 @@ if [[ ! -s "$ANNOTATED_BAM.bai" ]]; then
             MAP_MULTIMAP_ARGS=(--secondary=no)
         fi
         (( THREE_PRIME == 0 )) || ANNOTATE_ARGS+=(--three-prime)
-        if [[ ${SBXPRESS_PIPELINE_DRY_RUN:-0} == 1 ]]; then
-            echo "+ sbxpress minimap -a ${MAP_PRESET[*]} --junc-bed $JUNCTIONS ${MAP_MULTIMAP_ARGS[*]} -y -t $MAP_THREADS $MMI ${CDNA_FASTQS[*]} | sbxpress annotate - ${ANNOTATE_ARGS[*]} | samtools sort ... -o $ANNOTATED_BAM"
+        if [[ ${MORSELLE_PIPELINE_DRY_RUN:-0} == 1 ]]; then
+            echo "+ morselle minimap -a ${MAP_PRESET[*]} --junc-bed $JUNCTIONS ${MAP_MULTIMAP_ARGS[*]} -y -t $MAP_THREADS $MMI ${CDNA_FASTQS[*]} | morselle annotate - ${ANNOTATE_ARGS[*]} | samtools sort ... -o $ANNOTATED_BAM"
         else
-            sbxpress minimap \
+            morselle minimap \
                 -a "${MAP_PRESET[@]}" --junc-bed "$JUNCTIONS" "${MAP_MULTIMAP_ARGS[@]}" -y \
                 -t "$MAP_THREADS" "$MMI" "${CDNA_FASTQS[@]}" \
                 2> "$LOG_DIR/minimap2.log" \
-            | sbxpress annotate - "${ANNOTATE_ARGS[@]}" \
+            | morselle annotate - "${ANNOTATE_ARGS[@]}" \
                 2> "$LOG_DIR/annotate.log" \
             | samtools sort -@ "$SORT_THREADS" -m "$SORT_MEM" \
                 -T "$TMP_DIR/$SAMPLE.annotated" -o "$ANNOTATED_BAM" -
@@ -411,7 +411,7 @@ if [[ ! -s "$MOLECULE_BAM.bai" ]]; then
             # single-sample Illumina Flex has no PB tag at all.
             [[ $INPUT_MODE != sbx ]] || MOLECULE_ARGS+=(--flex) ;;
     esac
-    run "$LOG_DIR/molecules.log" sbxpress molecules "$ANNOTATED_BAM" "${MOLECULE_ARGS[@]}"
+    run "$LOG_DIR/molecules.log" morselle molecules "$ANNOTATED_BAM" "${MOLECULE_ARGS[@]}"
     run "$LOG_DIR/index_molecules.log" samtools index -@ "$SORT_THREADS" "$MOLECULE_BAM"
     run "$LOG_DIR/quickcheck_molecules.log" samtools quickcheck -v "$MOLECULE_BAM"
 else
@@ -428,9 +428,9 @@ if (( MULTIPLEXED_FLEX )); then
     FLEX_OUT="$SAMPLE_OUT/flex_samples"
     if [[ ! -e "$DEMUX_DIR/.done" ]]; then
         echo "[4/5] assigning cell barcodes to Flex samples"
-        run "$LOG_DIR/probe_demux.log" sbxpress probe-demux "$MOLECULE_BAM" \
+        run "$LOG_DIR/probe_demux.log" morselle probe-demux "$MOLECULE_BAM" \
             --probe-sample-sheet "$PROBE_SAMPLE_SHEET" --output "$DEMUX_DIR"
-        [[ ${SBXPRESS_PIPELINE_DRY_RUN:-0} == 1 ]] || touch "$DEMUX_DIR/.done"
+        [[ ${MORSELLE_PIPELINE_DRY_RUN:-0} == 1 ]] || touch "$DEMUX_DIR/.done"
     fi
     echo "[5/5] per-sample matrices and cell calling (run_flex_multi.sh)"
     run "$LOG_DIR/flex_multi.log" "$SCRIPT_DIR/run_flex_multi.sh" \
@@ -443,7 +443,7 @@ else
         echo "[4/5] creating complete raw feature-barcode matrix"
         MATRIX_ARGS=(--output "$RAW_WORK" --genome "$GENOME" --cell-barcodes "$WHITELIST"
             --features "$GENES_MTX")
-        run "$LOG_DIR/matrix.log" sbxpress matrix "$MOLECULE_BAM" "${MATRIX_ARGS[@]}"
+        run "$LOG_DIR/matrix.log" morselle matrix "$MOLECULE_BAM" "${MATRIX_ARGS[@]}"
         publish_matrix_stage "$RAW_WORK" "$MATRIX_DIR" .raw.done
     else
         echo "[4/5] raw matrix already complete; reusing $RAW_H5"
@@ -453,7 +453,7 @@ else
         CELL_WORK="$MATRIX_DIR/.cells.partial"
         prepare_matrix_stage "$CELL_WORK"
         echo "[5/5] calling cells and writing filtered counts"
-        run "$LOG_DIR/cells.log" sbxpress cells "$RAW_H5" --output "$CELL_WORK" ${CELL_ARGS[@]+"${CELL_ARGS[@]}"}
+        run "$LOG_DIR/cells.log" morselle cells "$RAW_H5" --output "$CELL_WORK" ${CELL_ARGS[@]+"${CELL_ARGS[@]}"}
         publish_matrix_stage "$CELL_WORK" "$MATRIX_DIR" .cells.done
     else
         echo "[5/5] filtered matrix already complete; reusing $FILTERED_H5"
@@ -466,7 +466,7 @@ if (( AUDIT == 1 )); then
         AUDIT_ARGS=(--label "$AUDIT_LABEL" --output "$AUDIT_JSON" --molecules "$AUDIT_MOLECULES"
             --molecule-sample "$MOLECULE_SAMPLE" --threads "$SORT_THREADS")
         (( MULTIPLEXED_FLEX )) || AUDIT_ARGS+=(--cells "$FILTERED_BARCODES")
-        run "$LOG_DIR/audit.log" sbxpress audit "$MOLECULE_BAM" "${AUDIT_ARGS[@]}"
+        run "$LOG_DIR/audit.log" morselle audit "$MOLECULE_BAM" "${AUDIT_ARGS[@]}"
     else
         echo "[audit] audit already complete; reusing $AUDIT_JSON"
     fi

@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::{CommandFactory, FromArgMatches, Parser};
 use tracing_subscriber::EnvFilter;
 
-use sbx10x::feature_capture::{self, Cli};
+use morselle::probe_demux::{self, Cli};
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -11,10 +11,14 @@ fn main() -> Result<()> {
         )
         .with_target(false)
         .init();
-    let cli = if std::env::var_os("SBXPRESS_DISPATCH").is_some() {
-        Cli::from_arg_matches(&Cli::command().bin_name("sbxpress guides").get_matches())?
+    let cli = if std::env::var_os("MORSELLE_DISPATCH").is_some() {
+        Cli::from_arg_matches(
+            &Cli::command()
+                .bin_name("morselle probe-demux")
+                .get_matches(),
+        )?
     } else {
         Cli::parse()
     };
-    feature_capture::run(&cli)
+    probe_demux::run(&cli)
 }

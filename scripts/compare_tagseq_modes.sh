@@ -18,7 +18,7 @@
 # Each mode's molecules BAM and matrix are kept in OUT/<mode>/ and reused on
 # a re-run. The comparison (scripts/compare_tagseq_modes.py, needs numpy;
 # h5py for an .h5 reference) writes OUT/summary.tsv and OUT/per_gene.tsv.
-# Set SBXPRESS=/path/to/sbxpress to use a specific build.
+# Set MORSELLE=/path/to/morselle to use a specific build.
 set -euo pipefail
 
 die() { echo "ERROR: $*" >&2; exit 1; }
@@ -40,7 +40,7 @@ while (( $# > 0 )); do
 done
 [[ -n $BAM && -n $REFERENCE && -n $OUT_DIR ]] || die "--bam, --reference and --out-dir are required"
 [[ -e $BAM && -e $REFERENCE ]] || die "input not found"
-SBXPRESS=${SBXPRESS:-sbxpress}
+MORSELLE=${MORSELLE:-morselle}
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p "$OUT_DIR"
 
@@ -59,12 +59,12 @@ for mode in $MODES; do
     if [[ ! -s "$dir/outs/raw_feature_bc_matrix/matrix.mtx" ]]; then
         echo "[$mode] molecules ${flags[*]}"
         # shellcheck disable=SC2086 # MOLECULE_ARGS is a user-supplied flag list
-        "$SBXPRESS" molecules "$BAM" "${flags[@]}" $MOLECULE_ARGS \
+        "$MORSELLE" molecules "$BAM" "${flags[@]}" $MOLECULE_ARGS \
             --output "$dir/molecules.bam" --threads "$THREADS" 2> "$dir/molecules.log"
         matrix_args=(--output "$dir/outs" --no-gzip)
         [[ -z $FEATURES ]] || matrix_args+=(--features "$FEATURES")
         echo "[$mode] matrix"
-        "$SBXPRESS" matrix "$dir/molecules.bam" "${matrix_args[@]}" 2> "$dir/matrix.log"
+        "$MORSELLE" matrix "$dir/molecules.bam" "${matrix_args[@]}" 2> "$dir/matrix.log"
         rm -f "$dir/molecules.bam"  # large; the matrix and metrics are what's compared
     else
         echo "[$mode] already done; reusing $dir"

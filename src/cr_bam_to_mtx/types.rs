@@ -77,7 +77,7 @@ pub(crate) struct Matrix {
     pub(crate) probe_barcodes_skipped: u64,
 }
 
-/// Machine-readable run accounting, following the main `sbx10x` app.
+/// Machine-readable run accounting, following the main `morselle extract` app.
 #[derive(Debug, Serialize)]
 pub struct Metrics {
     pub input_bam: String,

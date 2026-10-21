@@ -174,7 +174,7 @@ pub struct Metrics {
     pub input_bam: String,
     pub output_bam: String,
     pub tagseq: bool,
-    /// Policy flags this run used (see `sbx10x-molecules --help`).
+    /// Policy flags this run used (see `morselle-molecules --help`).
     pub fractional_collisions: bool,
     pub position_aware_umis: bool,
     /// --umi-indel-correction / --fold-singletons-min-top (0 = off) this run used.

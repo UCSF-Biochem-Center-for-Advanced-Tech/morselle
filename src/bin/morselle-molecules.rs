@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use anyhow::{bail, Result};
 use clap::{CommandFactory, FromArgMatches, Parser};
-use sbx10x::molecules::{
+use morselle::molecules::{
     barcode_metrics, build_decisions_with, collect_evidence_indexed_with, collect_evidence_with,
     run_sharded, write_output, KeyTables, Metrics, MoleculeOptions, UmiRules,
 };
@@ -12,7 +12,7 @@ use tracing::info;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "sbx10x-molecules",
+    name = "morselle-molecules",
     version,
     about = "Correct gene-aware UMIs, resolve gene collisions, and mark molecule representatives"
 )]
@@ -63,8 +63,8 @@ struct Cli {
     /// collate/quant split salmon alevin-fry uses to solve the identical
     /// memory-blowup problem. Real motivation: --evidence-workers 64 on a
     /// full-scale (~11B-read) library OOM-killed at ~1.49TB anon-rss on a
-    /// 1.5TB box (see PIPELINE_NOTES.md). Safe by construction: every
-    /// grouping/collision key sbx10x-molecules uses is scoped to
+    /// 1.5TB box (see the pipeline resource notes). Safe by construction: every
+    /// grouping/collision key morselle-molecules uses is scoped to
     /// (cell, sample), so no shard ever needs to see another shard's data.
     /// Default 1 = today's unsharded behavior, unchanged. Not yet supported
     /// together with --saturation (needs a global read-count known up
@@ -139,7 +139,7 @@ struct Cli {
     flex: bool,
     /// Count only confidently mapped reads, as Cell Ranger does: MAPQ at
     /// least this (60 = minimap2's unique; STAR's 255 passes), or rescued by
-    /// `sbxpress annotate` (`mm:i:1`: one compatible exonic gene). Dropped
+    /// `morselle annotate` (`mm:i:1`: one compatible exonic gene). Dropped
     /// reads are reported as `low_mapq_records` / `multimapper_records`
     /// (`NH` > 1). 0 counts every MAPQ (the pre-0.6.2 behaviour).
     #[arg(long, default_value_t = 60)]
@@ -188,8 +188,8 @@ fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
-    let cli = if std::env::var_os("SBXPRESS_DISPATCH").is_some() {
-        Cli::from_arg_matches(&Cli::command().bin_name("sbxpress molecules").get_matches())?
+    let cli = if std::env::var_os("MORSELLE_DISPATCH").is_some() {
+        Cli::from_arg_matches(&Cli::command().bin_name("morselle molecules").get_matches())?
     } else {
         Cli::parse()
     };
@@ -285,7 +285,7 @@ fn main() -> Result<()> {
         collect_evidence_with(single_bam, cli.threads, &opts.record_filter(), &mut metrics)?
     };
     eprintln!(
-        "[sbxpress molecules] phase=evidence_ready raw_nodes={} eligible={}",
+        "[morselle molecules] phase=evidence_ready raw_nodes={} eligible={}",
         evidence.len(),
         metrics.eligible_records
     );
@@ -299,11 +299,11 @@ fn main() -> Result<()> {
     drop(evidence);
     if let (Some(curve), Some(path)) = (saturation, cli.saturation.as_deref()) {
         eprintln!(
-            "[sbxpress molecules] phase=saturation_write start output={}",
+            "[morselle molecules] phase=saturation_write start output={}",
             path.display()
         );
         metrics.saturation = Some(curve.write(path)?);
-        eprintln!("[sbxpress molecules] phase=saturation_write complete");
+        eprintln!("[morselle molecules] phase=saturation_write complete");
     }
     let tables = KeyTables {
         genes: &genes,

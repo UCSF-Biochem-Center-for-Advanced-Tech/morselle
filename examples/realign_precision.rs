@@ -9,7 +9,7 @@
 //!
 //! Usage: cargo run --release --example realign_precision -- <whitelist> [samples]
 
-use sbx10x::barcode::{decode16, Whitelist};
+use morselle::barcode::{decode16, Whitelist};
 
 struct Rng(u64);
 impl Rng {

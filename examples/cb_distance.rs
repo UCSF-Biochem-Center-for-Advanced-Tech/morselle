@@ -4,12 +4,12 @@
 
 use std::env;
 
+use morselle::barcode::{encode16, Whitelist};
+use morselle::extract::{extract, ExtractCfg};
+use morselle::orient::{orient, FallbackMode, OrientCfg};
+use morselle::pipeline::Orientation;
 use needletail::parse_fastx_file;
 use rayon::prelude::*;
-use sbx10x::barcode::{encode16, Whitelist};
-use sbx10x::extract::{extract, ExtractCfg};
-use sbx10x::orient::{orient, FallbackMode, OrientCfg};
-use sbx10x::pipeline::Orientation;
 
 /// Hamming distance (in bases) between two 2-bit-packed 16-mers.
 #[inline]

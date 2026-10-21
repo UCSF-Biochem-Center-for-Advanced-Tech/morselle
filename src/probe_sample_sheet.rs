@@ -1,10 +1,10 @@
-//! Probe-barcode sample sheet parsing (docs/archive/FLEX_SUPPORT_PLAN.md Phase 2).
+//! Probe-barcode sample sheet parsing (the Flex design notes Phase 2).
 //!
 //! Two front-end formats feed one internal model, mirroring `sample_sheet.rs`'s
 //! bclconvert/flat split:
 //! - **Primary:** a real cellranger `multi` `config.csv` — only its `[samples]`
 //!   section is read (`sample_id,probe_barcode_ids,...`; other columns and
-//!   every other section are ignored), so a user can point `sbxpress`
+//!   every other section are ignored), so a user can point `morselle`
 //!   straight at an existing config file. `probe_barcode_ids` is `|`-delimited
 //!   when a sample is pooled across more than one probe barcode (real
 //!   example: `Pos,D-A01|D-A02`).

@@ -80,7 +80,7 @@ pub fn collect_evidence_indexed_with(
         .num_threads(workers)
         .build()?;
     eprintln!(
-        "[sbxpress molecules] phase=evidence_collect mode=indexed start workers={} regions={} chunk_bases={}",
+        "[morselle molecules] phase=evidence_collect mode=indexed start workers={} regions={} chunk_bases={}",
         workers,
         regions.len(),
         chunk_bases
@@ -96,14 +96,14 @@ pub fn collect_evidence_indexed_with(
                 let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
                 if done % checkpoint == 0 || done == total_regions {
                     eprintln!(
-                        "[sbxpress molecules] phase=evidence_collect mode=indexed regions={done}/{total_regions}"
+                        "[morselle molecules] phase=evidence_collect mode=indexed regions={done}/{total_regions}"
                     );
                 }
                 result
             })
             .collect::<Result<Vec<_>>>()
     })?;
-    eprintln!("[sbxpress molecules] phase=evidence_collect mode=indexed complete");
+    eprintln!("[morselle molecules] phase=evidence_collect mode=indexed complete");
     let mut genes = Vec::<String>::new();
     let mut gene_ids = HashMap::<String, u32>::default();
     let mut samples = Vec::<String>::new();
@@ -149,7 +149,7 @@ pub fn collect_evidence_indexed_with(
         super::barcode_metrics::merge_region(metrics, part, sample_remaps.last().unwrap());
     }
     eprintln!(
-        "[sbxpress molecules] phase=evidence_remap start regions={} records={} eligible={}",
+        "[morselle molecules] phase=evidence_remap start regions={} records={} eligible={}",
         parts.len(),
         metrics.records,
         metrics.eligible_records
@@ -175,14 +175,14 @@ pub fn collect_evidence_indexed_with(
             })
             .collect()
     });
-    eprintln!("[sbxpress molecules] phase=evidence_remap complete; phase=evidence_merge start");
+    eprintln!("[morselle molecules] phase=evidence_remap complete; phase=evidence_merge start");
     let evidence = pool.install(|| {
         maps.into_par_iter()
             .reduce_with(merge_evidence_maps)
             .unwrap_or_default()
     });
     eprintln!(
-        "[sbxpress molecules] phase=evidence_merge complete raw_nodes={}",
+        "[morselle molecules] phase=evidence_merge complete raw_nodes={}",
         evidence.len()
     );
     Ok((evidence, genes, gene_ids, samples, sample_ids))

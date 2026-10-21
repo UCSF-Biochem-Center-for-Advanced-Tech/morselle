@@ -1,6 +1,6 @@
 //! Generic fixed-length-key, Hamming-tolerant O(1) lookup index.
 //!
-//! Extracted from `demux.rs`'s original i5/i7 index (docs/archive/FLEX_SUPPORT_PLAN.md
+//! Extracted from `demux.rs`'s original i5/i7 index (the Flex design notes
 //! Phase 1) so the same primitive backs both sample-index demux and
 //! probe-barcode/feature-barcode matching, rather than duplicating it.
 //!

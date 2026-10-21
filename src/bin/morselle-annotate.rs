@@ -2,7 +2,7 @@ use anyhow::Result;
 use clap::{CommandFactory, FromArgMatches, Parser};
 use tracing_subscriber::EnvFilter;
 
-use sbx10x::annotate::{self, Cli};
+use morselle::annotate::{self, Cli};
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -15,8 +15,8 @@ fn main() -> Result<()> {
         )
         .with_target(false)
         .init();
-    let cli = if std::env::var_os("SBXPRESS_DISPATCH").is_some() {
-        Cli::from_arg_matches(&Cli::command().bin_name("sbxpress annotate").get_matches())?
+    let cli = if std::env::var_os("MORSELLE_DISPATCH").is_some() {
+        Cli::from_arg_matches(&Cli::command().bin_name("morselle annotate").get_matches())?
     } else {
         Cli::parse()
     };

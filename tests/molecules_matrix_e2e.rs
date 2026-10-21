@@ -1,4 +1,4 @@
-//! End-to-end regression test: annotated BAM -> `sbx10x-molecules` ->
+//! End-to-end regression test: annotated BAM -> `morselle-molecules` ->
 //! `cr-bam-to-mtx`, run through the real binaries, checking the final
 //! matrix counts under every collision policy and execution path.
 //!
@@ -101,7 +101,11 @@ fn molecules_then_matrix(dir: &Path, name: &str, extra: &[&str]) -> Run {
     let mut args = vec![input.to_str().unwrap(), "-o", molecules.to_str().unwrap()];
     args.extend_from_slice(extra);
     run(
-        &common::bin("sbx10x-molecules", env!("CARGO_BIN_EXE_sbx10x-molecules")).to_string_lossy(),
+        &common::bin(
+            "morselle-molecules",
+            env!("CARGO_BIN_EXE_morselle-molecules"),
+        )
+        .to_string_lossy(),
         &args,
     );
     run(

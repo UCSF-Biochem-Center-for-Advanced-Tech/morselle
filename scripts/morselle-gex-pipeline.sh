@@ -11,7 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 usage() {
     cat <<'EOF'
 Usage:
-  sbxpress-gex-pipeline.sh \
+  morselle-gex-pipeline.sh \
     --fastqs DEVICE_0_OUT DEVICE_1_OUT [...] \
     --bclconvert-samplesheet SAMPLES.csv --sample SAMPLE_ID \
     --whitelist 10X_BARCODES.txt.gz \
@@ -40,7 +40,7 @@ Options:
   --split N                Extracted FASTQ shards per sample; default 16.
   --sort-mem SIZE          samtools memory per sort worker; default 1G.
   --tmp-dir DIR            Sort temporary directory; default OUT/tmp.
-  --expect-cells N         Expected recovered cells; passed to sbxpress cells.
+  --expect-cells N         Expected recovered cells; passed to morselle cells.
   --no-three-prime         Disable terminal-exon preference tags.
   --multimap-tags          Retain up to ten secondary hits and add NH/HI/mm tags.
                            This uses query-grouped streaming annotation, not
@@ -130,7 +130,7 @@ done
 for value in SAMPLE_SHEET SAMPLE WHITELIST MMI GTF JUNCTIONS OUT_DIR; do
     [[ -n ${!value} ]] || die "missing required --${value,,} input"
 done
-for command in sbxpress samtools; do require_command "$command"; done
+for command in morselle samtools; do require_command "$command"; done
 for path in "${FASTQS[@]}" "$SAMPLE_SHEET" "$WHITELIST" "$MMI" "$GTF" "$JUNCTIONS"; do
     require_path "$path"
 done
@@ -169,7 +169,7 @@ bind_pipeline_state "$SAMPLE_OUT" sbx gex "$SAMPLE" "$MMI" "$GTF" "$JUNCTIONS" "
 mkdir -p "$EXTRACT_DIR" "$ANNOTATION_DIR" "$MOLECULES_DIR" "$MATRIX_DIR" "$LOG_DIR" "$TMP_DIR" "$(dirname "$GENES_MTX")"
 (( AUDIT == 0 )) || mkdir -p "$AUDIT_DIR"
 
-echo "sbxpress version: $(sbxpress --version)"
+echo "morselle version: $(morselle --version)"
 echo "sample:           $SAMPLE"
 echo "output:           $SAMPLE_OUT"
 echo "map/annotate/sort threads: $MAP_THREADS/$ANNOTATE_THREADS/$SORT_THREADS"
@@ -177,7 +177,7 @@ echo "multimap tags:    $([[ $MULTIMAP_TAGS == 1 ]] && echo enabled || echo disa
 
 if [[ ! -s "$EXTRACT_DIR/metrics_summary.json" ]]; then
     echo "[1/5] extracting and demultiplexing raw SBX data"
-    sbxpress extract \
+    morselle extract \
         --fastqs "${FASTQS[@]}" \
         --bclconvert-samplesheet "$SAMPLE_SHEET" \
         --whitelist "$WHITELIST" \
@@ -209,11 +209,11 @@ if [[ ! -s "$ANNOTATED_BAM.bai" ]]; then
         MAP_MULTIMAP_ARGS=(--secondary=no)
     fi
     (( THREE_PRIME == 0 )) || ANNOTATE_ARGS+=(--three-prime)
-    sbxpress minimap \
+    morselle minimap \
         -a "${MAP_PRESET[@]}" --junc-bed "$JUNCTIONS" "${MAP_MULTIMAP_ARGS[@]}" -y \
         -t "$MAP_THREADS" "$MMI" "${CDNA_FASTQS[@]}" \
         2> "$LOG_DIR/minimap2.log" \
-    | sbxpress annotate - "${ANNOTATE_ARGS[@]}" \
+    | morselle annotate - "${ANNOTATE_ARGS[@]}" \
         2> "$LOG_DIR/annotate.log" \
     | samtools sort -@ "$SORT_THREADS" -m "$SORT_MEM" \
         -T "$TMP_DIR/$SAMPLE.annotated" -o "$ANNOTATED_BAM" -
@@ -225,7 +225,7 @@ fi
 
 if [[ ! -s "$MOLECULE_BAM.bai" ]]; then
     echo "[3/5] correcting UMIs and resolving gene collisions"
-    sbxpress molecules "$ANNOTATED_BAM" \
+    morselle molecules "$ANNOTATED_BAM" \
         --output "$MOLECULE_BAM" \
         --metrics "$MOLECULES_DIR/$SAMPLE.molecules.metrics.json" \
         --threads "$MOLECULE_THREADS" \
@@ -241,7 +241,7 @@ if [[ ! -s "$RAW_H5" || ! -e "$MATRIX_DIR/.raw.done" ]]; then
     RAW_WORK="$MATRIX_DIR/.raw.partial"
     prepare_matrix_stage "$RAW_WORK"
     echo "[4/5] creating complete raw feature-barcode matrix"
-    sbxpress matrix "$MOLECULE_BAM" \
+    morselle matrix "$MOLECULE_BAM" \
         --output "$RAW_WORK" --genome "$GENOME" \
         --features "$GENES_MTX" --cell-barcodes "$WHITELIST" \
         2> "$LOG_DIR/matrix.log"
@@ -256,7 +256,7 @@ if [[ ! -s "$FILTERED_H5" || ! -e "$MATRIX_DIR/.cells.done" ]]; then
     echo "[5/5] calling cells and writing filtered counts"
     CELL_ARGS=()
     [[ -z "$EXPECT_CELLS" ]] || CELL_ARGS+=(--expect-cells "$EXPECT_CELLS")
-    sbxpress cells "$RAW_H5" --output "$CELL_WORK" ${CELL_ARGS[@]+"${CELL_ARGS[@]}"} \
+    morselle cells "$RAW_H5" --output "$CELL_WORK" ${CELL_ARGS[@]+"${CELL_ARGS[@]}"} \
         2> "$LOG_DIR/cells.log"
     publish_matrix_stage "$CELL_WORK" "$MATRIX_DIR" .cells.done
 else
@@ -266,7 +266,7 @@ fi
 if (( AUDIT == 1 )); then
     if [[ ! -s "$AUDIT_JSON" || ! -s "$AUDIT_MOLECULES" ]]; then
         echo "[audit] generating optional comparison audit"
-        sbxpress audit "$MOLECULE_BAM" --label "$AUDIT_LABEL" \
+        morselle audit "$MOLECULE_BAM" --label "$AUDIT_LABEL" \
             --output "$AUDIT_JSON" --molecules "$AUDIT_MOLECULES" \
             --molecule-sample "$MOLECULE_SAMPLE" --threads "$SORT_THREADS" \
             --cells "$FILTERED_BARCODES" \

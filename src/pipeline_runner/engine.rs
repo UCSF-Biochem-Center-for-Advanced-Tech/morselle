@@ -61,7 +61,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         None => None,
     };
 
-    // Load the Flex probe-barcode whitelist (docs/archive/FLEX_SUPPORT_PLAN.md Phase 1), if
+    // Load the Flex probe-barcode whitelist (the Flex design notes Phase 1), if
     // provided. `--minimap2` is required (clap `requires`) since PR/PB ride the
     // same FASTQ-comment -> SAM-tag mechanism as CR/CB.
     let probe_wl = match &cli.params.probe_barcode_whitelist {
@@ -129,7 +129,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         }
         None => {
             let mut v = Vec::with_capacity(split);
-            mk("sbxpress", 1, &mut v)?;
+            mk("morselle", 1, &mut v)?;
             v
         }
     };
@@ -268,7 +268,7 @@ pub fn run(cli: &Cli) -> Result<()> {
     // leftover poly-A/T is not expected: warn on G/N only, as `illumina`
     // does with --trim-r2-polya (its default).
     crate::complexity::warn_if_high(
-        "sbxpress extract",
+        "morselle extract",
         &stats.low_complexity_by_base,
         stats.pairs_emitted + dropped,
         true,

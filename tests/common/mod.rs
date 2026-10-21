@@ -303,10 +303,10 @@ pub fn write_fixture(dir: &Path, spec: FixtureSpec) -> Fixture {
     }
 }
 
-/// Path of a crate binary. `SBXPRESS_TEST_BIN_DIR` points the tests at a
+/// Path of a crate binary. `MORSELLE_TEST_BIN_DIR` points the tests at a
 /// different build (e.g. an older release) to compare behaviour.
 pub fn bin(name: &str, default: &str) -> PathBuf {
-    match std::env::var_os("SBXPRESS_TEST_BIN_DIR") {
+    match std::env::var_os("MORSELLE_TEST_BIN_DIR") {
         Some(dir) => Path::new(&dir).join(name),
         None => PathBuf::from(default),
     }
