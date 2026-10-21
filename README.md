@@ -1,6 +1,10 @@
-# MORSELLE
-
-**MOlecular Read Structure, Extraction, Labeling & Enumeration**
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/morselle-logo-dark.svg">
+    <img src="docs/assets/morselle-logo.svg" width="560"
+         alt="MORSELLE: MOlecular Read Structure, Extraction, Labeling &amp; Enumeration">
+  </picture>
+</p>
 
 MORSELLE turns raw Roche SBX long reads, or paired Illumina 10x reads, into
 per-sample 10x-style FASTQs, annotated BAMs, corrected molecule counts, and
