@@ -100,6 +100,17 @@ pub struct Params {
     #[arg(long, default_value_t = 3)]
     pub index_window: isize,
 
+    /// Also match an i5/i7 carrying one insertion or deletion inside the index
+    /// (one edit in total, no further mismatch), floating over the same
+    /// ±`--index-window` frames. Runs only when the mismatch-only search finds
+    /// nothing, so reads that match today are unchanged. Enabled per index only
+    /// if the sample sheet is safe for it: minimum pairwise edit distance ≥ 3,
+    /// and no one-edit variant of any index (in its real adapter flanks) is sent
+    /// to a different sample by the indel pass; otherwise that index stays
+    /// mismatch-only, with a warning. Off by default.
+    #[arg(long)]
+    pub index_indels: bool,
+
     /// Single-indel CB realignment (M5): when the measured CB+UMI span is off by
     /// exactly ±1, the CB carries a homopolymer indel that frame-shifted the 16 bp
     /// grab — recover it by trying the single-indel corrections for a unique

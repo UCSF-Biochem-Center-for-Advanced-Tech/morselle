@@ -122,6 +122,9 @@ pub(crate) fn build_metrics(
                         pairs: stats.per_sample_early_boundary_found[i],
                     })
                     .collect(),
+                index_evidence: stats.index_evidence.clone(),
+                index_indels_i5: d.indels_enabled().0,
+                index_indels_i7: d.indels_enabled().1,
             }
         }),
         probe_barcode: probe_wl.map(|w| ProbeBarcodeMetrics {
@@ -261,6 +264,26 @@ pub(crate) fn report(stats: &Stats, demuxer: Option<&Demuxer>, t: &Timing) {
             via_i7_only = stats.via_i7_only_early,
             via_conflict = stats.via_conflict_early,
             "    index demux (early) via breakdown"
+        );
+        let ie = &stats.index_evidence;
+        info!(
+            reads = ie.reads,
+            full = ie.full,
+            partial = ie.partial,
+            seen_both = ie.seen_both,
+            seen_i5_only = ie.seen_i5_only,
+            seen_i7_only = ie.seen_i7_only,
+            seen_none = ie.seen_none,
+            "    index evidence (early): full = both i5 and i7 seen and identified to one sample"
+        );
+        info!(
+            identified_both = ie.identified_both,
+            identified_i5_only = ie.identified_i5_only,
+            identified_i7_only = ie.identified_i7_only,
+            identified_none = ie.identified_none,
+            i5_via_indel = ie.identified_i5_via_indel,
+            i7_via_indel = ie.identified_i7_via_indel,
+            "    index evidence (early): identified"
         );
     }
 }

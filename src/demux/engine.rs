@@ -1,7 +1,8 @@
 use anyhow::{bail, Result};
 
-use super::types::{DemuxCfg, DemuxMode, DemuxVia, IndexSource, Outcome};
-use crate::anchors::{revcomp, R1_PRIMER, R2_PRIMER};
+use super::indel::{find_index, indel_safety, IndelIndex, IndelSafety, IndexMatch};
+use super::types::{DemuxCfg, DemuxMode, DemuxVia, IndexEvidence, IndexSource, Outcome};
+use crate::anchors::{revcomp, P5, P7, R1_PRIMER, R2_PRIMER};
 use crate::hamming_index::HammingIndex;
 use crate::sample_sheet::SampleSheet;
 
@@ -36,8 +37,18 @@ pub struct Demuxer {
     index_len: usize,
     i5_index: HammingIndex<usize>,
     i7_index: HammingIndex<usize>,
+    /// Read-oriented keys, indexed like `sample_ids` (`revcomp(i5)`, `i7`).
+    i5_keys: Vec<Vec<u8>>,
+    i7_keys: Vec<Vec<u8>>,
+    /// One-indel tables, set by [`Demuxer::enable_indels`] per safe index.
+    i5_indel: Option<IndelIndex>,
+    i7_indel: Option<IndelIndex>,
     resolved_mode: DemuxMode,
 }
+
+/// The P5 adapter's 3' end as read before i5 in a canonical read
+/// (`...CGAGAT` + `CTACAC` + i5), seen in every CAT02 read checked.
+const P5_INDEX_TAIL: &[u8] = b"CTACAC";
 
 impl Demuxer {
     /// Build from a sample sheet. The read-oriented index sequences are
@@ -91,17 +102,84 @@ impl Demuxer {
         let mut i5_index = HammingIndex::new();
         let mut i7_index = HammingIndex::new();
         let index_len = sheet.samples.first().map_or(10, |s| s.i7.len());
-        for (idx, s) in sheet.samples.iter().enumerate() {
-            i5_index.insert(&revcomp(&s.i5), idx, cfg.index_max_mm);
-            i7_index.insert(&s.i7, idx, cfg.index_max_mm);
+        let i5_keys: Vec<Vec<u8>> = sheet.samples.iter().map(|s| revcomp(&s.i5)).collect();
+        let i7_keys: Vec<Vec<u8>> = sheet.samples.iter().map(|s| s.i7.clone()).collect();
+        for idx in 0..sheet.samples.len() {
+            i5_index.insert(&i5_keys[idx], idx, cfg.index_max_mm);
+            i7_index.insert(&i7_keys[idx], idx, cfg.index_max_mm);
         }
         Ok(Demuxer {
             sample_ids: sheet.samples.iter().map(|s| s.id.clone()).collect(),
             index_len,
             i5_index,
             i7_index,
+            i5_keys,
+            i7_keys,
+            i5_indel: None,
+            i7_indel: None,
             resolved_mode,
         })
+    }
+
+    /// Turn on one-indel matching (`--index-indels`) for each index the sheet
+    /// can support safely at this `window` (see [`indel_safety`]); an unsafe
+    /// index stays mismatch-only, with a warning. Returns `(i5, i7)` safety.
+    pub fn enable_indels(&mut self, window: isize) -> (IndelSafety, IndelSafety) {
+        let build = |keys: &[Vec<u8>]| {
+            let mut ix = IndelIndex::new(self.index_len);
+            for (i, k) in keys.iter().enumerate() {
+                ix.insert(k, i);
+            }
+            ix
+        };
+        let i5_left = [P5, P5_INDEX_TAIL].concat();
+        let i7_left = revcomp(R2_PRIMER);
+        let i7_right = revcomp(P7);
+        let i5 = build(&self.i5_keys);
+        let i7 = build(&self.i7_keys);
+        let s5 = indel_safety(
+            &self.i5_keys,
+            &self.i5_index,
+            &i5,
+            &i5_left,
+            R1_PRIMER,
+            window,
+        );
+        let s7 = indel_safety(
+            &self.i7_keys,
+            &self.i7_index,
+            &i7,
+            &i7_left,
+            &i7_right,
+            window,
+        );
+        for (name, safety) in [("i5", s5), ("i7", s7)] {
+            if safety.safe() {
+                tracing::info!(
+                    index = name,
+                    min_edit_distance = safety.min_edit,
+                    one_edit_variants_recovered =
+                        format!("{}/{}", safety.recovered, safety.variants),
+                    one_edit_variants_to_wrong_sample = safety.wrong,
+                    without_indels = safety.wrong_mismatch_only,
+                    "index indel matching enabled (wrong-sample variants all come from the \
+                     mismatch-only frame float, unchanged)"
+                );
+            } else {
+                tracing::warn!(
+                    index = name,
+                    min_edit_distance = safety.min_edit,
+                    one_edit_variants_to_wrong_sample = safety.wrong,
+                    without_indels = safety.wrong_mismatch_only,
+                    "index indel matching NOT enabled for this index: two sample indexes are \
+                     too close (needs min edit distance >= 3, and the indel pass must add no \
+                     wrong-sample call); it stays mismatch-only"
+                );
+            }
+        }
+        self.i5_indel = s5.safe().then_some(i5);
+        self.i7_indel = s7.safe().then_some(i7);
+        (s5, s7)
     }
 
     pub fn sample_ids(&self) -> &[String] {
@@ -114,6 +192,11 @@ impl Demuxer {
 
     pub fn resolved_mode(&self) -> DemuxMode {
         self.resolved_mode
+    }
+
+    /// Whether one-indel matching is active for (i5, i7).
+    pub fn indels_enabled(&self) -> (bool, bool) {
+        (self.i5_indel.is_some(), self.i7_indel.is_some())
     }
 
     /// Combine per-index sample matches into an outcome (`Dual`/`Both` modes only).
@@ -187,27 +270,63 @@ impl Demuxer {
         i7_start: Option<usize>,
         window: isize,
     ) -> Outcome {
-        match self.resolved_mode {
-            DemuxMode::I5 => Self::solo(
-                self.i5_index
-                    .find_windowed(seq, i5_start, self.index_len, window),
-                DemuxVia::I5Only,
-            ),
-            DemuxMode::I7 => Self::solo(
-                self.i7_index
-                    .find_windowed(seq, i7_start, self.index_len, window),
-                DemuxVia::I7Only,
-            ),
-            DemuxMode::Dual | DemuxMode::Both => {
-                let a5 = self
-                    .i5_index
-                    .find_windowed(seq, i5_start, self.index_len, window);
-                let a7 = self
-                    .i7_index
-                    .find_windowed(seq, i7_start, self.index_len, window);
-                self.combine(a5, a7)
-            }
-        }
+        self.assign_windowed_detail(seq, i5_start, i7_start, window)
+            .0
+    }
+
+    /// [`assign_windowed`] plus the per-index evidence behind it: whether each
+    /// index region is in the read at all ("seen") and what it matched
+    /// ("identified"). An index the resolved mode never consults is reported
+    /// unmatched.
+    pub fn assign_windowed_detail(
+        &self,
+        seq: &[u8],
+        i5_start: Option<usize>,
+        i7_start: Option<usize>,
+        window: isize,
+    ) -> (Outcome, IndexEvidence) {
+        let len = self.index_len;
+        let seen = |s: Option<usize>| s.is_some_and(|s| s + len <= seq.len());
+        let use_i5 = self.resolved_mode != DemuxMode::I7;
+        let use_i7 = self.resolved_mode != DemuxMode::I5;
+        let i5 = if use_i5 {
+            find_index(
+                &self.i5_index,
+                self.i5_indel.as_ref(),
+                seq,
+                i5_start,
+                len,
+                window,
+            )
+        } else {
+            IndexMatch::default()
+        };
+        let i7 = if use_i7 {
+            find_index(
+                &self.i7_index,
+                self.i7_indel.as_ref(),
+                seq,
+                i7_start,
+                len,
+                window,
+            )
+        } else {
+            IndexMatch::default()
+        };
+        let outcome = match self.resolved_mode {
+            DemuxMode::I5 => Self::solo(i5.sample, DemuxVia::I5Only),
+            DemuxMode::I7 => Self::solo(i7.sample, DemuxVia::I7Only),
+            DemuxMode::Dual | DemuxMode::Both => self.combine(i5.sample, i7.sample),
+        };
+        // A match found in a floated frame counts as seen even when the
+        // nominal frame runs off the read end, so identified ⊆ seen.
+        let evidence = IndexEvidence {
+            i5_seen: seen(i5_start) || i5.sample.is_some(),
+            i7_seen: seen(i7_start) || i7.sample.is_some(),
+            i5,
+            i7,
+        };
+        (outcome, evidence)
     }
 }
 

@@ -54,6 +54,8 @@ pub(crate) struct Stats {
     pub via_i5_only_early: u64,
     pub via_i7_only_early: u64,
     pub via_conflict_early: u64,
+    /// i5/i7 seen / identified per R1-located read (same population as above).
+    pub index_evidence: crate::accounting::IndexEvidenceCounts,
     /// R1 itself was never located (orientation failed, or R1 not found even
     /// though oriented) -- demux is structurally unreachable for these, same
     /// as for Illumina's own index read, which requires nothing about R1/R2
@@ -124,6 +126,7 @@ impl Stats {
         self.via_i5_only_early += o.via_i5_only_early;
         self.via_i7_only_early += o.via_i7_only_early;
         self.via_conflict_early += o.via_conflict_early;
+        self.index_evidence.add(&o.index_evidence);
         if self.per_sample.len() < o.per_sample.len() {
             self.per_sample.resize(o.per_sample.len(), 0);
         }

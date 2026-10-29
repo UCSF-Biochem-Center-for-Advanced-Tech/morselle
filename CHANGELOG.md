@@ -6,6 +6,34 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `extract --index-indels`: match an i5/i7 that carries one insertion or
+  deletion inside the index (precomputed one-indel lookup tables, floated
+  over the same `--index-window` frames). It runs only after the
+  mismatch-only search finds nothing, so reads that match today are
+  unchanged. Each index is enabled only when the sample sheet is safe for it:
+  minimum pairwise edit distance ≥ 3, and no one-edit variant of any index,
+  placed in its real adapter flanks, is sent to another sample by the indel
+  pass. Off by default. On the CAT02 Multiome slices: assigned reads +0.74%
+  (barcode-first) / +0.20% (barcode-last) of all reads, dual-index
+  assignments +2.2 / +1.9 points, no read moved between samples (reads whose
+  two indexes now name different samples become conflicts, 0.04% / 0.03%),
+  throughput unchanged.
+- `metrics_summary.json` `demux.index_evidence` and two new log lines: per
+  R1-located read, `full` (both indexes seen and identified to one sample)
+  versus `partial`, which index regions were seen, which were identified,
+  and how many only through `--index-indels`; `demux.index_indels_i5/_i7`
+  record whether it was active.
+- `tests/extract_golden.rs` pins `extract`'s output (FASTQ digests and core
+  counters) on the smoke fixture, as `golden_outputs.rs` does for
+  `molecules`/`matrix`.
+
+### Known issues
+- With the default `--index-window 3`, one sample-sheet pair in CE15204
+  (V4_GEX and M2_GEX i5s are one-base shifts of each other) lets one of the
+  1,176 one-edit i5 variants land on the wrong sample through the existing
+  mismatch-only frame float. Unchanged here; `--index-indels` logs it.
+
 ## [0.7.0] — 2026-10-21
 
 First public (alpha) release, under the name **MORSELLE** (MOlecular Read

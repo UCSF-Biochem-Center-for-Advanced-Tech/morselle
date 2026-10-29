@@ -73,11 +73,17 @@ pub(crate) fn process_one(
         // or gating -- so this is the earliest point the assignment can run,
         // and it's cached (not recomputed) for the actual routing decision
         // further down, so output is unaffected by moving it here.
-        let early_outcome: Option<Outcome> = sh.demuxer.and_then(|d| {
+        let early_detail = sh.demuxer.and_then(|d| {
             let r1s = e.r1.map(|(s, _)| s)?;
             let (i5s, i7s) = index_anchor_starts(r1s, e.adapter_pos, sh.index_len);
-            Some(d.assign_windowed(&o.seq, i5s, i7s, sh.index_window))
+            Some(d.assign_windowed_detail(&o.seq, i5s, i7s, sh.index_window))
         });
+        if let Some((outcome, ev)) = &early_detail {
+            stats
+                .index_evidence
+                .observe(ev, outcome.via == DemuxVia::Dual);
+        }
+        let early_outcome: Option<Outcome> = early_detail.map(|(o, _)| o);
         if sh.demuxer.is_some() {
             match e.r1 {
                 None => stats.index_unreachable += 1,

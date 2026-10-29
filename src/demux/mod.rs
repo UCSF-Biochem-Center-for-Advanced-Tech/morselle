@@ -12,10 +12,14 @@
 //! pairwise Hamming i7=3 / i5=4, so single-index assignment (when the other index
 //! is truncated — common for i7 on long reads) is unambiguous.
 mod engine;
+mod indel;
 mod types;
 
+#[cfg(test)]
+mod indel_tests;
 #[cfg(test)]
 mod tests;
 
 pub use engine::*;
+pub use indel::{edit_distance, min_pairwise_edit, IndelSafety, IndexMatch};
 pub use types::*;

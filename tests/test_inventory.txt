@@ -4,6 +4,7 @@ complexity_chain_e2e illumina_flags_low_complexity_and_molecules_names_the_gene
 crispr_umi_rules_e2e crispr_umi_rules_remove_sbx_error_molecules_only
 docs_commands documented_commands_use_real_flags
 extract_golden extract_outputs_match_golden
+extract_golden index_evidence_counters_are_consistent
 failed_output barcode_table_is_written_only_with_barcode_metrics
 failed_output extract_per_barcode_values_include_barcode_less_reads
 failed_output failed_output_accounts_for_every_read
@@ -92,6 +93,15 @@ src/lib.rs cr_bam_to_mtx::tests::without_a_probe_barcode_allowlist_a_shared_gem_
 src/lib.rs cr_bam_to_mtx::tests::writes_compatibility_barcode_major_order
 src/lib.rs cr_bam_to_mtx::tests::writes_compatibility_csc_h5
 src/lib.rs cr_bam_to_mtx::tests::writes_one_based_sparse_matrix
+src/lib.rs demux::indel_tests::a_mismatch_hit_is_never_overridden_by_the_indel_pass
+src/lib.rs demux::indel_tests::edit_distance_counts_substitutions_and_indels
+src/lib.rs demux::indel_tests::evidence_reports_regions_outside_the_read_as_not_seen
+src/lib.rs demux::indel_tests::indel_hits_on_different_samples_stay_a_conflict
+src/lib.rs demux::indel_tests::indel_in_i5_is_unassigned_by_default_and_assigned_when_enabled
+src/lib.rs demux::indel_tests::indel_in_i7_upgrades_a_single_index_read_to_dual
+src/lib.rs demux::indel_tests::indexes_one_indel_apart_keep_that_index_mismatch_only
+src/lib.rs demux::indel_tests::real_sheet_is_safe_for_indel_matching_on_both_indexes
+src/lib.rs demux::indel_tests::the_indel_pass_never_makes_a_wrong_call_of_its_own
 src/lib.rs demux::tests::auto_picks_both_when_neither_index_is_standalone_safe
 src/lib.rs demux::tests::auto_picks_dual_when_both_indices_are_standalone_safe
 src/lib.rs demux::tests::both_mode_assigns_on_real_agreement

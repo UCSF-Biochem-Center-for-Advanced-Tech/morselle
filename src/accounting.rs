@@ -45,6 +45,80 @@ pub struct DemuxMetrics {
     /// downstream matcher (probe-set, guide capture, ...) in isolation from
     /// upstream capture-length loss.
     pub per_sample_early_boundary_found: Vec<SampleCount>,
+    /// Per-index evidence for every read whose R1 was located (the early
+    /// demux population): which index regions are in the read at all and
+    /// which matched a sample.
+    pub index_evidence: IndexEvidenceCounts,
+    /// One-indel index matching (`--index-indels`) active, per index.
+    pub index_indels_i5: bool,
+    pub index_indels_i7: bool,
+}
+
+/// i5/i7 presence and identification counts (early demux, R1 located).
+///
+/// "Seen" = the index region lies inside the read (i5: R1 located far enough
+/// in; i7: 3' adapter located and the read runs past it). "Identified" = it
+/// matched a sample. `full` = both seen and both identified to the same
+/// sample (= `via_dual` early); every other R1-located read is `partial`.
+/// `identified_both` includes conflicts (both matched, different samples).
+#[derive(Serialize, Default, Clone, Debug, PartialEq, Eq)]
+pub struct IndexEvidenceCounts {
+    pub reads: u64,
+    pub full: u64,
+    pub partial: u64,
+    pub seen_both: u64,
+    pub seen_i5_only: u64,
+    pub seen_i7_only: u64,
+    pub seen_none: u64,
+    pub identified_both: u64,
+    pub identified_i5_only: u64,
+    pub identified_i7_only: u64,
+    pub identified_none: u64,
+    /// Identified only through the one-indel pass (`--index-indels`).
+    pub identified_i5_via_indel: u64,
+    pub identified_i7_via_indel: u64,
+}
+
+impl IndexEvidenceCounts {
+    /// Count one R1-located read.
+    pub fn observe(&mut self, ev: &crate::demux::IndexEvidence, dual: bool) {
+        self.reads += 1;
+        if dual {
+            self.full += 1;
+        } else {
+            self.partial += 1;
+        }
+        match (ev.i5_seen, ev.i7_seen) {
+            (true, true) => self.seen_both += 1,
+            (true, false) => self.seen_i5_only += 1,
+            (false, true) => self.seen_i7_only += 1,
+            (false, false) => self.seen_none += 1,
+        }
+        match (ev.i5.sample.is_some(), ev.i7.sample.is_some()) {
+            (true, true) => self.identified_both += 1,
+            (true, false) => self.identified_i5_only += 1,
+            (false, true) => self.identified_i7_only += 1,
+            (false, false) => self.identified_none += 1,
+        }
+        self.identified_i5_via_indel += u64::from(ev.i5.via_indel);
+        self.identified_i7_via_indel += u64::from(ev.i7.via_indel);
+    }
+
+    pub fn add(&mut self, o: &Self) {
+        self.reads += o.reads;
+        self.full += o.full;
+        self.partial += o.partial;
+        self.seen_both += o.seen_both;
+        self.seen_i5_only += o.seen_i5_only;
+        self.seen_i7_only += o.seen_i7_only;
+        self.seen_none += o.seen_none;
+        self.identified_both += o.identified_both;
+        self.identified_i5_only += o.identified_i5_only;
+        self.identified_i7_only += o.identified_i7_only;
+        self.identified_none += o.identified_none;
+        self.identified_i5_via_indel += o.identified_i5_via_indel;
+        self.identified_i7_via_indel += o.identified_i7_via_indel;
+    }
 }
 
 /// Top-level run metrics, serialized to `metrics_summary.json`.

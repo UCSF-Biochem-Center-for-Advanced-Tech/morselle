@@ -270,6 +270,7 @@ orientations; orientation is auto-detected and enforced per file).
 | `--cb-gate` | on | Drop pairs whose CB is neither on-whitelist nor within Hamming-1. |
 | `--cb-reframe` | on | Rescue homopolymer-indel frame-shifted barcodes. |
 | `--index-window` | 3 | Offset-tolerant i5/i7 matching (absorbs indels shifting the index). |
+| `--index-indels` | off | Also match an i5/i7 with one insertion or deletion inside the index, over the same `--index-window` frames, only when mismatch-only matching finds nothing. Enabled per index only if the sample sheet is safe for it (logged). On CAT02 Multiome: +0.2–0.7% of reads assigned and +2 points of dual-index assignment, no read moved between samples. |
 | `--index-max-mm` | 1 | Max mismatches when matching sample-sheet indices. |
 | `--realign` | on | Single-indel CB rescue — recovers ~+1% of reads at high precision (`--realign false` to disable). |
 | `--lenient` | off | Within-2 CB rescue — leave off (~51% precise on the dense ARC whitelist). |
@@ -392,7 +393,13 @@ In `--out-dir`:
   FASTQ comments carry the barcode/UMI SAM tags described above.
 - `Undetermined_S0_L001_R{1,2}_001.fastq.gz` — pairs with no matchable index.
 - `metrics_summary.json` — full run accounting: totals, timing, read classes,
-  CB-gate stats, demux breakdown, per-sample counts.
+  CB-gate stats, demux breakdown, per-sample counts. `demux.index_evidence`
+  counts, for every read whose R1 primer was found: `full` (i5 and i7 both
+  seen and identified to the same sample) versus `partial`; which index
+  regions are in the read (`seen_both` / `seen_i5_only` / `seen_i7_only` /
+  `seen_none`); which matched a sample (`identified_both` / `_i5_only` /
+  `_i7_only` / `_none`; `both` includes conflicts); and how many matched only
+  through `--index-indels`.
 - `sample_sheet.csv` — the normalized flat sample sheet.
 
 Every run also prints a **RUN SUMMARY** to stderr (elapsed, threads, reads/sec,

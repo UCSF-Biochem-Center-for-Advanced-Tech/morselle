@@ -40,6 +40,12 @@ const CASES: &[Case] = &[
         name: "smoke_sheet_both_indexes",
         args: &["--processing-tags", "--demux-index", "both"],
     },
+    // One-indel index matching (added with --index-indels; the cases above
+    // were generated before it existed and must not change).
+    Case {
+        name: "smoke_sheet_index_indels",
+        args: &["--processing-tags", "--index-indels"],
+    },
 ];
 
 /// Counters pinned by the golden (top level, then `demux.*`).
@@ -184,4 +190,46 @@ fn extract_outputs_match_golden() {
          and say why in the commit.\n\n{}",
         failures.join("\n")
     );
+}
+
+/// The early index-evidence counters partition the R1-located reads three
+/// ways (full/partial, seen, identified) and agree with the via breakdown.
+#[test]
+fn index_evidence_counters_are_consistent() {
+    let dir = tempfile::tempdir().unwrap();
+    for case in CASES {
+        let out = dir.path().join(case.name);
+        run_case(dir.path(), case);
+        let m: Value =
+            serde_json::from_str(&common::read_text(&out.join("metrics_summary.json"))).unwrap();
+        let d = &m["demux"];
+        let ie = &d["index_evidence"];
+        let n = |k: &str| ie[k].as_u64().unwrap();
+        let located = m["total_reads"].as_u64().unwrap() - d["index_unreachable"].as_u64().unwrap();
+        assert_eq!(n("reads"), located, "{}", case.name);
+        assert_eq!(n("full") + n("partial"), n("reads"));
+        assert_eq!(
+            n("seen_both") + n("seen_i5_only") + n("seen_i7_only") + n("seen_none"),
+            n("reads")
+        );
+        assert_eq!(
+            n("identified_both")
+                + n("identified_i5_only")
+                + n("identified_i7_only")
+                + n("identified_none"),
+            n("reads")
+        );
+        // An identified index is always counted as seen; full needs both.
+        assert!(n("full") <= n("identified_both"));
+        assert!(n("identified_both") <= n("seen_both"));
+        let indels = case.args.contains(&"--index-indels");
+        assert_eq!(d["index_indels_i5"].as_bool().unwrap(), indels);
+        assert_eq!(d["index_indels_i7"].as_bool().unwrap(), indels);
+        if !indels {
+            assert_eq!(
+                n("identified_i5_via_indel") + n("identified_i7_via_indel"),
+                0
+            );
+        }
+    }
 }
