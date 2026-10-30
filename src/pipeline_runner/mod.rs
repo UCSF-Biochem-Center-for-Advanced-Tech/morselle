@@ -8,6 +8,7 @@ pub(crate) mod orientation_scan;
 pub(crate) mod process;
 pub(crate) mod relock;
 pub(crate) mod report;
+pub(crate) mod rescue;
 #[cfg(test)]
 mod tests;
 pub(crate) mod types;
