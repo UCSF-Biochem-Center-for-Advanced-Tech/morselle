@@ -198,6 +198,8 @@ pub struct WhitelistMetrics {
     pub gated_out: u64,
     pub realigned: u64,
     pub reframed: u64,
+    /// Rescued by `--r1-tail-relock` (XB:i:7).
+    pub relocked: u64,
     pub corrected_hamming2: u64,
 }
 

@@ -10,6 +10,7 @@ use super::formatting::{
     append_probe_tags, append_processing_tags, flush_failed_buf, minimap2_header, push_fastq,
     push_fastq_r2_rc, FLUSH_BYTES, MIN_POLYT_FLANK,
 };
+use super::relock::relock_r1;
 use super::types::{ProcessingTags, Stats};
 use super::worker::Shared;
 
@@ -158,7 +159,8 @@ pub(crate) fn process_one(
 
         // XB: how the emitted barcode passed or was rescued. Values 0/1 are
         // whitelist exact/within-1; 2/3/4 are indel/reframe/Hamming-2 rescue;
-        // 5 means no whitelist and 6 means an unrescued miss emitted with gating off.
+        // 5 means no whitelist and 6 means an unrescued miss emitted with gating off;
+        // 7 is the R1-tail re-lock rescue.
         let mut barcode_route = match cb_status {
             Some(CbStatus::OnWhitelist) => 0,
             Some(CbStatus::Within1) => 1,
@@ -205,6 +207,16 @@ pub(crate) fn process_one(
                                 stats.reframed += 1;
                             }
                         }
+                    }
+                }
+                // R1-tail re-lock: an indel in the R1-primer tail can leave the
+                // mismatch-only lock a base or two off; re-find the tail with
+                // indels allowed and read the CB + UMI after it.
+                if corrected_r1.is_none() && sh.r1_tail_relock {
+                    if let Some(r1) = relock_r1(w, &o.seq, &o.qual, r1s, sh.cb_len, sh.umi_len) {
+                        corrected_r1 = Some(r1);
+                        barcode_route = 7;
+                        stats.relocked += 1;
                     }
                 }
                 // Lenient within-2 substitution rescue: only when the CB is

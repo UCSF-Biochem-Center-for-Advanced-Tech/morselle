@@ -265,6 +265,11 @@ src/lib.rs overlap::tests::short_mates_do_not_underflow
 src/lib.rs overlap::tests::the_tag_reconstructs_both_mates_from_the_merge
 src/lib.rs overlap::tests::the_tag_records_disagreements_losslessly
 src/lib.rs overlap::tests::unrelated_reads_do_not_merge
+src/lib.rs pipeline_runner::relock::rescue_tests::rescue_reads_cb_and_umi_after_an_indel_shifted_tail
+src/lib.rs pipeline_runner::relock::tests::a_read_without_the_tail_never_relocks
+src/lib.rs pipeline_runner::relock::tests::exact_tail_relocks_to_the_true_cb_start
+src/lib.rs pipeline_runner::relock::tests::myers_matches_plain_edit_distance_on_small_cases
+src/lib.rs pipeline_runner::relock::tests::single_and_double_indels_in_the_tail_still_lock_the_cb_start
 src/lib.rs pipeline_runner::tests::tests::minimap2_header_uses_10x_style_tags
 src/lib.rs pipeline_runner::tests::tests::processing_tags_are_valid_sam_style_fastq_comments
 src/lib.rs pipeline_runner::tests::tests::r2_rc_matches_reference

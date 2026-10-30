@@ -19,6 +19,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   assignments +2.2 / +1.9 points, no read moved between samples (reads whose
   two indexes now name different samples become conflicts, 0.04% / 0.03%),
   throughput unchanged.
+- `extract --r1-tail-relock` (`XB:i:7`): an insertion or deletion in the
+  R1-primer tail can leave the mismatch-only lock a base or two off, so the
+  16 bp barcode grab fails the whitelist. For such barcode failures (after
+  realign and reframe), re-find the tail's last 15 bp with up to two edits
+  (bit-parallel Myers search over the first 120 bp) and read the barcode and
+  UMI right after it; accepted only when exactly one tied candidate start
+  gives a whitelist or unique within-1 barcode. Off by default. CAT02
+  Multiome slices: 14,412 / 2,473 reads rescued, assigned reads +0.54% /
+  +0.23% of all reads, rescued barcodes on cell-like barcodes at 58.2% /
+  29.6% (exact matches 60.3% / 30.1%, reframe 38.4% / 19.6%), no
+  previously emitted read changed, throughput unchanged.
+  `whitelist.relocked` counts them.
 - `metrics_summary.json` `demux.index_evidence` and two new log lines: per
   R1-located read, `full` (both indexes seen and identified to one sample)
   versus `partial`, which index regions were seen, which were identified,

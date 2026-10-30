@@ -6,6 +6,7 @@ pub(crate) mod engine;
 pub(crate) mod formatting;
 pub(crate) mod orientation_scan;
 pub(crate) mod process;
+pub(crate) mod relock;
 pub(crate) mod report;
 #[cfg(test)]
 mod tests;

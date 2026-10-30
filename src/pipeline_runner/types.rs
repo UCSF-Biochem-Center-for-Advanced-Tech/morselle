@@ -20,6 +20,8 @@ pub(crate) struct Stats {
     pub gated_out: u64,
     pub realigned: u64,
     pub reframed: u64,
+    /// CB-fails rescued by the R1-tail re-lock (`--r1-tail-relock`).
+    pub relocked: u64,
     pub corrected2: u64,
     /// CBs whose location is dual-anchor confirmed (R1-tail flank + polyT flank).
     pub cb_located_confident: u64,
@@ -106,6 +108,7 @@ impl Stats {
         self.gated_out += o.gated_out;
         self.realigned += o.realigned;
         self.reframed += o.reframed;
+        self.relocked += o.relocked;
         self.corrected2 += o.corrected2;
         self.cb_located_confident += o.cb_located_confident;
         self.cb_fail_confident += o.cb_fail_confident;

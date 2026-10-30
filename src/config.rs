@@ -133,6 +133,15 @@ pub struct Params {
     #[arg(long, default_value_t = 2)]
     pub reframe_window: usize,
 
+    /// R1-tail re-lock rescue (`XB:i:7`): for CB-fails, re-find the R1-primer
+    /// tail (last 15 bp) allowing up to two edits, insertions and deletions
+    /// included, and read the CB and UMI right after it. Accepted only when
+    /// that start differs from the original lock and its CB is on the
+    /// whitelist or a unique Hamming-1 neighbour. Runs after realign and
+    /// reframe, only on reads they leave failing. Off by default.
+    #[arg(long, default_value_t = false)]
+    pub r1_tail_relock: bool,
+
     /// Lenient CB recovery: for confidently-located CB-fails, accept a unique
     /// Hamming-2 whitelist hit and rewrite the CB. Off by default (slower, lower
     /// precision). Only applied when the CB location is dual-anchor confirmed.
