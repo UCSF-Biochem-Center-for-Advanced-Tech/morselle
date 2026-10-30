@@ -110,9 +110,9 @@ pub(crate) fn rescue_barcode(
                 }
             }
             // CB reframe rescue: a homopolymer indel shifted the 16 bp CB grab;
-            // try nearby frames (+1 first) for a unique within-1 whitelist hit,
-            // re-registering the UMI off the dT anchor (so R1 stays 28 bp).
-            // Gated on confident location to keep precision.
+            // try nearby frames (+1 first) for a unique within-1 whitelist hit.
+            // Gated on confident location. Off by default: against Illumina
+            // molecules (CAT02 M2_GEX) only ~51-59% of these barcodes are right.
             if corrected_r1.is_none() && sh.cb_reframe && located_confident {
                 if let Some(pts) = o.polyt_start {
                     if pts >= sh.umi_len {
@@ -146,7 +146,7 @@ pub(crate) fn rescue_barcode(
                 }
             }
             // CB insertion rescue: one extra base inside the CB, at the
-            // original lock; the UMI is the 12 bp after the 17 bp CB span.
+            // original lock; the UMI follows the 17 bp CB span (see umi_start).
             // Gated on confident location like reframe: on CAT02 the
             // unconfident ones landed on cell-like barcodes at 38.4% / 15.0%
             // (gated: 48.6% / 19.0%; reframe 37.8% / 19.5%).
@@ -166,8 +166,8 @@ pub(crate) fn rescue_barcode(
                 }
             }
             // Lenient within-2 substitution rescue: only when the CB is
-            // confidently located (so the 2 mismatches are real base errors),
-            // keeping the original (correctly-positioned) UMI.
+            // confidently located (so the 2 mismatches are real base errors);
+            // the UMI follows the CB as for every route (see umi_start).
             if corrected_r1.is_none() && sh.lenient && located_confident {
                 if let Some(cb2) = w.correct_within2(&o.seq[r1s..r1s + sh.cb_len]) {
                     let cb_q = &o.qual[r1s..r1s + sh.cb_len];
