@@ -6,7 +6,7 @@
       "class_partial": 7,
       "class_unparseable": 19,
       "demux.assigned": 69,
-      "demux.assigned_early": 72,
+      "demux.assigned_early": 73,
       "demux.index_unreachable": 19,
       "demux.per_sample": [
         {
@@ -76,7 +76,7 @@
           "sample": "V3_GEX"
         },
         {
-          "pairs": 9,
+          "pairs": 10,
           "sample": "V4_GEX"
         },
         {
@@ -125,10 +125,10 @@
         }
       ],
       "demux.undetermined": 5,
-      "demux.undetermined_early": 9,
+      "demux.undetermined_early": 8,
       "demux.via_conflict": 1,
-      "demux.via_dual": 40,
-      "demux.via_i5_only": 28,
+      "demux.via_dual": 42,
+      "demux.via_i5_only": 26,
       "demux.via_i7_only": 1,
       "oriented": 100,
       "pairs_emitted": 74,
@@ -179,12 +179,12 @@
       "class_full": 74,
       "class_partial": 7,
       "class_unparseable": 19,
-      "demux.assigned": 40,
-      "demux.assigned_early": 40,
+      "demux.assigned": 42,
+      "demux.assigned_early": 42,
       "demux.index_unreachable": 19,
       "demux.per_sample": [
         {
-          "pairs": 2,
+          "pairs": 3,
           "sample": "V2_GEX"
         },
         {
@@ -216,7 +216,7 @@
           "sample": "M2_GEX"
         },
         {
-          "pairs": 4,
+          "pairs": 5,
           "sample": "M3_GEX"
         },
         {
@@ -242,7 +242,7 @@
       ],
       "demux.per_sample_early": [
         {
-          "pairs": 2,
+          "pairs": 3,
           "sample": "V2_GEX"
         },
         {
@@ -274,7 +274,7 @@
           "sample": "M2_GEX"
         },
         {
-          "pairs": 4,
+          "pairs": 5,
           "sample": "M3_GEX"
         },
         {
@@ -298,10 +298,10 @@
           "sample": "M7_GEX"
         }
       ],
-      "demux.undetermined": 34,
-      "demux.undetermined_early": 41,
+      "demux.undetermined": 32,
+      "demux.undetermined_early": 39,
       "demux.via_conflict": 1,
-      "demux.via_dual": 40,
+      "demux.via_dual": 42,
       "demux.via_i5_only": 0,
       "demux.via_i7_only": 0,
       "oriented": 100,
@@ -316,8 +316,8 @@
     "files": {
       "M2_GEX_S8_L001_R1_001.fastq.gz": "ffe9a38ca328fff9",
       "M2_GEX_S8_L001_R2_001.fastq.gz": "ddbf55bc512e0b73",
-      "M3_GEX_S9_L001_R1_001.fastq.gz": "c713f58d32aceec6",
-      "M3_GEX_S9_L001_R2_001.fastq.gz": "c41abcb4e4d7f146",
+      "M3_GEX_S9_L001_R1_001.fastq.gz": "676bc432fe57e1c1",
+      "M3_GEX_S9_L001_R2_001.fastq.gz": "b70f25b8bd52c223",
       "M4_GEX_S10_L001_R1_001.fastq.gz": "d0f7d20b340bee16",
       "M4_GEX_S10_L001_R2_001.fastq.gz": "7173597a49551074",
       "M5_GEX_S11_L001_R1_001.fastq.gz": "c29afc170db987a2",
@@ -328,10 +328,10 @@
       "M6-2_GEX_S13_L001_R2_001.fastq.gz": "11cfddfbf2a51fb5",
       "M7_GEX_S14_L001_R1_001.fastq.gz": "b7f10eda6c79f1df",
       "M7_GEX_S14_L001_R2_001.fastq.gz": "906defed470c32cb",
-      "Undetermined_S0_L001_R1_001.fastq.gz": "21050b7dc5c72c53",
-      "Undetermined_S0_L001_R2_001.fastq.gz": "b9704c18751b298a",
-      "V2_GEX_S1_L001_R1_001.fastq.gz": "e97499383cac53bb",
-      "V2_GEX_S1_L001_R2_001.fastq.gz": "f6eabb7fff1b1b52",
+      "Undetermined_S0_L001_R1_001.fastq.gz": "da04ad9205f69a14",
+      "Undetermined_S0_L001_R2_001.fastq.gz": "3c205226b1e08b57",
+      "V2_GEX_S1_L001_R1_001.fastq.gz": "48875f3b6b6b1343",
+      "V2_GEX_S1_L001_R2_001.fastq.gz": "d12980ad2c346704",
       "V3_GEX_S2_L001_R1_001.fastq.gz": "e72d5c6d4dac9b7e",
       "V3_GEX_S2_L001_R2_001.fastq.gz": "1621ece5547fd62f",
       "V4_GEX_S3_L001_R1_001.fastq.gz": "19872f9209e6b6ce",
@@ -521,18 +521,18 @@
       "failed.fastq.gz": "270acd8766d4dcdf"
     }
   },
-  "smoke_sheet_tags_rigid_index": {
+  "smoke_sheet_no_index_indels": {
     "counters": {
       "adapter_trimmed": 52,
       "class_full": 74,
       "class_partial": 7,
       "class_unparseable": 19,
-      "demux.assigned": 60,
-      "demux.assigned_early": 61,
+      "demux.assigned": 69,
+      "demux.assigned_early": 72,
       "demux.index_unreachable": 19,
       "demux.per_sample": [
         {
-          "pairs": 4,
+          "pairs": 5,
           "sample": "V2_GEX"
         },
         {
@@ -552,7 +552,7 @@
           "sample": "V5-2_GEX"
         },
         {
-          "pairs": 1,
+          "pairs": 2,
           "sample": "V6_GEX"
         },
         {
@@ -560,19 +560,19 @@
           "sample": "V7_GEX"
         },
         {
-          "pairs": 9,
+          "pairs": 11,
           "sample": "M2_GEX"
         },
         {
-          "pairs": 4,
+          "pairs": 6,
           "sample": "M3_GEX"
         },
         {
-          "pairs": 4,
+          "pairs": 5,
           "sample": "M4_GEX"
         },
         {
-          "pairs": 3,
+          "pairs": 4,
           "sample": "M5_GEX"
         },
         {
@@ -584,13 +584,13 @@
           "sample": "M6-2_GEX"
         },
         {
-          "pairs": 1,
+          "pairs": 2,
           "sample": "M7_GEX"
         }
       ],
       "demux.per_sample_early": [
         {
-          "pairs": 5,
+          "pairs": 7,
           "sample": "V2_GEX"
         },
         {
@@ -610,27 +610,27 @@
           "sample": "V5-2_GEX"
         },
         {
-          "pairs": 1,
+          "pairs": 2,
           "sample": "V6_GEX"
         },
         {
-          "pairs": 5,
+          "pairs": 6,
           "sample": "V7_GEX"
         },
         {
-          "pairs": 9,
+          "pairs": 11,
           "sample": "M2_GEX"
         },
         {
-          "pairs": 4,
+          "pairs": 6,
           "sample": "M3_GEX"
         },
         {
-          "pairs": 4,
+          "pairs": 5,
           "sample": "M4_GEX"
         },
         {
-          "pairs": 3,
+          "pairs": 4,
           "sample": "M5_GEX"
         },
         {
@@ -642,16 +642,16 @@
           "sample": "M6-2_GEX"
         },
         {
-          "pairs": 1,
+          "pairs": 2,
           "sample": "M7_GEX"
         }
       ],
-      "demux.undetermined": 14,
-      "demux.undetermined_early": 20,
-      "demux.via_conflict": 0,
-      "demux.via_dual": 26,
+      "demux.undetermined": 5,
+      "demux.undetermined_early": 9,
+      "demux.via_conflict": 1,
+      "demux.via_dual": 40,
       "demux.via_i5_only": 28,
-      "demux.via_i7_only": 6,
+      "demux.via_i7_only": 1,
       "oriented": 100,
       "pairs_emitted": 74,
       "r1_eq_28": 74,
@@ -662,36 +662,210 @@
       "total_reads": 100
     },
     "files": {
-      "M2_GEX_S8_L001_R1_001.fastq.gz": "9c7f75209c935bb1",
-      "M2_GEX_S8_L001_R2_001.fastq.gz": "37ade1647d3b5c2f",
-      "M3_GEX_S9_L001_R1_001.fastq.gz": "4c4903712e3a934f",
-      "M3_GEX_S9_L001_R2_001.fastq.gz": "1e666d19bf510fde",
+      "M2_GEX_S8_L001_R1_001.fastq.gz": "2b8562f82369822b",
+      "M2_GEX_S8_L001_R2_001.fastq.gz": "aaeba9a4a74b2088",
+      "M3_GEX_S9_L001_R1_001.fastq.gz": "955a8195ad28e435",
+      "M3_GEX_S9_L001_R2_001.fastq.gz": "4e4550fda672d7a2",
+      "M4_GEX_S10_L001_R1_001.fastq.gz": "fb7b4b1693f23f94",
+      "M4_GEX_S10_L001_R2_001.fastq.gz": "11a92a60a797976e",
+      "M5_GEX_S11_L001_R1_001.fastq.gz": "918ee07b5648c4de",
+      "M5_GEX_S11_L001_R2_001.fastq.gz": "800f91893befc8de",
+      "M6-1_GEX_S12_L001_R1_001.fastq.gz": "6f9e1727c146e65d",
+      "M6-1_GEX_S12_L001_R2_001.fastq.gz": "9f3a073038622b22",
+      "M6-2_GEX_S13_L001_R1_001.fastq.gz": "fce92c6cff39b9aa",
+      "M6-2_GEX_S13_L001_R2_001.fastq.gz": "2b741de731b701f8",
+      "M7_GEX_S14_L001_R1_001.fastq.gz": "83ab278026f59ffa",
+      "M7_GEX_S14_L001_R2_001.fastq.gz": "1e8e9473ae25d930",
+      "Undetermined_S0_L001_R1_001.fastq.gz": "b577c652a2e78573",
+      "Undetermined_S0_L001_R2_001.fastq.gz": "f1087ed954df9719",
+      "V2_GEX_S1_L001_R1_001.fastq.gz": "9b32a203ea886ba0",
+      "V2_GEX_S1_L001_R2_001.fastq.gz": "f8570ce6801f0f4d",
+      "V3_GEX_S2_L001_R1_001.fastq.gz": "391410a6e8c8ab24",
+      "V3_GEX_S2_L001_R2_001.fastq.gz": "ccbd23afa824e44f",
+      "V4_GEX_S3_L001_R1_001.fastq.gz": "df772bfb352dc919",
+      "V4_GEX_S3_L001_R2_001.fastq.gz": "3775d8f5908bed80",
+      "V5-1_GEX_S4_L001_R1_001.fastq.gz": "f44012ca381c2c96",
+      "V5-1_GEX_S4_L001_R2_001.fastq.gz": "c749e0dee2e5918b",
+      "V5-2_GEX_S5_L001_R1_001.fastq.gz": "2ac67a28b73c0e4a",
+      "V5-2_GEX_S5_L001_R2_001.fastq.gz": "948f905456a2ea56",
+      "V6_GEX_S6_L001_R1_001.fastq.gz": "77bc613584227148",
+      "V6_GEX_S6_L001_R2_001.fastq.gz": "e042c541dae2fa21",
+      "V7_GEX_S7_L001_R1_001.fastq.gz": "fc9ff8c722ba7c27",
+      "V7_GEX_S7_L001_R2_001.fastq.gz": "5c53ae7faa6644c8",
+      "failed.fastq.gz": "270acd8766d4dcdf"
+    }
+  },
+  "smoke_sheet_tags_rigid_index": {
+    "counters": {
+      "adapter_trimmed": 52,
+      "class_full": 74,
+      "class_partial": 7,
+      "class_unparseable": 19,
+      "demux.assigned": 66,
+      "demux.assigned_early": 69,
+      "demux.index_unreachable": 19,
+      "demux.per_sample": [
+        {
+          "pairs": 5,
+          "sample": "V2_GEX"
+        },
+        {
+          "pairs": 6,
+          "sample": "V3_GEX"
+        },
+        {
+          "pairs": 9,
+          "sample": "V4_GEX"
+        },
+        {
+          "pairs": 4,
+          "sample": "V5-1_GEX"
+        },
+        {
+          "pairs": 3,
+          "sample": "V5-2_GEX"
+        },
+        {
+          "pairs": 2,
+          "sample": "V6_GEX"
+        },
+        {
+          "pairs": 5,
+          "sample": "V7_GEX"
+        },
+        {
+          "pairs": 11,
+          "sample": "M2_GEX"
+        },
+        {
+          "pairs": 6,
+          "sample": "M3_GEX"
+        },
+        {
+          "pairs": 4,
+          "sample": "M4_GEX"
+        },
+        {
+          "pairs": 3,
+          "sample": "M5_GEX"
+        },
+        {
+          "pairs": 3,
+          "sample": "M6-1_GEX"
+        },
+        {
+          "pairs": 3,
+          "sample": "M6-2_GEX"
+        },
+        {
+          "pairs": 2,
+          "sample": "M7_GEX"
+        }
+      ],
+      "demux.per_sample_early": [
+        {
+          "pairs": 7,
+          "sample": "V2_GEX"
+        },
+        {
+          "pairs": 6,
+          "sample": "V3_GEX"
+        },
+        {
+          "pairs": 9,
+          "sample": "V4_GEX"
+        },
+        {
+          "pairs": 4,
+          "sample": "V5-1_GEX"
+        },
+        {
+          "pairs": 3,
+          "sample": "V5-2_GEX"
+        },
+        {
+          "pairs": 2,
+          "sample": "V6_GEX"
+        },
+        {
+          "pairs": 6,
+          "sample": "V7_GEX"
+        },
+        {
+          "pairs": 11,
+          "sample": "M2_GEX"
+        },
+        {
+          "pairs": 6,
+          "sample": "M3_GEX"
+        },
+        {
+          "pairs": 4,
+          "sample": "M4_GEX"
+        },
+        {
+          "pairs": 3,
+          "sample": "M5_GEX"
+        },
+        {
+          "pairs": 3,
+          "sample": "M6-1_GEX"
+        },
+        {
+          "pairs": 3,
+          "sample": "M6-2_GEX"
+        },
+        {
+          "pairs": 2,
+          "sample": "M7_GEX"
+        }
+      ],
+      "demux.undetermined": 8,
+      "demux.undetermined_early": 12,
+      "demux.via_conflict": 1,
+      "demux.via_dual": 40,
+      "demux.via_i5_only": 24,
+      "demux.via_i7_only": 2,
+      "oriented": 100,
+      "pairs_emitted": 74,
+      "r1_eq_28": 74,
+      "r1_not_28": 0,
+      "r2_len_max": 376,
+      "r2_len_mean": 228,
+      "reads_failed": 26,
+      "total_reads": 100
+    },
+    "files": {
+      "M2_GEX_S8_L001_R1_001.fastq.gz": "2b8562f82369822b",
+      "M2_GEX_S8_L001_R2_001.fastq.gz": "466a4a55370ee9cb",
+      "M3_GEX_S9_L001_R1_001.fastq.gz": "955a8195ad28e435",
+      "M3_GEX_S9_L001_R2_001.fastq.gz": "ce5e0dc2d4a60b0a",
       "M4_GEX_S10_L001_R1_001.fastq.gz": "d0f7d20b340bee16",
-      "M4_GEX_S10_L001_R2_001.fastq.gz": "54663c4c52924e8e",
+      "M4_GEX_S10_L001_R2_001.fastq.gz": "7173597a49551074",
       "M5_GEX_S11_L001_R1_001.fastq.gz": "14225c1b94e12ff7",
       "M5_GEX_S11_L001_R2_001.fastq.gz": "ab3296ef282c463d",
       "M6-1_GEX_S12_L001_R1_001.fastq.gz": "6f9e1727c146e65d",
       "M6-1_GEX_S12_L001_R2_001.fastq.gz": "087fa6400fe9ad61",
       "M6-2_GEX_S13_L001_R1_001.fastq.gz": "fce92c6cff39b9aa",
       "M6-2_GEX_S13_L001_R2_001.fastq.gz": "e19c7611a1942101",
-      "M7_GEX_S14_L001_R1_001.fastq.gz": "98b4dbdb7cae5858",
-      "M7_GEX_S14_L001_R2_001.fastq.gz": "edd0cfe8d335faf3",
-      "Undetermined_S0_L001_R1_001.fastq.gz": "a1aad531e1737294",
-      "Undetermined_S0_L001_R2_001.fastq.gz": "e60e63f13c848ef6",
-      "V2_GEX_S1_L001_R1_001.fastq.gz": "0f875b0d36677cd7",
-      "V2_GEX_S1_L001_R2_001.fastq.gz": "835458421deeeb8c",
+      "M7_GEX_S14_L001_R1_001.fastq.gz": "83ab278026f59ffa",
+      "M7_GEX_S14_L001_R2_001.fastq.gz": "b65bb829c51675d5",
+      "Undetermined_S0_L001_R1_001.fastq.gz": "d742c58035b53a5d",
+      "Undetermined_S0_L001_R2_001.fastq.gz": "aad98c36a4a4e9f0",
+      "V2_GEX_S1_L001_R1_001.fastq.gz": "9b32a203ea886ba0",
+      "V2_GEX_S1_L001_R2_001.fastq.gz": "7da8bc1d4f4fc983",
       "V3_GEX_S2_L001_R1_001.fastq.gz": "391410a6e8c8ab24",
-      "V3_GEX_S2_L001_R2_001.fastq.gz": "fecb7a9a90e9e65f",
+      "V3_GEX_S2_L001_R2_001.fastq.gz": "656968c4e7091b35",
       "V4_GEX_S3_L001_R1_001.fastq.gz": "df772bfb352dc919",
-      "V4_GEX_S3_L001_R2_001.fastq.gz": "e395069329558a33",
-      "V5-1_GEX_S4_L001_R1_001.fastq.gz": "726c9a348bcd9ed8",
-      "V5-1_GEX_S4_L001_R2_001.fastq.gz": "fc94492f24d2c9a8",
+      "V4_GEX_S3_L001_R2_001.fastq.gz": "38f086ac3afdb4be",
+      "V5-1_GEX_S4_L001_R1_001.fastq.gz": "df83697b1f6c0f17",
+      "V5-1_GEX_S4_L001_R2_001.fastq.gz": "706426a81e0ebaac",
       "V5-2_GEX_S5_L001_R1_001.fastq.gz": "2ac67a28b73c0e4a",
-      "V5-2_GEX_S5_L001_R2_001.fastq.gz": "85f7ac99d6471919",
-      "V6_GEX_S6_L001_R1_001.fastq.gz": "153d6baf42deadd1",
-      "V6_GEX_S6_L001_R2_001.fastq.gz": "4b92ff00a5a9dbb3",
+      "V5-2_GEX_S5_L001_R2_001.fastq.gz": "6b31ecd4a6047b37",
+      "V6_GEX_S6_L001_R1_001.fastq.gz": "77bc613584227148",
+      "V6_GEX_S6_L001_R2_001.fastq.gz": "b823ddaeef2dcd47",
       "V7_GEX_S7_L001_R1_001.fastq.gz": "fc9ff8c722ba7c27",
-      "V7_GEX_S7_L001_R2_001.fastq.gz": "48ee5a728377a00b",
+      "V7_GEX_S7_L001_R2_001.fastq.gz": "0313719731a16d72",
       "failed.fastq.gz": "270acd8766d4dcdf"
     }
   }

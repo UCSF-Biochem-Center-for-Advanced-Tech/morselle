@@ -46,6 +46,12 @@ const CASES: &[Case] = &[
         name: "smoke_sheet_index_indels",
         args: &["--processing-tags", "--index-indels"],
     },
+    // --index-indels is on by default since 2026-10-30; turning it off must
+    // give exactly the pre-change default output (the old `smoke_sheet`).
+    Case {
+        name: "smoke_sheet_no_index_indels",
+        args: &["--index-indels", "false"],
+    },
 ];
 
 /// Counters pinned by the golden (top level, then `demux.*`).
@@ -222,7 +228,11 @@ fn index_evidence_counters_are_consistent() {
         // An identified index is always counted as seen; full needs both.
         assert!(n("full") <= n("identified_both"));
         assert!(n("identified_both") <= n("seen_both"));
-        let indels = case.args.contains(&"--index-indels");
+        // On by default; only an explicit `--index-indels false` turns it off.
+        let indels = !case
+            .args
+            .windows(2)
+            .any(|w| w == ["--index-indels", "false"]);
         assert_eq!(d["index_indels_i5"].as_bool().unwrap(), indels);
         assert_eq!(d["index_indels_i7"].as_bool().unwrap(), indels);
         if !indels {

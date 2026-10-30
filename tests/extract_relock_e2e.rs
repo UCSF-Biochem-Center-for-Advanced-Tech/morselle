@@ -261,7 +261,8 @@ fn planted(id: &str) -> &str {
 #[test]
 fn relock_rescues_tail_indels_with_the_planted_cb_and_umi() {
     let dir = tempfile::tempdir().unwrap();
-    let (off, m_off) = run(dir.path(), "off", &[]);
+    // On by default since 2026-10-30: "off" must say so.
+    let (off, m_off) = run(dir.path(), "off", &["--r1-tail-relock", "false"]);
     let (on, m_on) = run(dir.path(), "on", &["--r1-tail-relock"]);
 
     // Off: the option is truly off.
@@ -391,4 +392,27 @@ fn every_rescued_umi_is_the_planted_one() {
     assert!(on
         .iter()
         .any(|(id, p)| ["2", "3"].contains(&p.xb.as_str()) && planted(id).ends_with('T')));
+}
+
+/// `--r1-tail-relock` is on by default: a run without the flag re-locks the
+/// same reads, with the same output, as one that passes it.
+#[test]
+fn relock_is_on_by_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let (default, m_default) = run(dir.path(), "default", &[]);
+    let (on, m_on) = run(dir.path(), "on", &["--r1-tail-relock"]);
+    assert!(m_default["whitelist"]["relocked"].as_u64().unwrap() > 0);
+    assert_eq!(
+        m_default["whitelist"]["relocked"],
+        m_on["whitelist"]["relocked"]
+    );
+    assert_eq!(default.len(), on.len());
+    for (id, p) in &on {
+        let q = &default[id];
+        assert_eq!(
+            (&q.r1, &q.xb, &q.r2, &q.sample),
+            (&p.r1, &p.xb, &p.r2, &p.sample),
+            "{id}"
+        );
+    }
 }

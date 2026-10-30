@@ -268,9 +268,9 @@ orientations; orientation is auto-detected and enforced per file). Useful flags:
 | `--threads` | 0 (all cores) | worker pool size |
 | `--orientation` | auto | force `p5-led` / `p7-led` if auto-detect is wrong |
 | `--cb-reframe` | off | rescue homopolymer-indel frame-shifted barcodes (about half right on CAT02; off by default) |
-| `--r1-tail-relock` | off | rescue barcodes mislocated by an indel in the R1-primer tail |
+| `--r1-tail-relock` | on | rescue barcodes mislocated by an indel in the R1-primer tail |
 | `--index-window` | 3 | offset-tolerant i5/i7 matching |
-| `--index-indels` | off | also match an i5/i7 with one insertion or deletion (sheet-checked for safety) |
+| `--index-indels` | on | also match an i5/i7 with one insertion or deletion (sheet-checked for safety) |
 | `--demux-index` | auto | auto = per read: one index when it names exactly one sample, otherwise both must agree |
 | `--realign` | on | single-indel CB rescue (recovers ~+1% of reads at high precision); disable with `--realign false` |
 | `--cb-insertion` | off | rescue barcodes carrying one extra base (insertion) |

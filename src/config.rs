@@ -108,8 +108,11 @@ pub struct Params {
     /// if the sample sheet is safe for it: minimum pairwise edit distance ≥ 3,
     /// and no one-edit variant of any index (in its real adapter flanks) is sent
     /// to a different sample by the indel pass; otherwise that index stays
-    /// mismatch-only, with a warning. Off by default.
-    #[arg(long)]
+    /// mismatch-only, with a warning. On by default (CAT02 Multiome and CAT06
+    /// Flex: more reads assigned, no read moved between samples);
+    /// `--index-indels false` turns it off.
+    #[arg(long, default_value_t = true, num_args = 0..=1, default_missing_value = "true",
+          action = clap::ArgAction::Set)]
     pub index_indels: bool,
 
     /// Single-indel CB realignment (M5): when the measured CB+UMI span is off by
@@ -140,8 +143,12 @@ pub struct Params {
     /// included, and read the CB and UMI right after it. Accepted only when
     /// that start differs from the original lock and its CB is on the
     /// whitelist or a unique Hamming-1 neighbour. Runs after realign and
-    /// reframe, only on reads they leave failing. Off by default.
-    #[arg(long, default_value_t = false)]
+    /// reframe, only on reads they leave failing. On by default: against
+    /// Illumina molecules from the same libraries its barcodes are right as
+    /// often as Hamming-1's (CAT02 91% / 79%, CAT06 Flex 91%);
+    /// `--r1-tail-relock false` turns it off.
+    #[arg(long, default_value_t = true, num_args = 0..=1, default_missing_value = "true",
+          action = clap::ArgAction::Set)]
     pub r1_tail_relock: bool,
 
     /// CB insertion rescue (`XB:i:8`): for a confidently located CB-fail the

@@ -67,6 +67,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `molecules`/`matrix`.
 
 ### Changed
+- `extract --r1-tail-relock` and `--index-indels` are now on by default
+  (`--r1-tail-relock false` / `--index-indels false` turn them off; the bare
+  flags still work). Against Illumina Cell Ranger molecules from the same
+  libraries, re-locked barcodes are right as often as Hamming-1's (CAT02
+  Multiome 91% / 79% vs 78% / 83%; CAT06 Flex 91% vs 91%). With both on and
+  reframe off, assigned reads go from 56.14% / 45.35% (0.7.0) to 57.98% /
+  45.69% on CAT02 slices and from 68.46% to 69.15% on a CAT06 shard, with
+  about 30% fewer wrong-barcode reads on CAT02, at unchanged throughput.
+  The extract golden is regenerated: the default cases now use one-indel
+  index matching (smoke fixture: 2 more dual-index calls, 2 more reads
+  assigned with `--demux-index both`), and a new `--index-indels false`
+  case reproduces the previous default output exactly.
 - `extract --cb-reframe` is now off by default. Scored against Cell Ranger
   molecules from the Illumina run of the same library (CAT02 M2_GEX: a read
   counts when an Illumina molecule on its barcode has a UMI within one edit,
