@@ -124,9 +124,10 @@ pub struct Params {
 
     /// CB reframe rescue: for confidently-located CB-fails, try nearby frames
     /// (a homopolymer indel shifts the 16 bp grab) and accept a unique within-1
-    /// whitelist hit, re-registering the UMI off the dT anchor. On by default —
-    /// confident-location + unique-hit guards keep precision.
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    /// whitelist hit. Off by default: scored against Illumina molecules from
+    /// the same library (CAT02 M2_GEX), only ~51-59% of reframed barcodes are
+    /// right (Hamming-1 78-83%, realign 97-99%).
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     pub cb_reframe: bool,
 
     /// Max CB frame shift (each side) tried by the reframe rescue. Offset +1 (the

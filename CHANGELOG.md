@@ -67,6 +67,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `molecules`/`matrix`.
 
 ### Changed
+- `extract --cb-reframe` is now off by default. Scored against Cell Ranger
+  molecules from the Illumina run of the same library (CAT02 M2_GEX: a read
+  counts when an Illumina molecule on its barcode has a UMI within one edit,
+  less a random-UMI control, relative to exact-match reads), only 51% / 59%
+  of reframed barcodes are right (barcode-first / barcode-last), against
+  Hamming-1 78% / 83%, re-lock 91% / 79%, insertion 89% / 78% and realign
+  97% / 99%. Reframe had rescued about 1.6% / 1.3% of reads. Pass
+  `--cb-reframe true` for the previous behaviour.
 - Demultiplexing decides per read which indexes it needs: both i5 and i7
   are looked up, one alone assigns when it names exactly one sample, and
   otherwise the read goes to the single sample both indexes agree on (no

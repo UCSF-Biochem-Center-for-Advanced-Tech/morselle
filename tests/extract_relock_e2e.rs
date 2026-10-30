@@ -199,6 +199,10 @@ fn run(dir: &Path, name: &str, extra: &[&str]) -> (BTreeMap<String, Pair>, Value
         "2",
         "--no-gzip",
         "--processing-tags",
+        // Written when reframe was on by default (off since 2026-10-30);
+        // these cases exercise every rescue route, reframe included.
+        "--cb-reframe",
+        "true",
     ]
     .iter()
     .map(|s| s.to_string())
