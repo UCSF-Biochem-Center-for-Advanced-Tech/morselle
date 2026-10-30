@@ -155,8 +155,12 @@ pub struct Params {
     /// earlier rescues leave, accept the unique whitelist barcode that drops
     /// one inner base of the 17 bp at the CB lock (no one-deletion reading may
     /// name another barcode); the UMI is the 12 bp after it. Insertions only:
-    /// deletion readings landed near chance on real data. Off by default.
-    #[arg(long, default_value_t = false)]
+    /// deletion readings landed near chance on real data. On by default:
+    /// against Illumina molecules from the same libraries its barcodes are
+    /// right about as often as Hamming-1's (CAT02 89% / 78%, CAT06 Flex 93%);
+    /// `--cb-insertion false` turns it off.
+    #[arg(long, default_value_t = true, num_args = 0..=1, default_missing_value = "true",
+          action = clap::ArgAction::Set)]
     pub cb_insertion: bool,
 
     /// Lenient CB recovery: for confidently-located CB-fails, accept a unique

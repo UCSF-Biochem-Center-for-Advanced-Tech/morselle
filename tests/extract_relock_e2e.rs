@@ -328,7 +328,12 @@ fn every_emitted_cb_and_umi_is_the_planted_one() {
 #[test]
 fn cb_insertion_rescues_an_extra_base_in_the_barcode() {
     let dir = tempfile::tempdir().unwrap();
-    let (off, m_off) = run(dir.path(), "off", &["--r1-tail-relock"]);
+    // On by default since 2026-10-30: "off" must say so.
+    let (off, m_off) = run(
+        dir.path(),
+        "off",
+        &["--r1-tail-relock", "--cb-insertion", "false"],
+    );
     let (on, m_on) = run(dir.path(), "on", &["--r1-tail-relock", "--cb-insertion"]);
     assert_eq!(m_off["whitelist"]["cb_insertion"], 0);
     // Nothing emitted without the rescue changes with it.
@@ -405,6 +410,29 @@ fn relock_is_on_by_default() {
     assert_eq!(
         m_default["whitelist"]["relocked"],
         m_on["whitelist"]["relocked"]
+    );
+    assert_eq!(default.len(), on.len());
+    for (id, p) in &on {
+        let q = &default[id];
+        assert_eq!(
+            (&q.r1, &q.xb, &q.r2, &q.sample),
+            (&p.r1, &p.xb, &p.r2, &p.sample),
+            "{id}"
+        );
+    }
+}
+
+/// `--cb-insertion` is on by default: a run without the flag rescues the same
+/// reads, with the same output, as one that passes it.
+#[test]
+fn cb_insertion_is_on_by_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let (default, m_default) = run(dir.path(), "default", &[]);
+    let (on, m_on) = run(dir.path(), "on", &["--cb-insertion"]);
+    assert!(m_default["whitelist"]["cb_insertion"].as_u64().unwrap() > 0);
+    assert_eq!(
+        m_default["whitelist"]["cb_insertion"],
+        m_on["whitelist"]["cb_insertion"]
     );
     assert_eq!(default.len(), on.len());
     for (id, p) in &on {

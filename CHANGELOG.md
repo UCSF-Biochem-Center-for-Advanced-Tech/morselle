@@ -77,6 +77,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `molecules`/`matrix`.
 
 ### Changed
+- `extract --cb-insertion` is now on by default (`--cb-insertion false`
+  turns it off; the bare flag still works). Against Illumina Cell Ranger
+  molecules from the same libraries, its barcodes are right about as often
+  as Hamming-1's: CAT02 Multiome 89% / 78% (Hamming-1 78% / 83%), CAT06 Flex
+  93% (Hamming-1 92%, with the Flex fixed-sequence flank). It adds 0.9% /
+  0.5% of reads on the CAT02 slices and 1.7 points on a CAT06 shard.
 - `extract --r1-tail-relock` and `--index-indels` are now on by default
   (`--r1-tail-relock false` / `--index-indels false` turn them off; the bare
   flags still work). Against Illumina Cell Ranger molecules from the same

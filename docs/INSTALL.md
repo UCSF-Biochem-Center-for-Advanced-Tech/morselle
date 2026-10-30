@@ -273,7 +273,7 @@ orientations; orientation is auto-detected and enforced per file). Useful flags:
 | `--index-indels` | on | also match an i5/i7 with one insertion or deletion (sheet-checked for safety) |
 | `--demux-index` | auto | auto = per read: one index when it names exactly one sample, otherwise both must agree |
 | `--realign` | on | single-indel CB rescue (recovers ~+1% of reads at high precision); disable with `--realign false` |
-| `--cb-insertion` | off | rescue barcodes carrying one extra base (insertion) |
+| `--cb-insertion` | on | rescue barcodes carrying one extra base (insertion) |
 | `--lenient` | off | within-2 CB rescue — **leave off** (only ~51% precise on the dense ARC whitelist) |
 | `--cb-gate` | on | drop pairs whose CB isn't on/near the whitelist |
 | `--cellranger` | off | 10x reference compatibility preset — applies the settings it requires (currently `--max-r2-len 649`; explicit flags override). **Use this for 10x reference input.** |
