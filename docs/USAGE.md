@@ -275,6 +275,7 @@ orientations; orientation is auto-detected and enforced per file).
 | `--index-max-mm` | 1 | Max mismatches when matching sample-sheet indices. |
 | `--demux-index` | auto | `dual`, `both`, `i5` or `i7`. Auto = `dual` with the per-read rule: an index alone assigns only when it names exactly one sample; an index shared by several samples (combinatorial sheets, or overlapping mismatch neighbourhoods) is narrowed to one by the other index, or the read stays undetermined. |
 | `--realign` | on | Single-indel CB rescue — recovers ~+1% of reads at high precision (`--realign false` to disable). |
+| `--cb-insertion` | off | For confidently located barcode failures, accept the unique whitelist barcode that removes one extra base inside the 17 bp at the barcode (`XB:i:8`); the UMI is the 12 bp after it. Insertions only (deletion readings land near chance). On CAT02 Multiome: +0.89% / +0.53% of reads assigned; rescued barcodes land on cell-like barcodes at 48.6% / 19.0% (Hamming-1 47.2% / 24.2%, reframe 37.8% / 19.5%). |
 | `--lenient` | off | Within-2 CB rescue — leave off (~51% precise on the dense ARC whitelist). |
 | `--min-cdna-len` | 50 | Shortest cDNA emitted as R2. |
 | `--max-r2-len` | 0 (uncapped) | Cap emitted R2 length (seq+qual together). 10x reference hard-caps at 649 bp; `--cellranger` sets this. |
@@ -321,7 +322,7 @@ the following SAM-style tags, which `morselle minimap` preserves when invoked wi
 - `XO`: original SBX read orientation (`5` = P5-led, `7` = P7-led).
 - `XB`: barcode route: 0 exact, 1 Hamming-1, 2 indel realignment, 3 reframe,
   4 Hamming-2, 5 no whitelist, 6 unrescued miss emitted with gating disabled,
-  7 R1-tail re-lock (`--r1-tail-relock`).
+  7 R1-tail re-lock (`--r1-tail-relock`), 8 CB insertion (`--cb-insertion`).
 - `XI`: index route: 0 dual, 1 i5-only, 2 i7-only, 3 conflict, 4 no usable
   index, 5 demultiplexing not requested.
 - `XA`: anchor bitmask: 1 R1-primer tail, 2 poly-T, 4 cDNA adapter trimmed,

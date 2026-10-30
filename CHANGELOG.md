@@ -37,6 +37,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   from the re-located barcode start (`whitelist.relock_reanchored`):
   undetermined re-locked reads 15.8% → 5.3% / 4.1% → 2.6%, +1,346 / +35
   reads assigned, no previously assigned read changed sample.
+- `extract --cb-insertion` (`XB:i:8`): for a confidently located barcode
+  failure the earlier rescues leave, accept the unique whitelist barcode
+  that removes one extra base inside the 17 bp at the barcode lock; no
+  one-deletion reading may name another barcode, and the UMI is the 12 bp
+  after it. Insertions only: re-measured after `--r1-tail-relock`, unique
+  one-edit hits among barcode failures are 1.6% / 0.95% of reads, but
+  deletion readings land on cell-like barcodes at 25.8% / 7.0% (near
+  chance) against 50.0% / 20.8% for insertions. Gated on confident location
+  like reframe (ungated: +1.22% / +0.80% assigned but 45.8% / 17.6%
+  cell-like). Off by default. CAT02 slices: assigned +0.89% / +0.53% of all
+  reads, cell-like 48.6% / 19.0% (Hamming-1 47.2% / 24.2%, reframe 37.8% /
+  19.5%), no previously emitted read changed. `whitelist.cb_insertion`
+  counts them.
 - `tests/extract_relock_e2e.rs`: `extract --whitelist` end to end on
   generated reads with a generated whitelist (10x whitelists are not
   committed, so the extract golden runs without one). Every one-base

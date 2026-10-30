@@ -7,8 +7,9 @@
 //! synthetic SBX reads shaped like the smoke fixture's (leader, P5, i5, R1
 //! primer, CB, UMI, polyT, cDNA, rc(R2), i7, rc(P7); V2_GEX indexes from the
 //! real CE15204 sheet) carry every one-base deletion and insertion in the R1
-//! primer's last 15 bp. Each read's name records its planted CB and UMI, so a
-//! rescue can be checked against the truth rather than a digest.
+//! primer's last 15 bp, and (for `--cb-insertion`, `XB:i:8`) one extra base
+//! at every inner CB position. Each read's name records its planted CB and
+//! UMI, so a rescue can be checked against the truth rather than a digest.
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -74,26 +75,61 @@ fn primer_variants() -> Vec<(String, String)> {
     out
 }
 
+/// One planted read: name prefix, R1 primer as read, and how the CB and UMI
+/// appear in the read (`None`: as planted).
+struct Variant {
+    name: String,
+    primer: String,
+    /// Insert a `G` at this CB position, and end the UMI in `T` (so polyT
+    /// seems to start one base early and the indel realign, which needs the
+    /// polyT one base late, leaves the read to `--cb-insertion`).
+    cb_insert_at: Option<usize>,
+}
+
+fn variants() -> Vec<Variant> {
+    let mut out: Vec<Variant> = primer_variants()
+        .into_iter()
+        .map(|(name, primer)| Variant {
+            name,
+            primer,
+            cb_insert_at: None,
+        })
+        .collect();
+    for at in 1..16 {
+        out.push(Variant {
+            name: format!("cbins{at}"),
+            primer: R1_PRIMER.to_owned(),
+            cb_insert_at: Some(at),
+        });
+    }
+    out
+}
+
 /// Writes `reads.fastq` and `whitelist.txt` into `dir`.
 fn write_inputs(dir: &Path) -> (PathBuf, PathBuf) {
     let mut rng = Rng(0x5eed);
     let whitelist: Vec<String> = (0..400).map(|_| rng.seq(16)).collect();
     let mut fastq = String::new();
     let mut n = 0;
-    for (name, primer) in primer_variants() {
+    for v in variants() {
         for k in 0..PER_VARIANT {
             let cb = &whitelist[n % whitelist.len()];
             n += 1;
-            let umi = rng.seq(12);
+            let (cb_read, umi) = match v.cb_insert_at {
+                None => (cb.clone(), rng.seq(12)),
+                Some(at) => (format!("{}G{}", &cb[..at], &cb[at..]), rng.seq(11) + "T"),
+            };
             let seq = format!(
-                "AACAATA{P5}CTACAC{}{primer}{cb}{umi}{}{}{}{I7}{}A",
+                "AACAATA{P5}CTACAC{}{}{cb_read}{umi}{}{}{}{I7}{}A",
                 rc(I5),
+                v.primer,
                 "T".repeat(30),
                 rng.seq(250),
                 rc(R2_PRIMER),
                 rc(P7),
             );
             let qual = "I".repeat(seq.len());
+            let name = &v.name;
             fastq.push_str(&format!("@{name}_{k}_{cb}{umi}\n{seq}\n+\n{qual}\n"));
         }
     }
@@ -243,4 +279,30 @@ fn every_emitted_cb_and_umi_is_the_planted_one() {
     for xb in ["0", "2", "3", "7"] {
         assert!(routes.contains_key(xb), "no XB {xb} read: {routes:?}");
     }
+}
+
+#[test]
+fn cb_insertion_rescues_an_extra_base_in_the_barcode() {
+    let dir = tempfile::tempdir().unwrap();
+    let (off, m_off) = run(dir.path(), "off", &["--r1-tail-relock"]);
+    let (on, m_on) = run(dir.path(), "on", &["--r1-tail-relock", "--cb-insertion"]);
+    assert_eq!(m_off["whitelist"]["cb_insertion"], 0);
+    // Nothing emitted without the rescue changes with it.
+    for (id, p) in &off {
+        let q = on
+            .get(id)
+            .unwrap_or_else(|| panic!("{id} lost with --cb-insertion"));
+        assert_eq!((&q.r1, &q.xb, &q.sample), (&p.r1, &p.xb, &p.sample), "{id}");
+    }
+    let rescued: Vec<_> = on.iter().filter(|(_, p)| p.xb == "8").collect();
+    assert_eq!(m_on["whitelist"]["cb_insertion"], rescued.len());
+    for (id, p) in &rescued {
+        // The planted CB and UMI, from a planted insertion only.
+        assert_eq!(p.r1, planted(id), "{id}");
+        assert!(id.starts_with("cbins") && !off.contains_key(*id), "{id}");
+        assert_eq!(p.sample, "V2_GEX", "{id}");
+    }
+    // Measured when written: 72 of the 90 planted (the earlier rescues take
+    // some of the rest).
+    assert!(rescued.len() >= 60, "only {} rescued", rescued.len());
 }

@@ -168,6 +168,7 @@ pub fn run(cli: &Cli) -> Result<()> {
         cb_reframe: cli.params.cb_reframe,
         reframe_window: cli.params.reframe_window,
         r1_tail_relock: cli.params.r1_tail_relock,
+        cb_insertion: cli.params.cb_insertion,
         lenient: cli.params.lenient,
         index_len,
         index_window: cli.params.index_window,

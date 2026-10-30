@@ -143,6 +143,14 @@ pub struct Params {
     #[arg(long, default_value_t = false)]
     pub r1_tail_relock: bool,
 
+    /// CB insertion rescue (`XB:i:8`): for a confidently located CB-fail the
+    /// earlier rescues leave, accept the unique whitelist barcode that drops
+    /// one inner base of the 17 bp at the CB lock (no one-deletion reading may
+    /// name another barcode); the UMI is the 12 bp after it. Insertions only:
+    /// deletion readings landed near chance on real data. Off by default.
+    #[arg(long, default_value_t = false)]
+    pub cb_insertion: bool,
+
     /// Lenient CB recovery: for confidently-located CB-fails, accept a unique
     /// Hamming-2 whitelist hit and rewrite the CB. Off by default (slower, lower
     /// precision). Only applied when the CB location is dual-anchor confirmed.

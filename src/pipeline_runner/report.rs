@@ -79,6 +79,7 @@ pub(crate) fn build_metrics(
                 reframed: stats.reframed,
                 relocked: stats.relocked,
                 relock_reanchored: stats.relock_reanchored,
+                cb_insertion: stats.cb_insertion,
                 corrected_hamming2: stats.corrected2,
             }
         }),
@@ -176,6 +177,7 @@ pub(crate) fn report(stats: &Stats, demuxer: Option<&Demuxer>, t: &Timing) {
             realigned = stats.realigned,
             reframed = stats.reframed,
             relocked = stats.relocked,
+            cb_insertion = stats.cb_insertion,
             corrected2 = stats.corrected2,
             gated_out = stats.gated_out,
             "CB gate"

@@ -219,6 +219,8 @@ pub struct WhitelistMetrics {
     /// Re-locked reads the early demux left unassigned, assigned by
     /// demultiplexing again from the re-located CB start.
     pub relock_reanchored: u64,
+    /// Rescued by `--cb-insertion` (XB:i:8).
+    pub cb_insertion: u64,
     pub corrected_hamming2: u64,
 }
 

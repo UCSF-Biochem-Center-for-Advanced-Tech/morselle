@@ -46,6 +46,7 @@ pub(crate) struct Shared<'a> {
     pub reframe_window: usize,
     /// R1-tail re-lock rescue (`--r1-tail-relock`).
     pub r1_tail_relock: bool,
+    pub cb_insertion: bool,
     pub lenient: bool,
     pub index_len: usize,
     /// Max frame shift tried when matching i5/i7 (absorbs index-shifting indels).

@@ -1,7 +1,8 @@
 //! Cell-barcode rescue chain for a whitelist miss (moved out of
 //! `process.rs` unchanged): Hamming-1 correction, then indel realign
 //! (`--realign`), CB reframe (`--cb-reframe`), R1-tail re-lock
-//! (`--r1-tail-relock`), lenient Hamming-2 (`--lenient`). Each rescue builds
+//! (`--r1-tail-relock`), CB insertion (`--cb-insertion`), lenient Hamming-2
+//! (`--lenient`). Each rescue builds
 //! a corrected 28 bp R1; the first that succeeds wins.
 
 use crate::extract::Extracted;
@@ -54,7 +55,7 @@ pub(crate) fn rescue_barcode(
     // XB: how the emitted barcode passed or was rescued. Values 0/1 are
     // whitelist exact/within-1; 2/3/4 are indel/reframe/Hamming-2 rescue;
     // 5 means no whitelist and 6 means an unrescued miss emitted with gating off;
-    // 7 is the R1-tail re-lock rescue.
+    // 7 is the R1-tail re-lock rescue, 8 the CB insertion rescue.
     let mut barcode_route = match cb_status {
         Some(CbStatus::OnWhitelist) => 0,
         Some(CbStatus::Within1) => 1,
@@ -112,6 +113,25 @@ pub(crate) fn rescue_barcode(
                     barcode_route = 7;
                     stats.relocked += 1;
                     relocked_at = Some(cb_s);
+                }
+            }
+            // CB insertion rescue: one extra base inside the CB, at the
+            // original lock; the UMI is the 12 bp after the 17 bp CB span.
+            // Gated on confident location like reframe: on CAT02 the
+            // unconfident ones landed on cell-like barcodes at 38.4% / 15.0%
+            // (gated: 48.6% / 19.0%; reframe 37.8% / 19.5%).
+            if corrected_r1.is_none() && sh.cb_insertion && located_confident {
+                let umi_end = r1s + sh.cb_len + 1 + sh.umi_len;
+                if umi_end <= o.seq.len() && umi_end <= o.qual.len() {
+                    if let Some((cb, skip)) = w.insertion_cb(&o.seq[r1s..]) {
+                        let mut s = cb.to_vec();
+                        s.extend_from_slice(&o.seq[r1s + sh.cb_len + 1..umi_end]);
+                        let mut q = o.qual[r1s..r1s + skip].to_vec();
+                        q.extend_from_slice(&o.qual[r1s + skip + 1..umi_end]);
+                        corrected_r1 = Some((s, q));
+                        barcode_route = 8;
+                        stats.cb_insertion += 1;
+                    }
                 }
             }
             // Lenient within-2 substitution rescue: only when the CB is
