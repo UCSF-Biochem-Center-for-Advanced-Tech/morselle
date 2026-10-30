@@ -10,10 +10,11 @@
 //! 2026-10-29).
 //!
 //! Like XOOS's edited-sequence lookup tables, every one-deletion and
-//! one-insertion variant of each index is precomputed, so a lookup stays a
-//! hash probe per frame: deletion variants are `L-1` bp keys, insertion
-//! variants `L+1` bp keys. Exactly one indel and no further mismatch -- one
-//! edit in total, the same budget as the default `--index-max-mm 1`.
+//! one-insertion variant of each index is precomputed (`super::lut`), so a
+//! lookup stays one table read per frame: deletion variants are `L-1` bp
+//! keys, insertion variants `L+1` bp keys. Exactly one indel and no further
+//! mismatch -- one edit in total, the same budget as the default
+//! `--index-max-mm 1`.
 //!
 //! Safety is checked per index before it is enabled ([`indel_safety`]): the
 //! minimum pairwise edit distance must leave the one-edit neighbourhoods
@@ -22,69 +23,7 @@
 //! pass, then indel pass, over the whole window): the indel pass must add no
 //! wrong-sample call beyond those mismatch-only matching already makes.
 
-use crate::hamming_index::{offset_order, HammingIndex};
-
-/// Precomputed one-insertion / one-deletion variants of a set of keys.
-pub struct IndelIndex {
-    key_len: usize,
-    /// Read lost one index base: `key_len - 1` bp keys.
-    del: HammingIndex<usize>,
-    /// Read gained one base: `key_len + 1` bp keys.
-    ins: HammingIndex<usize>,
-}
-
-impl IndelIndex {
-    pub fn new(key_len: usize) -> Self {
-        IndelIndex {
-            key_len,
-            del: HammingIndex::new(),
-            ins: HammingIndex::new(),
-        }
-    }
-
-    /// Insert every one-indel variant of `key` (read orientation) for `value`.
-    /// A variant shared with a different value becomes ambiguous and is refused.
-    pub fn insert(&mut self, key: &[u8], value: usize) {
-        for i in 0..key.len() {
-            let mut v = key.to_vec();
-            v.remove(i);
-            self.del.insert(&v, value, 0);
-        }
-        for i in 0..=key.len() {
-            for &b in b"ACGT" {
-                let mut v = key.to_vec();
-                v.insert(i, b);
-                self.ins.insert(&v, value, 0);
-            }
-        }
-    }
-
-    /// Unique sample over every frame (0, ±1, …, ±`window`) and both variant
-    /// lengths; `None` when nothing matches or two samples do.
-    pub fn find_windowed(&self, seq: &[u8], start: usize, window: isize) -> Option<usize> {
-        let mut found = None;
-        for k in offset_order(window) {
-            let pos = start as isize + k;
-            if pos < 0 {
-                continue;
-            }
-            let pos = pos as usize;
-            for (table, len) in [(&self.del, self.key_len - 1), (&self.ins, self.key_len + 1)] {
-                let Some(key) = seq.get(pos..pos + len) else {
-                    continue;
-                };
-                if let Some(v) = table.get(key) {
-                    match found {
-                        None => found = Some(v),
-                        Some(f) if f == v => {}
-                        Some(_) => return None,
-                    }
-                }
-            }
-        }
-        found
-    }
-}
+use super::lut::IndexLut;
 
 /// How one index was matched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -92,34 +31,6 @@ pub struct IndexMatch {
     pub sample: Option<usize>,
     /// Matched only through the one-indel pass.
     pub via_indel: bool,
-}
-
-/// The full per-index search: mismatch-only first (unchanged behaviour), then
-/// the indel pass only if that found nothing anywhere in the window.
-pub fn find_index(
-    ham: &HammingIndex<usize>,
-    indel: Option<&IndelIndex>,
-    seq: &[u8],
-    start: Option<usize>,
-    key_len: usize,
-    window: isize,
-) -> IndexMatch {
-    if let Some(s) = ham.find_windowed(seq, start, key_len, window) {
-        return IndexMatch {
-            sample: Some(s),
-            via_indel: false,
-        };
-    }
-    match (indel, start) {
-        (Some(ix), Some(st)) => {
-            let sample = ix.find_windowed(seq, st, window);
-            IndexMatch {
-                sample,
-                via_indel: sample.is_some(),
-            }
-        }
-        _ => IndexMatch::default(),
-    }
 }
 
 /// Plain Levenshtein distance (short keys only).
@@ -175,11 +86,11 @@ impl IndelSafety {
 
 /// Every one-edit (substitution, insertion, deletion) variant of each key,
 /// placed between its real `left`/`right` flanks at the nominal start, run
-/// through [`find_index`]. `keys[i]` must be sample `i`'s read-oriented index.
+/// through `lut` (which must already hold the indel tables) with and without
+/// the indel pass. `keys[i]` must be sample `i`'s read-oriented index.
 pub fn indel_safety(
     keys: &[Vec<u8>],
-    ham: &HammingIndex<usize>,
-    indel: &IndelIndex,
+    lut: &IndexLut,
     left: &[u8],
     right: &[u8],
     window: isize,
@@ -196,9 +107,9 @@ pub fn indel_safety(
             let mut seq = left.to_vec();
             seq.extend_from_slice(&v);
             seq.extend_from_slice(right);
-            let m = find_index(ham, Some(indel), &seq, Some(left.len()), key.len(), window);
+            let m = lut.find(&seq, Some(left.len()), window, true);
             out.variants += 1;
-            let base = find_index(ham, None, &seq, Some(left.len()), key.len(), window);
+            let base = lut.find(&seq, Some(left.len()), window, false);
             if base.sample.is_some_and(|s| s != sample) {
                 out.wrong_mismatch_only += 1;
             }

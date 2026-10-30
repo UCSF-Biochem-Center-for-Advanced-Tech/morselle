@@ -28,6 +28,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   counters) on the smoke fixture, as `golden_outputs.rs` does for
   `molecules`/`matrix`.
 
+### Changed
+- Sample-index matching uses one table per index, built from the sample
+  sheet at startup, holding every allowed variant (≤`--index-max-mm`
+  mismatches, plus one-indel variants with `--index-indels`). Keys are
+  2-bit packed and looked up in a directly addressed array, so each frame is
+  one array read instead of a byte-slice hash. Per read: 36 → 21 ns when
+  both indexes match exactly, 125–395 → 39–86 ns when nothing matches; 384
+  samples cost the same as 14. Output is identical (extract golden and both
+  CAT02 slices, with and without `--index-indels`); end-to-end throughput is
+  unchanged because demux was already a small share of `extract`.
+- `benches/pipeline_hot_paths.rs`: `demux/*` benchmarks (CE15204 and a
+  generated 384-sample sheet; exact, indel, and no-match reads).
+
 ### Known issues
 - With the default `--index-window 3`, one sample-sheet pair in CE15204
   (V4_GEX and M2_GEX i5s are one-base shifts of each other) lets one of the

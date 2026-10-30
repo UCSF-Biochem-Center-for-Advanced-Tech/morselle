@@ -8,11 +8,13 @@
 //!
 //! Both positions are derived from coordinates M1/M2 already found, so demux adds
 //! no new search. Indices are matched via a precomputed ≤`index_max_mm` neighbor
-//! map (O(1) lookup, with ambiguity detection). The sample index set here has min
+//! table (`lut`: 2-bit packed, directly addressed; O(1) lookup, with
+//! ambiguity detection). The sample index set here has min
 //! pairwise Hamming i7=3 / i5=4, so single-index assignment (when the other index
 //! is truncated — common for i7 on long reads) is unambiguous.
 mod engine;
 mod indel;
+mod lut;
 mod types;
 
 #[cfg(test)]

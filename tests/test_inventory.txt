@@ -102,6 +102,9 @@ src/lib.rs demux::indel_tests::indel_in_i7_upgrades_a_single_index_read_to_dual
 src/lib.rs demux::indel_tests::indexes_one_indel_apart_keep_that_index_mismatch_only
 src/lib.rs demux::indel_tests::real_sheet_is_safe_for_indel_matching_on_both_indexes
 src/lib.rs demux::indel_tests::the_indel_pass_never_makes_a_wrong_call_of_its_own
+src/lib.rs demux::lut::region_tests::region_path_matches_per_frame_path
+src/lib.rs demux::lut::tests::matches_hamming_index_exactly
+src/lib.rs demux::lut::tests::non_acgt_frames_never_match
 src/lib.rs demux::tests::auto_picks_both_when_neither_index_is_standalone_safe
 src/lib.rs demux::tests::auto_picks_dual_when_both_indices_are_standalone_safe
 src/lib.rs demux::tests::both_mode_assigns_on_real_agreement

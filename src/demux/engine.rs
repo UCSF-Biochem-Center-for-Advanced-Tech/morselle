@@ -1,9 +1,9 @@
 use anyhow::{bail, Result};
 
-use super::indel::{find_index, indel_safety, IndelIndex, IndelSafety, IndexMatch};
+use super::indel::{indel_safety, IndelSafety, IndexMatch};
+use super::lut::{IndexLut, MAX_SAMPLES};
 use super::types::{DemuxCfg, DemuxMode, DemuxVia, IndexEvidence, IndexSource, Outcome};
 use crate::anchors::{revcomp, P5, P7, R1_PRIMER, R2_PRIMER};
-use crate::hamming_index::HammingIndex;
 use crate::sample_sheet::SampleSheet;
 
 /// Real minimum pairwise Hamming distance among the sheet's samples, for the
@@ -35,14 +35,13 @@ pub fn min_pairwise_hamming(sheet: &SampleSheet, source: IndexSource) -> u32 {
 pub struct Demuxer {
     sample_ids: Vec<String>,
     index_len: usize,
-    i5_index: HammingIndex<usize>,
-    i7_index: HammingIndex<usize>,
+    /// Every matchable variant per index, precomputed ([`IndexLut`]); the
+    /// one-indel tables are added by [`Demuxer::enable_indels`] per safe index.
+    i5_lut: IndexLut,
+    i7_lut: IndexLut,
     /// Read-oriented keys, indexed like `sample_ids` (`revcomp(i5)`, `i7`).
     i5_keys: Vec<Vec<u8>>,
     i7_keys: Vec<Vec<u8>>,
-    /// One-indel tables, set by [`Demuxer::enable_indels`] per safe index.
-    i5_indel: Option<IndelIndex>,
-    i7_indel: Option<IndelIndex>,
     resolved_mode: DemuxMode,
 }
 
@@ -53,7 +52,7 @@ const P5_INDEX_TAIL: &[u8] = b"CTACAC";
 impl Demuxer {
     /// Build from a sample sheet. The read-oriented index sequences are
     /// `revcomp(i5)` and `i7` (forward), each expanded to ≤`index_max_mm`
-    /// neighbors for O(1), error-tolerant lookup.
+    /// neighbors in a precomputed table for O(1), error-tolerant lookup.
     ///
     /// `cfg.mode`: `Some(I5)`/`Some(I7)` refuse (rather than silently risk
     /// ambiguous assignment) unless that index alone separates every sample
@@ -99,24 +98,22 @@ impl Demuxer {
             "demux mode resolved"
         );
 
-        let mut i5_index = HammingIndex::new();
-        let mut i7_index = HammingIndex::new();
+        if sheet.samples.len() > MAX_SAMPLES {
+            bail!(
+                "{} samples in the sheet; demultiplexing supports at most {MAX_SAMPLES}",
+                sheet.samples.len()
+            );
+        }
         let index_len = sheet.samples.first().map_or(10, |s| s.i7.len());
         let i5_keys: Vec<Vec<u8>> = sheet.samples.iter().map(|s| revcomp(&s.i5)).collect();
         let i7_keys: Vec<Vec<u8>> = sheet.samples.iter().map(|s| s.i7.clone()).collect();
-        for idx in 0..sheet.samples.len() {
-            i5_index.insert(&i5_keys[idx], idx, cfg.index_max_mm);
-            i7_index.insert(&i7_keys[idx], idx, cfg.index_max_mm);
-        }
         Ok(Demuxer {
             sample_ids: sheet.samples.iter().map(|s| s.id.clone()).collect(),
             index_len,
-            i5_index,
-            i7_index,
+            i5_lut: IndexLut::new(&i5_keys, cfg.index_max_mm),
+            i7_lut: IndexLut::new(&i7_keys, cfg.index_max_mm),
             i5_keys,
             i7_keys,
-            i5_indel: None,
-            i7_indel: None,
             resolved_mode,
         })
     }
@@ -125,34 +122,13 @@ impl Demuxer {
     /// can support safely at this `window` (see [`indel_safety`]); an unsafe
     /// index stays mismatch-only, with a warning. Returns `(i5, i7)` safety.
     pub fn enable_indels(&mut self, window: isize) -> (IndelSafety, IndelSafety) {
-        let build = |keys: &[Vec<u8>]| {
-            let mut ix = IndelIndex::new(self.index_len);
-            for (i, k) in keys.iter().enumerate() {
-                ix.insert(k, i);
-            }
-            ix
-        };
+        self.i5_lut.add_indels(&self.i5_keys);
+        self.i7_lut.add_indels(&self.i7_keys);
         let i5_left = [P5, P5_INDEX_TAIL].concat();
         let i7_left = revcomp(R2_PRIMER);
         let i7_right = revcomp(P7);
-        let i5 = build(&self.i5_keys);
-        let i7 = build(&self.i7_keys);
-        let s5 = indel_safety(
-            &self.i5_keys,
-            &self.i5_index,
-            &i5,
-            &i5_left,
-            R1_PRIMER,
-            window,
-        );
-        let s7 = indel_safety(
-            &self.i7_keys,
-            &self.i7_index,
-            &i7,
-            &i7_left,
-            &i7_right,
-            window,
-        );
+        let s5 = indel_safety(&self.i5_keys, &self.i5_lut, &i5_left, R1_PRIMER, window);
+        let s7 = indel_safety(&self.i7_keys, &self.i7_lut, &i7_left, &i7_right, window);
         for (name, safety) in [("i5", s5), ("i7", s7)] {
             if safety.safe() {
                 tracing::info!(
@@ -177,8 +153,12 @@ impl Demuxer {
                 );
             }
         }
-        self.i5_indel = s5.safe().then_some(i5);
-        self.i7_indel = s7.safe().then_some(i7);
+        if !s5.safe() {
+            self.i5_lut.drop_indels();
+        }
+        if !s7.safe() {
+            self.i7_lut.drop_indels();
+        }
         (s5, s7)
     }
 
@@ -196,7 +176,7 @@ impl Demuxer {
 
     /// Whether one-indel matching is active for (i5, i7).
     pub fn indels_enabled(&self) -> (bool, bool) {
-        (self.i5_indel.is_some(), self.i7_indel.is_some())
+        (self.i5_lut.has_indels(), self.i7_lut.has_indels())
     }
 
     /// Combine per-index sample matches into an outcome (`Dual`/`Both` modes only).
@@ -245,17 +225,15 @@ impl Demuxer {
     /// Assign a read from its (optional) i5/i7 read-region slices (fixed frame).
     pub fn assign(&self, i5_region: Option<&[u8]>, i7_region: Option<&[u8]>) -> Outcome {
         match self.resolved_mode {
-            DemuxMode::I5 => Self::solo(
-                i5_region.and_then(|r| self.i5_index.get(r)),
-                DemuxVia::I5Only,
-            ),
-            DemuxMode::I7 => Self::solo(
-                i7_region.and_then(|r| self.i7_index.get(r)),
-                DemuxVia::I7Only,
-            ),
+            DemuxMode::I5 => {
+                Self::solo(i5_region.and_then(|r| self.i5_lut.get(r)), DemuxVia::I5Only)
+            }
+            DemuxMode::I7 => {
+                Self::solo(i7_region.and_then(|r| self.i7_lut.get(r)), DemuxVia::I7Only)
+            }
             DemuxMode::Dual | DemuxMode::Both => {
-                let a5 = i5_region.and_then(|r| self.i5_index.get(r));
-                let a7 = i7_region.and_then(|r| self.i7_index.get(r));
+                let a5 = i5_region.and_then(|r| self.i5_lut.get(r));
+                let a7 = i7_region.and_then(|r| self.i7_lut.get(r));
                 self.combine(a5, a7)
             }
         }
@@ -290,26 +268,12 @@ impl Demuxer {
         let use_i5 = self.resolved_mode != DemuxMode::I7;
         let use_i7 = self.resolved_mode != DemuxMode::I5;
         let i5 = if use_i5 {
-            find_index(
-                &self.i5_index,
-                self.i5_indel.as_ref(),
-                seq,
-                i5_start,
-                len,
-                window,
-            )
+            self.i5_lut.find(seq, i5_start, window, true)
         } else {
             IndexMatch::default()
         };
         let i7 = if use_i7 {
-            find_index(
-                &self.i7_index,
-                self.i7_indel.as_ref(),
-                seq,
-                i7_start,
-                len,
-                window,
-            )
+            self.i7_lut.find(seq, i7_start, window, true)
         } else {
             IndexMatch::default()
         };
