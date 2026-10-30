@@ -84,6 +84,17 @@ struct Variant {
     /// seems to start one base early and the indel realign, which needs the
     /// polyT one base late, leaves the read to `--cb-insertion`).
     cb_insert_at: Option<usize>,
+    /// Other CB edits, with a random UMI (about a quarter end in `T`).
+    cb_edit: CbEdit,
+}
+
+#[derive(Clone, Copy)]
+enum CbEdit {
+    None,
+    /// Insert a `G` at this CB position.
+    Insert(usize),
+    /// Delete the base at this CB position.
+    Delete(usize),
 }
 
 fn variants() -> Vec<Variant> {
@@ -93,6 +104,7 @@ fn variants() -> Vec<Variant> {
             name,
             primer,
             cb_insert_at: None,
+            cb_edit: CbEdit::None,
         })
         .collect();
     for at in 1..16 {
@@ -100,7 +112,21 @@ fn variants() -> Vec<Variant> {
             name: format!("cbins{at}"),
             primer: R1_PRIMER.to_owned(),
             cb_insert_at: Some(at),
+            cb_edit: CbEdit::None,
         });
+    }
+    for at in 1..16 {
+        for (name, edit) in [
+            (format!("cbinsr{at}"), CbEdit::Insert(at)),
+            (format!("cbdel{at}"), CbEdit::Delete(at)),
+        ] {
+            out.push(Variant {
+                name,
+                primer: R1_PRIMER.to_owned(),
+                cb_insert_at: None,
+                cb_edit: edit,
+            });
+        }
     }
     out
 }
@@ -115,9 +141,13 @@ fn write_inputs(dir: &Path) -> (PathBuf, PathBuf) {
         for k in 0..PER_VARIANT {
             let cb = &whitelist[n % whitelist.len()];
             n += 1;
-            let (cb_read, umi) = match v.cb_insert_at {
-                None => (cb.clone(), rng.seq(12)),
-                Some(at) => (format!("{}G{}", &cb[..at], &cb[at..]), rng.seq(11) + "T"),
+            let (cb_read, umi) = match (v.cb_insert_at, v.cb_edit) {
+                (Some(at), _) => (format!("{}G{}", &cb[..at], &cb[at..]), rng.seq(11) + "T"),
+                (None, CbEdit::None) => (cb.clone(), rng.seq(12)),
+                (None, CbEdit::Insert(at)) => (format!("{}G{}", &cb[..at], &cb[at..]), rng.seq(12)),
+                (None, CbEdit::Delete(at)) => {
+                    (format!("{}{}", &cb[..at], &cb[at + 1..]), rng.seq(12))
+                }
             };
             let seq = format!(
                 "AACAATA{P5}CTACAC{}{}{cb_read}{umi}{}{}{}{I7}{}A",
@@ -208,6 +238,15 @@ fn run(dir: &Path, name: &str, extra: &[&str]) -> (BTreeMap<String, Pair>, Value
         serde_json::from_str(&std::fs::read_to_string(out.join("metrics_summary.json")).unwrap())
             .unwrap();
     (pairs, metrics)
+}
+
+/// Position of a planted CB insertion or deletion, from the read name.
+fn cb_edit_at(id: &str) -> Option<usize> {
+    let case = id.split('_').next()?;
+    let digits = ["cbinsr", "cbins", "cbdel"]
+        .iter()
+        .find_map(|p| case.strip_prefix(p))?;
+    digits.parse().ok()
 }
 
 /// The planted CB + UMI recorded in a read name (`case_k_<cb><umi>`).
@@ -305,4 +344,47 @@ fn cb_insertion_rescues_an_extra_base_in_the_barcode() {
     // Measured when written: 72 of the 90 planted (the earlier rescues take
     // some of the rest).
     assert!(rescued.len() >= 60, "only {} rescued", rescued.len());
+}
+
+/// With every rescue on, each emitted R1 is the planted CB and UMI, whatever
+/// the route: in particular a UMI that ends in `T` (the first base polyT
+/// would claim) is kept, not shifted by one base.
+#[test]
+fn every_rescued_umi_is_the_planted_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let (on, _) = run(dir.path(), "on", &["--r1-tail-relock", "--cb-insertion"]);
+    let mut routes = BTreeMap::<String, usize>::new();
+    let (mut wrong, mut ambiguous) = (Vec::new(), 0);
+    for (id, p) in &on {
+        *routes.entry(p.xb.clone()).or_default() += 1;
+        assert_eq!(&p.r1[..16], &planted(id)[..16], "{id} XB {}", p.xb);
+        if p.r1 == planted(id) {
+            continue;
+        }
+        // Two cases the read cannot settle: an edit at the CB's last bases
+        // that leaves it on the whitelist (XB 0, which keeps its fixed
+        // frame), and one near the end followed by a UMI ending in T (reads
+        // like a substitution plus a UMI that does not).
+        let near_end = cb_edit_at(id).is_some_and(|at| at >= 13);
+        if near_end && (p.xb == "0" || planted(id).ends_with('T')) {
+            ambiguous += 1;
+        } else {
+            wrong.push(format!("{id} XB {} got {}", p.xb, p.r1));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "{} wrong of {}: {wrong:#?}",
+        wrong.len(),
+        on.len()
+    );
+    // Measured when written: 13 of 689 (75 wrong before the UMI anchor).
+    assert!(ambiguous <= 20, "{ambiguous} ambiguous");
+    for xb in ["0", "2", "3", "7", "8"] {
+        assert!(routes.contains_key(xb), "no XB {xb} read: {routes:?}");
+    }
+    // Planted UMIs ending in T reach the rescue routes, too.
+    assert!(on
+        .iter()
+        .any(|(id, p)| ["2", "3"].contains(&p.xb.as_str()) && planted(id).ends_with('T')));
 }

@@ -3,7 +3,9 @@
 //! (`--realign`), CB reframe (`--cb-reframe`), R1-tail re-lock
 //! (`--r1-tail-relock`), CB insertion (`--cb-insertion`), lenient Hamming-2
 //! (`--lenient`). Each rescue builds
-//! a corrected 28 bp R1; the first that succeeds wins.
+//! a corrected 28 bp R1; the first that succeeds wins. Every corrected R1
+//! takes its UMI right after the corrected CB as it sits in the read
+//! ([`umi_start`]).
 
 use crate::extract::Extracted;
 use crate::orient::Oriented;
@@ -11,6 +13,7 @@ use crate::pipeline::CbStatus;
 
 use super::relock::relock_r1;
 use super::types::Stats;
+use super::umi_anchor::umi_start;
 use super::worker::Shared;
 
 /// What the rescue chain decided for one read.
@@ -22,6 +25,28 @@ pub(crate) struct Rescue {
     pub route: u8,
     /// Re-located CB start, when the R1-tail re-lock rescued the read.
     pub relocked_at: Option<usize>,
+}
+
+/// Corrected CB (+ its qualities) and the UMI after the CB's end in the read
+/// (see [`umi_start`]); `None` if the read ends before the UMI does.
+fn r1_with_umi(
+    o: &Oriented,
+    cb: &[u8],
+    cb_q: &[u8],
+    cb_start: usize,
+    default_end: usize,
+    umi_len: usize,
+) -> Option<(Vec<u8>, Vec<u8>)> {
+    let u = umi_start(&o.seq, cb, cb_start, default_end, umi_len);
+    let end = u + umi_len;
+    if end > o.seq.len() || end > o.qual.len() {
+        return None;
+    }
+    let mut s = cb.to_vec();
+    s.extend_from_slice(&o.seq[u..end]);
+    let mut q = cb_q.to_vec();
+    q.extend_from_slice(&o.qual[u..end]);
+    Some((s, q))
 }
 
 /// Run the chain. `located_confident`: both CB flanks found (see
@@ -44,9 +69,12 @@ pub(crate) fn rescue_barcode(
     let mut corrected_r1: Option<(Vec<u8>, Vec<u8>)> = match (sh.whitelist, e.r1, cb_status) {
         (Some(w), Some((r1s, r1e)), Some(CbStatus::Within1)) => {
             w.correct_within1(&o.seq[r1s..r1s + sh.cb_len]).map(|cb| {
-                let mut s = cb.to_vec();
-                s.extend_from_slice(&o.seq[r1s + sh.cb_len..r1e]);
-                (s, o.qual[r1s..r1e].to_vec())
+                let cb_q = &o.qual[r1s..r1s + sh.cb_len];
+                r1_with_umi(o, &cb, cb_q, r1s, r1s + sh.cb_len, sh.umi_len).unwrap_or_else(|| {
+                    let mut s = cb.to_vec();
+                    s.extend_from_slice(&o.seq[r1s + sh.cb_len..r1e]);
+                    (s, o.qual[r1s..r1e].to_vec())
+                })
             })
         }
         _ => None,
@@ -69,14 +97,14 @@ pub(crate) fn rescue_barcode(
                     let delta = (pts as i64 - r1s as i64) - (sh.cb_len + sh.umi_len) as i64;
                     if (delta == 1 || delta == -1) && pts >= sh.umi_len && pts <= o.seq.len() {
                         if let Some(cb) = w.realign_cb(&o.seq[r1s..], delta as i32) {
-                            let mut s = cb.to_vec();
-                            s.extend_from_slice(&o.seq[pts - sh.umi_len..pts]);
                             let mut q = o.qual[r1s..(r1s + sh.cb_len).min(o.qual.len())].to_vec();
                             q.resize(sh.cb_len, b'I');
-                            q.extend_from_slice(&o.qual[pts - sh.umi_len..pts]);
-                            corrected_r1 = Some((s, q));
-                            barcode_route = 2;
-                            stats.realigned += 1;
+                            let end = (r1s + sh.cb_len) as i64 + delta;
+                            corrected_r1 = r1_with_umi(o, &cb, &q, r1s, end as usize, sh.umi_len);
+                            if corrected_r1.is_some() {
+                                barcode_route = 2;
+                                stats.realigned += 1;
+                            }
                         }
                     }
                 }
@@ -90,14 +118,14 @@ pub(crate) fn rescue_barcode(
                     if pts >= sh.umi_len {
                         if let Some((cb, off)) = w.reframe_cb(&o.seq, r1s, sh.reframe_window) {
                             let cb_s = (r1s as i64 + off).max(0) as usize;
-                            let mut s = cb.to_vec();
-                            s.extend_from_slice(&o.seq[pts - sh.umi_len..pts]);
                             let mut q = o.qual[cb_s..(cb_s + sh.cb_len).min(o.qual.len())].to_vec();
                             q.resize(sh.cb_len, b'I');
-                            q.extend_from_slice(&o.qual[pts - sh.umi_len..pts]);
-                            corrected_r1 = Some((s, q));
-                            barcode_route = 3;
-                            stats.reframed += 1;
+                            let end = cb_s + sh.cb_len;
+                            corrected_r1 = r1_with_umi(o, &cb, &q, cb_s, end, sh.umi_len);
+                            if corrected_r1.is_some() {
+                                barcode_route = 3;
+                                stats.reframed += 1;
+                            }
                         }
                     }
                 }
@@ -109,7 +137,9 @@ pub(crate) fn rescue_barcode(
                 if let Some((s, q, cb_s)) =
                     relock_r1(w, &o.seq, &o.qual, r1s, sh.cb_len, sh.umi_len)
                 {
-                    corrected_r1 = Some((s, q));
+                    let (cb, cb_q) = (&s[..sh.cb_len], &q[..sh.cb_len]);
+                    let end = cb_s + sh.cb_len;
+                    corrected_r1 = r1_with_umi(o, cb, cb_q, cb_s, end, sh.umi_len).or(Some((s, q)));
                     barcode_route = 7;
                     stats.relocked += 1;
                     relocked_at = Some(cb_s);
@@ -124,13 +154,14 @@ pub(crate) fn rescue_barcode(
                 let umi_end = r1s + sh.cb_len + 1 + sh.umi_len;
                 if umi_end <= o.seq.len() && umi_end <= o.qual.len() {
                     if let Some((cb, skip)) = w.insertion_cb(&o.seq[r1s..]) {
-                        let mut s = cb.to_vec();
-                        s.extend_from_slice(&o.seq[r1s + sh.cb_len + 1..umi_end]);
                         let mut q = o.qual[r1s..r1s + skip].to_vec();
-                        q.extend_from_slice(&o.qual[r1s + skip + 1..umi_end]);
-                        corrected_r1 = Some((s, q));
-                        barcode_route = 8;
-                        stats.cb_insertion += 1;
+                        q.extend_from_slice(&o.qual[r1s + skip + 1..r1s + sh.cb_len + 1]);
+                        let end = r1s + sh.cb_len + 1;
+                        corrected_r1 = r1_with_umi(o, &cb, &q, r1s, end, sh.umi_len);
+                        if corrected_r1.is_some() {
+                            barcode_route = 8;
+                            stats.cb_insertion += 1;
+                        }
                     }
                 }
             }
@@ -139,9 +170,13 @@ pub(crate) fn rescue_barcode(
             // keeping the original (correctly-positioned) UMI.
             if corrected_r1.is_none() && sh.lenient && located_confident {
                 if let Some(cb2) = w.correct_within2(&o.seq[r1s..r1s + sh.cb_len]) {
-                    let mut s = cb2.to_vec();
-                    s.extend_from_slice(&o.seq[r1s + sh.cb_len..r1e]);
-                    corrected_r1 = Some((s, o.qual[r1s..r1e].to_vec()));
+                    let cb_q = &o.qual[r1s..r1s + sh.cb_len];
+                    let end = r1s + sh.cb_len;
+                    corrected_r1 = r1_with_umi(o, &cb2, cb_q, r1s, end, sh.umi_len).or_else(|| {
+                        let mut s = cb2.to_vec();
+                        s.extend_from_slice(&o.seq[r1s + sh.cb_len..r1e]);
+                        Some((s, o.qual[r1s..r1e].to_vec()))
+                    });
                     barcode_route = 4;
                     stats.corrected2 += 1;
                 }

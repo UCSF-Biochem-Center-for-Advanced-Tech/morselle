@@ -98,6 +98,25 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   generated 384-sample sheet; exact, indel, and no-match reads).
 
 ### Fixed
+- Rescued barcodes now take their UMI from right after the corrected
+  barcode as it sits in the read, for every rescue route (Hamming-1,
+  realign, reframe, re-lock, insertion, Hamming-2). The barcode end is
+  where the whitelist barcode aligns with the fewest edits (route default
+  ±1); when an indel at the barcode's last bases and a substitution fit
+  equally, the exact poly-T start decides. Realign and reframe used to
+  anchor the UMI on the poly-T start, which tolerates isolated mismatches,
+  so a UMI ending in T or T-rich (`..TTATTG`) was partly absorbed and came
+  out shifted, sometimes by several bases. Compared with Illumina UB on the
+  same library (UMIs ending in T: 26.4%), on CAT02 slices UMIs from the
+  rescue routes ended in T 17.8% / 14.9% (barcode-first / barcode-last)
+  before and 28.5% / 30.3% after (exact reads 26.6% / 28.1%); their largest
+  per-position deviation from exact reads fell from 9.6 / 13.7 to 1.9 / 2.2
+  points. Changed UMIs: reframe 78% (old ones were mostly shifted),
+  Hamming-1 6.7% / 4.6% (an indel at the barcode end read as a mismatch),
+  realign, re-lock and insertion 0.5-7%. Barcodes, samples, routes and
+  exact-match reads are unchanged. An insertion before the barcode's last
+  base followed by a UMI ending in T still reads as a substitution (the
+  read cannot tell them apart).
 - The `--index-window` float no longer takes a one-mismatch hit in a
   shifted frame when another sample competes -- another frame naming a
   different sample, or the read being one insertion or deletion from

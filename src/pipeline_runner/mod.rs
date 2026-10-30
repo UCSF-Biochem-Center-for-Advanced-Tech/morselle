@@ -12,6 +12,7 @@ pub(crate) mod rescue;
 #[cfg(test)]
 mod tests;
 pub(crate) mod types;
+pub(crate) mod umi_anchor;
 pub(crate) mod worker;
 
 pub use engine::run;

@@ -7,6 +7,7 @@ extract_golden extract_outputs_match_golden
 extract_golden index_evidence_counters_are_consistent
 extract_relock_e2e cb_insertion_rescues_an_extra_base_in_the_barcode
 extract_relock_e2e every_emitted_cb_and_umi_is_the_planted_one
+extract_relock_e2e every_rescued_umi_is_the_planted_one
 extract_relock_e2e relock_rescues_tail_indels_with_the_planted_cb_and_umi
 failed_output barcode_table_is_written_only_with_barcode_metrics
 failed_output extract_per_barcode_values_include_barcode_less_reads
@@ -285,6 +286,12 @@ src/lib.rs pipeline_runner::relock::tests::single_and_double_indels_in_the_tail_
 src/lib.rs pipeline_runner::tests::tests::minimap2_header_uses_10x_style_tags
 src/lib.rs pipeline_runner::tests::tests::processing_tags_are_valid_sam_style_fastq_comments
 src/lib.rs pipeline_runner::tests::tests::r2_rc_matches_reference
+src/lib.rs pipeline_runner::umi_anchor::tests::a_real_substitution_keeps_the_fixed_frame
+src/lib.rs pipeline_runner::umi_anchor::tests::exact_barcode_keeps_the_positional_umi_even_when_it_ends_in_t
+src/lib.rs pipeline_runner::umi_anchor::tests::inner_insertion_or_deletion_places_the_umi_after_the_real_barcode_end
+src/lib.rs pipeline_runner::umi_anchor::tests::last_base_indel_that_looks_like_a_substitution_is_resolved_by_poly_t
+src/lib.rs pipeline_runner::umi_anchor::tests::last_base_insertion_with_a_t_ending_umi_is_ambiguous
+src/lib.rs pipeline_runner::umi_anchor::tests::no_poly_t_falls_back_to_the_route_default
 src/lib.rs probe_barcode::tests::loads_and_reports_len
 src/lib.rs probe_barcode::tests::locates_exact_match_at_confirmed_offset
 src/lib.rs probe_barcode::tests::no_confident_match_still_reports_raw
