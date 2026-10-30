@@ -6,6 +6,7 @@ use crate::orient::{orient, OrientCfg};
 use crate::pipeline::{CbStatus, Orientation, ReadClass};
 
 use super::barcode_metrics::{bump, observe};
+use super::flex_flank::flex_v2_flank;
 use super::formatting::{
     append_probe_tags, append_processing_tags, flush_failed_buf, minimap2_header, push_fastq,
     push_fastq_r2_rc, FLUSH_BYTES, MIN_POLYT_FLANK,
@@ -132,8 +133,13 @@ pub(crate) fn process_one(
         // flanks are present — the R1-primer tail (5') is lock-confirmed and the
         // dT-primer run (3') is long enough. Then a whitelist miss is a true base
         // error, not a mis-location.
-        let located_confident =
-            o.r1_tail_confirmed && e.polyt_run_len >= MIN_POLYT_FLANK && e.r1.is_some();
+        // On Flex v2 (no dT run) the fixed sequence after the UMI is the 3'
+        // flank instead.
+        let three_prime_flank = e.polyt_run_len >= MIN_POLYT_FLANK
+            || (sh.flex
+                && e.r1
+                    .is_some_and(|(r1s, _)| flex_v2_flank(&o.seq, r1s + sh.cb_len + sh.umi_len)));
+        let located_confident = o.r1_tail_confirmed && three_prime_flank && e.r1.is_some();
         if cb_status.is_some() && located_confident {
             stats.cb_located_confident += 1;
         }

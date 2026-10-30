@@ -279,6 +279,9 @@ src/lib.rs overlap::tests::short_mates_do_not_underflow
 src/lib.rs overlap::tests::the_tag_reconstructs_both_mates_from_the_merge
 src/lib.rs overlap::tests::the_tag_records_disagreements_losslessly
 src/lib.rs overlap::tests::unrelated_reads_do_not_merge
+src/lib.rs pipeline_runner::flex_flank::tests::absent_or_two_edits_or_far_away_is_not_found
+src/lib.rs pipeline_runner::flex_flank::tests::found_after_every_linker_length
+src/lib.rs pipeline_runner::flex_flank::tests::found_with_one_edit_or_a_shifted_umi
 src/lib.rs pipeline_runner::relock::rescue_tests::rescue_reads_cb_and_umi_after_an_indel_shifted_tail
 src/lib.rs pipeline_runner::relock::tests::a_read_without_the_tail_never_relocks
 src/lib.rs pipeline_runner::relock::tests::exact_tail_relocks_to_the_true_cb_start

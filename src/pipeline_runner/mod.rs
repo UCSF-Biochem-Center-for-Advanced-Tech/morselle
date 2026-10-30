@@ -3,6 +3,7 @@
 //! realignment).
 pub(crate) mod barcode_metrics;
 pub(crate) mod engine;
+pub(crate) mod flex_flank;
 pub(crate) mod formatting;
 pub(crate) mod orientation_scan;
 pub(crate) mod process;

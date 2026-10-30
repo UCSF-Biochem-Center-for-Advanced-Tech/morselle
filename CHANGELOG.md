@@ -7,6 +7,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- `extract --flex`: Flex v2 reads have no dT run after the UMI, so almost
+  no barcode was "confidently located" (both flanks found) and the rescues
+  that require it (`--cb-insertion`, `--cb-reframe`, `--lenient`) never ran
+  (CAT06: 0.1% of located barcodes). With `--flex`, the Flex v2 fixed
+  sequence `TTGCTAGGACCG`, found with at most one edit 0-3 bp (plus 2 bp
+  slack) after the UMI, now serves as the 3' flank: 93.8% confidently
+  located. On a CAT06 shard with `--cb-insertion`, 818,380 reads (1.9%) are
+  rescued, assigned reads go from 69.15% to 70.84%, and 93.3% of rescued
+  barcodes are right against Illumina molecules (Hamming-1 91.6%). Runs
+  without `--flex` are unchanged (CAT02 output byte-identical).
 - `extract --index-indels`: match an i5/i7 that carries one insertion or
   deletion inside the index (precomputed one-indel lookup tables, floated
   over the same `--index-window` frames). It runs only after the
