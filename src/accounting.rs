@@ -45,6 +45,96 @@ pub struct DemuxMetrics {
     /// downstream matcher (probe-set, guide capture, ...) in isolation from
     /// upstream capture-length loss.
     pub per_sample_early_boundary_found: Vec<SampleCount>,
+    /// Per-index evidence for every read whose R1 was located (the early
+    /// demux population): which index regions are in the read at all and
+    /// which matched a sample.
+    pub index_evidence: IndexEvidenceCounts,
+    /// One-indel index matching (`--index-indels`) active, per index.
+    pub index_indels_i5: bool,
+    pub index_indels_i7: bool,
+}
+
+/// i5/i7 presence and identification counts (early demux, R1 located).
+///
+/// "Seen" = the index region lies inside the read (i5: R1 located far enough
+/// in; i7: 3' adapter located and the read runs past it). "Identified" = it
+/// matched a sample, or a candidate set of samples sharing that key. `full` = both seen and both identified to the same
+/// sample (= `via_dual` early); every other R1-located read is `partial`.
+/// `identified_both` includes conflicts (both matched, different samples).
+#[derive(Serialize, Default, Clone, Debug, PartialEq, Eq)]
+pub struct IndexEvidenceCounts {
+    pub reads: u64,
+    pub full: u64,
+    pub partial: u64,
+    pub seen_both: u64,
+    pub seen_i5_only: u64,
+    pub seen_i7_only: u64,
+    pub seen_none: u64,
+    pub identified_both: u64,
+    pub identified_i5_only: u64,
+    pub identified_i7_only: u64,
+    pub identified_none: u64,
+    /// Identified only through the one-indel pass (`--index-indels`).
+    pub identified_i5_via_indel: u64,
+    pub identified_i7_via_indel: u64,
+    /// Matched a key several samples share (a candidate set, not one
+    /// sample): assigned only if the other index narrows it to one.
+    pub identified_i5_shared: u64,
+    pub identified_i7_shared: u64,
+    /// Not identified because a shifted-frame mismatch hit had a competing
+    /// sample (another frame, or one indel from another sample's index).
+    pub i5_float_tie: u64,
+    pub i7_float_tie: u64,
+}
+
+impl IndexEvidenceCounts {
+    /// Count one R1-located read.
+    pub fn observe(&mut self, ev: &crate::demux::IndexEvidence, dual: bool) {
+        self.reads += 1;
+        if dual {
+            self.full += 1;
+        } else {
+            self.partial += 1;
+        }
+        match (ev.i5_seen, ev.i7_seen) {
+            (true, true) => self.seen_both += 1,
+            (true, false) => self.seen_i5_only += 1,
+            (false, true) => self.seen_i7_only += 1,
+            (false, false) => self.seen_none += 1,
+        }
+        match (ev.i5.matched(), ev.i7.matched()) {
+            (true, true) => self.identified_both += 1,
+            (true, false) => self.identified_i5_only += 1,
+            (false, true) => self.identified_i7_only += 1,
+            (false, false) => self.identified_none += 1,
+        }
+        self.identified_i5_via_indel += u64::from(ev.i5.via_indel);
+        self.identified_i7_via_indel += u64::from(ev.i7.via_indel);
+        self.identified_i5_shared += u64::from(ev.i5.shared.is_some());
+        self.identified_i7_shared += u64::from(ev.i7.shared.is_some());
+        self.i5_float_tie += u64::from(ev.i5.float_tie);
+        self.i7_float_tie += u64::from(ev.i7.float_tie);
+    }
+
+    pub fn add(&mut self, o: &Self) {
+        self.reads += o.reads;
+        self.full += o.full;
+        self.partial += o.partial;
+        self.seen_both += o.seen_both;
+        self.seen_i5_only += o.seen_i5_only;
+        self.seen_i7_only += o.seen_i7_only;
+        self.seen_none += o.seen_none;
+        self.identified_both += o.identified_both;
+        self.identified_i5_only += o.identified_i5_only;
+        self.identified_i7_only += o.identified_i7_only;
+        self.identified_none += o.identified_none;
+        self.identified_i5_via_indel += o.identified_i5_via_indel;
+        self.identified_i7_via_indel += o.identified_i7_via_indel;
+        self.identified_i5_shared += o.identified_i5_shared;
+        self.identified_i7_shared += o.identified_i7_shared;
+        self.i5_float_tie += o.i5_float_tie;
+        self.i7_float_tie += o.i7_float_tie;
+    }
 }
 
 /// Top-level run metrics, serialized to `metrics_summary.json`.
@@ -124,6 +214,13 @@ pub struct WhitelistMetrics {
     pub gated_out: u64,
     pub realigned: u64,
     pub reframed: u64,
+    /// Rescued by `--r1-tail-relock` (XB:i:7).
+    pub relocked: u64,
+    /// Re-locked reads the early demux left unassigned, assigned by
+    /// demultiplexing again from the re-located CB start.
+    pub relock_reanchored: u64,
+    /// Rescued by `--cb-insertion` (XB:i:8).
+    pub cb_insertion: u64,
     pub corrected_hamming2: u64,
 }
 

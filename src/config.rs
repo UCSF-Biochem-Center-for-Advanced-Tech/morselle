@@ -87,11 +87,12 @@ pub struct Params {
     /// (i5,i7) pairs to be distinct, not either index alone), `i5`/`i7`
     /// (one index only, skipping the other entirely -- `i5` needs only
     /// `r1s`, no adapter dependency, reaching the widest read population).
-    /// Unset (default): auto -- picks `dual` if both indices are
-    /// standalone-safe (Hamming margin `> 2 * --index-max-mm`), else
-    /// whichever single index is safe, else `both`. `i5`/`i7` are refused at
-    /// startup if the real sample sheet doesn't support them safely, whether
-    /// picked explicitly or by auto.
+    /// Unset (default): auto -- `dual`, decided per read: both indexes are
+    /// looked up; one alone assigns only when it names exactly one sample,
+    /// and an index several samples share (a combinatorial sheet, or
+    /// overlapping mismatch neighbourhoods) needs the other index to narrow
+    /// it to one. `i5`/`i7` are refused at startup if the real sample sheet
+    /// doesn't support them safely.
     #[arg(long, value_enum)]
     pub demux_index: Option<crate::demux::DemuxMode>,
 
@@ -99,6 +100,20 @@ pub struct Params {
     /// the R1-primer/adapter region that shift the index. 0 = rigid frame.
     #[arg(long, default_value_t = 3)]
     pub index_window: isize,
+
+    /// Also match an i5/i7 carrying one insertion or deletion inside the index
+    /// (one edit in total, no further mismatch), floating over the same
+    /// ±`--index-window` frames. Runs only when the mismatch-only search finds
+    /// nothing, so reads that match today are unchanged. Enabled per index only
+    /// if the sample sheet is safe for it: minimum pairwise edit distance ≥ 3,
+    /// and no one-edit variant of any index (in its real adapter flanks) is sent
+    /// to a different sample by the indel pass; otherwise that index stays
+    /// mismatch-only, with a warning. On by default (CAT02 Multiome and CAT06
+    /// Flex: more reads assigned, no read moved between samples);
+    /// `--index-indels false` turns it off.
+    #[arg(long, default_value_t = true, num_args = 0..=1, default_missing_value = "true",
+          action = clap::ArgAction::Set)]
+    pub index_indels: bool,
 
     /// Single-indel CB realignment (M5): when the measured CB+UMI span is off by
     /// exactly ±1, the CB carries a homopolymer indel that frame-shifted the 16 bp
@@ -112,15 +127,41 @@ pub struct Params {
 
     /// CB reframe rescue: for confidently-located CB-fails, try nearby frames
     /// (a homopolymer indel shifts the 16 bp grab) and accept a unique within-1
-    /// whitelist hit, re-registering the UMI off the dT anchor. On by default —
-    /// confident-location + unique-hit guards keep precision.
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    /// whitelist hit. Off by default: scored against Illumina molecules from
+    /// the same library (CAT02 M2_GEX), only ~51-59% of reframed barcodes are
+    /// right (Hamming-1 78-83%, realign 97-99%).
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     pub cb_reframe: bool,
 
     /// Max CB frame shift (each side) tried by the reframe rescue. Offset +1 (the
     /// dominant SBX homopolymer-deletion mode) is tried first.
     #[arg(long, default_value_t = 2)]
     pub reframe_window: usize,
+
+    /// R1-tail re-lock rescue (`XB:i:7`): for CB-fails, re-find the R1-primer
+    /// tail (last 15 bp) allowing up to two edits, insertions and deletions
+    /// included, and read the CB and UMI right after it. Accepted only when
+    /// that start differs from the original lock and its CB is on the
+    /// whitelist or a unique Hamming-1 neighbour. Runs after realign and
+    /// reframe, only on reads they leave failing. On by default: against
+    /// Illumina molecules from the same libraries its barcodes are right as
+    /// often as Hamming-1's (CAT02 91% / 79%, CAT06 Flex 91%);
+    /// `--r1-tail-relock false` turns it off.
+    #[arg(long, default_value_t = true, num_args = 0..=1, default_missing_value = "true",
+          action = clap::ArgAction::Set)]
+    pub r1_tail_relock: bool,
+
+    /// CB insertion rescue (`XB:i:8`): for a confidently located CB-fail the
+    /// earlier rescues leave, accept the unique whitelist barcode that drops
+    /// one inner base of the 17 bp at the CB lock (no one-deletion reading may
+    /// name another barcode); the UMI is the 12 bp after it. Insertions only:
+    /// deletion readings landed near chance on real data. On by default:
+    /// against Illumina molecules from the same libraries its barcodes are
+    /// right about as often as Hamming-1's (CAT02 89% / 78%, CAT06 Flex 93%);
+    /// `--cb-insertion false` turns it off.
+    #[arg(long, default_value_t = true, num_args = 0..=1, default_missing_value = "true",
+          action = clap::ArgAction::Set)]
+    pub cb_insertion: bool,
 
     /// Lenient CB recovery: for confidently-located CB-fails, accept a unique
     /// Hamming-2 whitelist hit and rewrite the CB. Off by default (slower, lower

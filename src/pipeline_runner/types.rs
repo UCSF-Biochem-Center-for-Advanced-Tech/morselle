@@ -20,6 +20,10 @@ pub(crate) struct Stats {
     pub gated_out: u64,
     pub realigned: u64,
     pub reframed: u64,
+    /// CB-fails rescued by the R1-tail re-lock (`--r1-tail-relock`).
+    pub relocked: u64,
+    pub relock_reanchored: u64,
+    pub cb_insertion: u64,
     pub corrected2: u64,
     /// CBs whose location is dual-anchor confirmed (R1-tail flank + polyT flank).
     pub cb_located_confident: u64,
@@ -54,6 +58,8 @@ pub(crate) struct Stats {
     pub via_i5_only_early: u64,
     pub via_i7_only_early: u64,
     pub via_conflict_early: u64,
+    /// i5/i7 seen / identified per R1-located read (same population as above).
+    pub index_evidence: crate::accounting::IndexEvidenceCounts,
     /// R1 itself was never located (orientation failed, or R1 not found even
     /// though oriented) -- demux is structurally unreachable for these, same
     /// as for Illumina's own index read, which requires nothing about R1/R2
@@ -104,6 +110,9 @@ impl Stats {
         self.gated_out += o.gated_out;
         self.realigned += o.realigned;
         self.reframed += o.reframed;
+        self.relocked += o.relocked;
+        self.relock_reanchored += o.relock_reanchored;
+        self.cb_insertion += o.cb_insertion;
         self.corrected2 += o.corrected2;
         self.cb_located_confident += o.cb_located_confident;
         self.cb_fail_confident += o.cb_fail_confident;
@@ -124,6 +133,7 @@ impl Stats {
         self.via_i5_only_early += o.via_i5_only_early;
         self.via_i7_only_early += o.via_i7_only_early;
         self.via_conflict_early += o.via_conflict_early;
+        self.index_evidence.add(&o.index_evidence);
         if self.per_sample.len() < o.per_sample.len() {
             self.per_sample.resize(o.per_sample.len(), 0);
         }

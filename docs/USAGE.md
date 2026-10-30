@@ -21,9 +21,12 @@ For every read, `morselle`:
    poly(dT) primer and the 3′ read-through adapter).
 3. **Trims** the 3′ Illumina read-through adapter from the cDNA — including the
    homopolymer-indel variants SBX produces (`AAGAGC`→`AAAGAGC`) and 3′-end partials.
-4. **Gates / rescues** the cell barcode against the 10x whitelist (exact, Hamming-1,
-   and optional homopolymer-reframe / indel-realign rescues).
-5. **Demultiplexes** by i5/i7 against the sample sheet (offset-tolerant matching).
+4. **Gates / rescues** the cell barcode against the 10x whitelist: exact, Hamming-1,
+   indel realign, R1-tail re-lock and one-extra-base rescues by default, and
+   opt-in reframe / Hamming-2. The UMI is the 12 bp right after the corrected
+   barcode as it sits in the read.
+5. **Demultiplexes** by i5/i7 against the sample sheet (offset-tolerant matching,
+   one insertion or deletion allowed per index when the sheet is safe for it).
 6. **Emits** per-sample R1/R2 pairs in 10x reference naming, plus a full metrics report.
 
 R2 is written **reverse-complemented** (with reversed quality) so it follows the
@@ -268,10 +271,14 @@ orientations; orientation is auto-detected and enforced per file).
 | `--processing-tags` | off | Add SBX processing-provenance tags (`XO`, `XB`, `XI`, `XA`, `XL`) to R2 comments. Implied by `--minimap2`. |
 | `--orientation` | auto | Force `p5-led` / `p7-led` if auto-detect is wrong. |
 | `--cb-gate` | on | Drop pairs whose CB is neither on-whitelist nor within Hamming-1. |
-| `--cb-reframe` | on | Rescue homopolymer-indel frame-shifted barcodes. |
+| `--cb-reframe` | off | Rescue homopolymer-indel frame-shifted barcodes (`XB:i:3`). Off by default: on CAT02 Multiome, scored against Illumina molecules from the same library, only about half of reframed barcodes are right (Hamming-1 78–83%, realign 97–99%). |
+| `--r1-tail-relock` | on | For barcode failures, re-find the R1-primer tail allowing up to two insertions/deletions/mismatches and read the barcode + UMI after it; accepted only on a whitelist (or unique within-1) barcode (`XB:i:7`). On CAT02 Multiome: +0.54% / +0.23% of reads assigned; rescued barcodes land on cell-like barcodes at the exact-match rate. A re-locked read the index demux left unassigned is demultiplexed again from the re-located barcode (`whitelist.relock_reanchored`). Against Illumina molecules from the same library, its barcodes are right as often as Hamming-1's (CAT02 91% / 79%, CAT06 Flex 91%). `--r1-tail-relock false` turns it off. |
 | `--index-window` | 3 | Offset-tolerant i5/i7 matching (absorbs indels shifting the index). |
+| `--index-indels` | on | Also match an i5/i7 with one insertion or deletion inside the index, over the same `--index-window` frames, only when mismatch-only matching finds nothing. Enabled per index only if the sample sheet is safe for it (logged). On CAT02 Multiome: +0.2–0.7% of reads assigned and +2 points of dual-index assignment, no read moved between samples; CAT06 Flex: part of +0.69 points assigned with re-lock. `--index-indels false` turns it off. |
 | `--index-max-mm` | 1 | Max mismatches when matching sample-sheet indices. |
+| `--demux-index` | auto | `dual`, `both`, `i5` or `i7`. Auto = `dual` with the per-read rule: an index alone assigns only when it names exactly one sample; an index shared by several samples (combinatorial sheets, or overlapping mismatch neighbourhoods) is narrowed to one by the other index, or the read stays undetermined. |
 | `--realign` | on | Single-indel CB rescue — recovers ~+1% of reads at high precision (`--realign false` to disable). |
+| `--cb-insertion` | on | For confidently located barcode failures, accept the unique whitelist barcode that removes one extra base inside the 17 bp at the barcode (`XB:i:8`); the UMI is the 12 bp after it. Insertions only (deletion readings land near chance). On CAT02 Multiome: +0.89% / +0.53% of reads assigned; rescued barcodes land on cell-like barcodes at 48.6% / 19.0% (Hamming-1 47.2% / 24.2%, reframe 37.8% / 19.5%). With `--flex`, Flex v2's fixed sequence after the UMI (`TTGCTAGGACCG`) confirms the barcode location in place of the dT run; on a CAT06 Flex shard this rescues 1.9% of reads (+1.7 points assigned) and 93% of their barcodes are right against Illumina molecules (Hamming-1 92%). `--cb-insertion false` turns it off. |
 | `--lenient` | off | Within-2 CB rescue — leave off (~51% precise on the dense ARC whitelist). |
 | `--min-cdna-len` | 50 | Shortest cDNA emitted as R2. |
 | `--max-r2-len` | 0 (uncapped) | Cap emitted R2 length (seq+qual together). 10x reference hard-caps at 649 bp; `--cellranger` sets this. |
@@ -317,7 +324,8 @@ the following SAM-style tags, which `morselle minimap` preserves when invoked wi
 - `CY` / `UY`: raw barcode and UMI Phred qualities.
 - `XO`: original SBX read orientation (`5` = P5-led, `7` = P7-led).
 - `XB`: barcode route: 0 exact, 1 Hamming-1, 2 indel realignment, 3 reframe,
-  4 Hamming-2, 5 no whitelist, 6 unrescued miss emitted with gating disabled.
+  4 Hamming-2, 5 no whitelist, 6 unrescued miss emitted with gating disabled,
+  7 R1-tail re-lock (`--r1-tail-relock`), 8 CB insertion (`--cb-insertion`).
 - `XI`: index route: 0 dual, 1 i5-only, 2 i7-only, 3 conflict, 4 no usable
   index, 5 demultiplexing not requested.
 - `XA`: anchor bitmask: 1 R1-primer tail, 2 poly-T, 4 cDNA adapter trimmed,
@@ -392,7 +400,17 @@ In `--out-dir`:
   FASTQ comments carry the barcode/UMI SAM tags described above.
 - `Undetermined_S0_L001_R{1,2}_001.fastq.gz` — pairs with no matchable index.
 - `metrics_summary.json` — full run accounting: totals, timing, read classes,
-  CB-gate stats, demux breakdown, per-sample counts.
+  CB-gate stats, demux breakdown, per-sample counts. `demux.index_evidence`
+  counts, for every read whose R1 primer was found: `full` (i5 and i7 both
+  seen and identified to the same sample) versus `partial`; which index
+  regions are in the read (`seen_both` / `seen_i5_only` / `seen_i7_only` /
+  `seen_none`); which matched a sample (`identified_both` / `_i5_only` /
+  `_i7_only` / `_none`; `both` includes conflicts; a match to an index shared
+  by several samples counts as identified); how many matched only through
+  `--index-indels`; how many matched a shared index
+  (`identified_i5_shared` / `_i7_shared`); and how many abstained because a
+  shifted-frame mismatch hit had a competing sample (`i5_float_tie` /
+  `i7_float_tie`).
 - `sample_sheet.csv` — the normalized flat sample sheet.
 
 Every run also prints a **RUN SUMMARY** to stderr (elapsed, threads, reads/sec,

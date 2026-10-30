@@ -44,7 +44,13 @@ pub(crate) struct Shared<'a> {
     pub realign: bool,
     pub cb_reframe: bool,
     pub reframe_window: usize,
+    /// R1-tail re-lock rescue (`--r1-tail-relock`).
+    pub r1_tail_relock: bool,
+    pub cb_insertion: bool,
     pub lenient: bool,
+    /// `--flex`: Flex v2's fixed sequence after the UMI stands in for the dT
+    /// flank of `located_confident` (see `flex_flank`).
+    pub flex: bool,
     pub index_len: usize,
     /// Max frame shift tried when matching i5/i7 (absorbs index-shifting indels).
     pub index_window: isize,

@@ -48,3 +48,14 @@ pub struct Outcome {
     pub sample: Option<usize>,
     pub via: DemuxVia,
 }
+
+/// Per-index evidence behind an [`Outcome`] (`Demuxer::assign_windowed_detail`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IndexEvidence {
+    /// The i5 region lies inside the read (R1 located far enough in).
+    pub i5_seen: bool,
+    /// The i7 region lies inside the read (3' adapter located, read long enough).
+    pub i7_seen: bool,
+    pub i5: super::indel::IndexMatch,
+    pub i7: super::indel::IndexMatch,
+}

@@ -79,10 +79,15 @@ pub fn run(cli: &Cli) -> Result<()> {
 
     // Output targets: per-sample then Undetermined (last) when demuxing, else one
     // combined target. Each file is a single thread-safe gzip member.
-    let demuxer = sheet
+    let mut demuxer = sheet
         .as_ref()
         .map(|s| Demuxer::new(s, cli.params.demux_cfg()))
         .transpose()?;
+    if cli.params.index_indels {
+        if let Some(d) = demuxer.as_mut() {
+            d.enable_indels(cli.params.index_window);
+        }
+    }
     let n_samples = demuxer.as_ref().map_or(1, |d| d.sample_ids().len());
     // Naming-convention classification (matches this project's real sample
     // sheets throughout, e.g. TSeq100_L1_GEX / TSeq100_L1_CRI): used only to
@@ -162,7 +167,10 @@ pub fn run(cli: &Cli) -> Result<()> {
         realign: cli.params.realign,
         cb_reframe: cli.params.cb_reframe,
         reframe_window: cli.params.reframe_window,
+        r1_tail_relock: cli.params.r1_tail_relock,
+        cb_insertion: cli.params.cb_insertion,
         lenient: cli.params.lenient,
+        flex: cli.params.flex,
         index_len,
         index_window: cli.params.index_window,
         n_samples,

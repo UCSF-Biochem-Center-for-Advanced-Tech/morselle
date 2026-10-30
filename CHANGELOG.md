@@ -6,6 +6,180 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-10-30
+
+Headline, default settings against 0.7.0 on the same reads, barcodes
+scored against Illumina Cell Ranger molecules from the same libraries:
+
+| Data | Assigned reads | Reads on a right barcode | Reads on a wrong barcode |
+|---|---|---|---|
+| CAT02 Multiome, barcode-first 4M | 56.14% → 57.98% | +4.7% (M2_GEX) | −26% |
+| CAT02 Multiome, barcode-last 2M | 45.35% → 45.69% | +2.1% (M2_GEX) | −30% |
+| CAT06 Flex v2, one 43.9M shard | 68.46% → 70.84% | re-lock 91%, insertion 93% right (Hamming-1 91%) | |
+
+Throughput is unchanged.
+
+### Added
+- `extract --flex`: Flex v2 reads have no dT run after the UMI, so almost
+  no barcode was "confidently located" (both flanks found) and the rescues
+  that require it (`--cb-insertion`, `--cb-reframe`, `--lenient`) never ran
+  (CAT06: 0.1% of located barcodes). With `--flex`, the Flex v2 fixed
+  sequence `TTGCTAGGACCG`, found with at most one edit 0-3 bp (plus 2 bp
+  slack) after the UMI, now serves as the 3' flank: 93.8% confidently
+  located. On a CAT06 shard with `--cb-insertion`, 818,380 reads (1.9%) are
+  rescued, assigned reads go from 69.15% to 70.84%, and 93.3% of rescued
+  barcodes are right against Illumina molecules (Hamming-1 91.6%). Runs
+  without `--flex` are unchanged (CAT02 output byte-identical).
+- `extract --index-indels`: match an i5/i7 that carries one insertion or
+  deletion inside the index (precomputed one-indel lookup tables, floated
+  over the same `--index-window` frames). It runs only after the
+  mismatch-only search finds nothing, so reads that match today are
+  unchanged. Each index is enabled only when the sample sheet is safe for it:
+  minimum pairwise edit distance ≥ 3, and no one-edit variant of any index,
+  placed in its real adapter flanks, is sent to another sample by the indel
+  pass. On by default since 0.8.0 (see Changed). On the CAT02 Multiome slices: assigned reads +0.74%
+  (barcode-first) / +0.20% (barcode-last) of all reads, dual-index
+  assignments +2.2 / +1.9 points, no read moved between samples (reads whose
+  two indexes now name different samples become conflicts, 0.04% / 0.03%),
+  throughput unchanged.
+- `extract --r1-tail-relock` (`XB:i:7`): an insertion or deletion in the
+  R1-primer tail can leave the mismatch-only lock a base or two off, so the
+  16 bp barcode grab fails the whitelist. For such barcode failures (after
+  realign and reframe), re-find the tail's last 15 bp with up to two edits
+  (bit-parallel Myers search over the first 120 bp) and read the barcode and
+  UMI right after it; accepted only when exactly one tied candidate start
+  gives a whitelist or unique within-1 barcode. On by default since 0.8.0 (see Changed). CAT02
+  Multiome slices: 14,412 / 2,473 reads rescued, assigned reads +0.54% /
+  +0.23% of all reads, rescued barcodes on cell-like barcodes at 58.2% /
+  29.6% (exact matches 60.3% / 30.1%, reframe 38.4% / 19.6%), no
+  previously emitted read changed, throughput unchanged.
+  `whitelist.relocked` counts them. The index demux ran on the original
+  lock, so its i5 anchor was off by the same base or two: 15.8% of re-locked
+  reads were undetermined on the barcode-first slice (exact: 3.4%). A
+  re-locked read the early demux left unassigned is now demultiplexed again
+  from the re-located barcode start (`whitelist.relock_reanchored`):
+  undetermined re-locked reads 15.8% → 5.3% / 4.1% → 2.6%, +1,346 / +35
+  reads assigned, no previously assigned read changed sample.
+- `extract --cb-insertion` (`XB:i:8`): for a confidently located barcode
+  failure the earlier rescues leave, accept the unique whitelist barcode
+  that removes one extra base inside the 17 bp at the barcode lock; no
+  one-deletion reading may name another barcode, and the UMI is the 12 bp
+  after it. Insertions only: re-measured after `--r1-tail-relock`, unique
+  one-edit hits among barcode failures are 1.6% / 0.95% of reads, but
+  deletion readings land on cell-like barcodes at 25.8% / 7.0% (near
+  chance) against 50.0% / 20.8% for insertions. Gated on confident location
+  like reframe (ungated: +1.22% / +0.80% assigned but 45.8% / 17.6%
+  cell-like). On by default since 0.8.0 (see Changed). CAT02 slices: assigned +0.89% / +0.53% of all
+  reads, cell-like 48.6% / 19.0% (Hamming-1 47.2% / 24.2%, reframe 37.8% /
+  19.5%), no previously emitted read changed. `whitelist.cb_insertion`
+  counts them.
+- `tests/extract_relock_e2e.rs`: `extract --whitelist` end to end on
+  generated reads with a generated whitelist (10x whitelists are not
+  committed, so the extract golden runs without one). Every one-base
+  insertion and deletion in the R1 primer's last 15 bp is planted; every
+  emitted barcode and UMI must equal the planted one, the exact, realign,
+  reframe and re-lock routes must all occur, and turning `--r1-tail-relock`
+  on must not change any read emitted without it.
+- `metrics_summary.json` `demux.index_evidence` and two new log lines: per
+  R1-located read, `full` (both indexes seen and identified to one sample)
+  versus `partial`, which index regions were seen, which were identified,
+  and how many only through `--index-indels`; `demux.index_indels_i5/_i7`
+  record whether it was active.
+- `tests/extract_golden.rs` pins `extract`'s output (FASTQ digests and core
+  counters) on the smoke fixture, as `golden_outputs.rs` does for
+  `molecules`/`matrix`.
+
+### Changed
+- `extract --cb-insertion` is now on by default (`--cb-insertion false`
+  turns it off; the bare flag still works). Against Illumina Cell Ranger
+  molecules from the same libraries, its barcodes are right about as often
+  as Hamming-1's: CAT02 Multiome 89% / 78% (Hamming-1 78% / 83%), CAT06 Flex
+  93% (Hamming-1 92%, with the Flex fixed-sequence flank). It adds 0.9% /
+  0.5% of reads on the CAT02 slices and 1.7 points on a CAT06 shard.
+- `extract --r1-tail-relock` and `--index-indels` are now on by default
+  (`--r1-tail-relock false` / `--index-indels false` turn them off; the bare
+  flags still work). Against Illumina Cell Ranger molecules from the same
+  libraries, re-locked barcodes are right as often as Hamming-1's (CAT02
+  Multiome 91% / 79% vs 78% / 83%; CAT06 Flex 91% vs 91%). With both on and
+  reframe off, assigned reads go from 56.14% / 45.35% (0.7.0) to 57.98% /
+  45.69% on CAT02 slices and from 68.46% to 69.15% on a CAT06 shard, with
+  about 30% fewer wrong-barcode reads on CAT02, at unchanged throughput.
+  The extract golden is regenerated: the default cases now use one-indel
+  index matching (smoke fixture: 2 more dual-index calls, 2 more reads
+  assigned with `--demux-index both`), and a new `--index-indels false`
+  case reproduces the previous default output exactly.
+- `extract --cb-reframe` is now off by default. Scored against Cell Ranger
+  molecules from the Illumina run of the same library (CAT02 M2_GEX: a read
+  counts when an Illumina molecule on its barcode has a UMI within one edit,
+  less a random-UMI control, relative to exact-match reads), only 51% / 59%
+  of reframed barcodes are right (barcode-first / barcode-last), against
+  Hamming-1 78% / 83%, re-lock 91% / 79%, insertion 89% / 78% and realign
+  97% / 99%. Reframe had rescued about 1.6% / 1.3% of reads. Pass
+  `--cb-reframe true` for the previous behaviour.
+- Demultiplexing decides per read which indexes it needs: both i5 and i7
+  are looked up, one alone assigns when it names exactly one sample, and
+  otherwise the read goes to the single sample both indexes agree on (no
+  common sample = conflict, several = undetermined). An index key several
+  samples share -- a combinatorial sheet reusing an i7, or two indexes whose
+  mismatch neighbourhoods overlap -- used to match nothing; it now keeps its
+  candidate samples for the other index to choose among. Auto
+  `--demux-index` therefore always resolves to `dual`; before, it fell back
+  to a single index or `both` when an index was not standalone-safe across
+  the whole sheet (a shared-i7 sheet could never assign those samples under
+  `both`). Explicit `both`/`i5`/`i7` keep their meaning. Unchanged on
+  CE15204 at the default `--index-max-mm 1` (no shared keys; both CAT02
+  slices identical). At `--index-max-mm 2`, where auto used to pick `both`:
+  assigned reads +24.5% (barcode-first) / +7.7% (barcode-last) of all
+  reads, no previously assigned read changed sample, and against the
+  default `--index-max-mm 1` run 23 / 20 reads (≤ 0.004%) differ.
+  `demux.index_evidence.identified_i5_shared` / `_i7_shared` count shared
+  matches.
+- Sample-index matching uses one table per index, built from the sample
+  sheet at startup, holding every allowed variant (≤`--index-max-mm`
+  mismatches, plus one-indel variants with `--index-indels`). Keys are
+  2-bit packed and looked up in a directly addressed array, so each frame is
+  one array read instead of a byte-slice hash. Per read: 36 → 21 ns when
+  both indexes match exactly, 125–395 → 39–86 ns when nothing matches; 384
+  samples cost the same as 14. Output is identical (extract golden and both
+  CAT02 slices, with and without `--index-indels`); end-to-end throughput is
+  unchanged because demux was already a small share of `extract`.
+- `benches/pipeline_hot_paths.rs`: `demux/*` benchmarks (CE15204 and a
+  generated 384-sample sheet; exact, indel, and no-match reads).
+
+### Fixed
+- Rescued barcodes now take their UMI from right after the corrected
+  barcode as it sits in the read, for every rescue route (Hamming-1,
+  realign, reframe, re-lock, insertion, Hamming-2). The barcode end is
+  where the whitelist barcode aligns with the fewest edits (route default
+  ±1); when an indel at the barcode's last bases and a substitution fit
+  equally, the exact poly-T start decides. Realign and reframe used to
+  anchor the UMI on the poly-T start, which tolerates isolated mismatches,
+  so a UMI ending in T or T-rich (`..TTATTG`) was partly absorbed and came
+  out shifted, sometimes by several bases. Compared with Illumina UB on the
+  same library (UMIs ending in T: 26.4%), on CAT02 slices UMIs from the
+  rescue routes ended in T 17.8% / 14.9% (barcode-first / barcode-last)
+  before and 28.5% / 30.3% after (exact reads 26.6% / 28.1%); their largest
+  per-position deviation from exact reads fell from 9.6 / 13.7 to 1.9 / 2.2
+  points. Changed UMIs: reframe 78% (old ones were mostly shifted),
+  Hamming-1 6.7% / 4.6% (an indel at the barcode end read as a mismatch),
+  realign, re-lock and insertion 0.5-7%. Barcodes, samples, routes and
+  exact-match reads are unchanged. An insertion before the barcode's last
+  base followed by a UMI ending in T still reads as a substitution (the
+  read cannot tell them apart).
+- The `--index-window` float no longer takes a one-mismatch hit in a
+  shifted frame when another sample competes -- another frame naming a
+  different sample, or the read being one insertion or deletion from
+  another sample's index. Such a hit is two edits from the nominal index,
+  so the index now abstains instead (`demux.index_evidence.i5_float_tie` /
+  `_i7_float_tie`). In CE15204, V4_GEX and M2_GEX i5s are one-base shifts of
+  each other, and a V4 i5 with one insertion used to land on M2: of the
+  1,176 one-edit i5 variants, 0 now reach the wrong sample (was 1), and 2
+  abstain. The one-indel tables are now always built for this check
+  (`--index-indels` still decides whether they assign reads). CAT02 slices:
+  66 / 6 index abstentions per 2M / 1M reads, no read changed sample, 26 /
+  0 reads became undetermined, and 3 / 1 reads whose indexes used to
+  conflict are now assigned on the other index. Demux bench unchanged.
+
 ## [0.7.0] — 2026-10-21
 
 First public (alpha) release, under the name **MORSELLE** (MOlecular Read
@@ -881,7 +1055,8 @@ R1/R2 FASTQs for 10x reference ARC.
 - End-of-run RUN SUMMARY report: timing, throughput, and lost breakdown.
 - Ubuntu install script (`install.sh`) and installation manual (`INSTALL.md`).
 
-[Unreleased]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/compare/v0.6.4...v0.7.0
 [0.6.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/compare/v0.5.9...v0.6.0
 [0.3.3]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/compare/v0.3.2...v0.3.3

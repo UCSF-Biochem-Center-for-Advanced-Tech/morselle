@@ -6,10 +6,13 @@ use crate::orient::{orient, OrientCfg};
 use crate::pipeline::{CbStatus, Orientation, ReadClass};
 
 use super::barcode_metrics::{bump, observe};
+use super::flex_flank::flex_v2_flank;
 use super::formatting::{
     append_probe_tags, append_processing_tags, flush_failed_buf, minimap2_header, push_fastq,
     push_fastq_r2_rc, FLUSH_BYTES, MIN_POLYT_FLANK,
 };
+use super::relock::reanchored_outcome;
+use super::rescue::rescue_barcode;
 use super::types::{ProcessingTags, Stats};
 use super::worker::Shared;
 
@@ -73,11 +76,17 @@ pub(crate) fn process_one(
         // or gating -- so this is the earliest point the assignment can run,
         // and it's cached (not recomputed) for the actual routing decision
         // further down, so output is unaffected by moving it here.
-        let early_outcome: Option<Outcome> = sh.demuxer.and_then(|d| {
+        let early_detail = sh.demuxer.and_then(|d| {
             let r1s = e.r1.map(|(s, _)| s)?;
             let (i5s, i7s) = index_anchor_starts(r1s, e.adapter_pos, sh.index_len);
-            Some(d.assign_windowed(&o.seq, i5s, i7s, sh.index_window))
+            Some(d.assign_windowed_detail(&o.seq, i5s, i7s, sh.index_window))
         });
+        if let Some((outcome, ev)) = &early_detail {
+            stats
+                .index_evidence
+                .observe(ev, outcome.via == DemuxVia::Dual);
+        }
+        let mut early_outcome: Option<Outcome> = early_detail.map(|(o, _)| o);
         if sh.demuxer.is_some() {
             match e.r1 {
                 None => stats.index_unreachable += 1,
@@ -124,8 +133,13 @@ pub(crate) fn process_one(
         // flanks are present — the R1-primer tail (5') is lock-confirmed and the
         // dT-primer run (3') is long enough. Then a whitelist miss is a true base
         // error, not a mis-location.
-        let located_confident =
-            o.r1_tail_confirmed && e.polyt_run_len >= MIN_POLYT_FLANK && e.r1.is_some();
+        // On Flex v2 (no dT run) the fixed sequence after the UMI is the 3'
+        // flank instead.
+        let three_prime_flank = e.polyt_run_len >= MIN_POLYT_FLANK
+            || (sh.flex
+                && e.r1
+                    .is_some_and(|(r1s, _)| flex_v2_flank(&o.seq, r1s + sh.cb_len + sh.umi_len)));
+        let located_confident = o.r1_tail_confirmed && three_prime_flank && e.r1.is_some();
         if cb_status.is_some() && located_confident {
             stats.cb_located_confident += 1;
         }
@@ -133,85 +147,17 @@ pub(crate) fn process_one(
             stats.cb_fail_confident += 1;
         }
 
-        // CB rescue (synthesizes a corrected R1). M5 indel realign (--realign);
-        // then CB reframe (--cb-reframe); then lenient Hamming-2 (--lenient).
-        // Reframe and lenient are gated on confident location.
-        // A unique Hamming-1 match is a correction, not merely a classification:
-        // emit the canonical whitelist sequence in R1 so downstream CB tags and
-        // fixed barcode templates refer to the same cell identifier.
-        let mut corrected_r1: Option<(Vec<u8>, Vec<u8>)> = match (sh.whitelist, e.r1, cb_status) {
-            (Some(w), Some((r1s, r1e)), Some(CbStatus::Within1)) => {
-                w.correct_within1(&o.seq[r1s..r1s + sh.cb_len]).map(|cb| {
-                    let mut s = cb.to_vec();
-                    s.extend_from_slice(&o.seq[r1s + sh.cb_len..r1e]);
-                    (s, o.qual[r1s..r1e].to_vec())
-                })
-            }
-            _ => None,
-        };
-
-        // XB: how the emitted barcode passed or was rescued. Values 0/1 are
-        // whitelist exact/within-1; 2/3/4 are indel/reframe/Hamming-2 rescue;
-        // 5 means no whitelist and 6 means an unrescued miss emitted with gating off.
-        let mut barcode_route = match cb_status {
-            Some(CbStatus::OnWhitelist) => 0,
-            Some(CbStatus::Within1) => 1,
-            Some(CbStatus::Fail) => 6,
-            _ => 5,
-        };
-        if cb_status == Some(CbStatus::Fail) {
-            if let (Some(w), Some((r1s, r1e))) = (sh.whitelist, e.r1) {
-                if sh.realign {
-                    if let Some(pts) = o.polyt_start {
-                        let delta = (pts as i64 - r1s as i64) - (sh.cb_len + sh.umi_len) as i64;
-                        if (delta == 1 || delta == -1) && pts >= sh.umi_len && pts <= o.seq.len() {
-                            if let Some(cb) = w.realign_cb(&o.seq[r1s..], delta as i32) {
-                                let mut s = cb.to_vec();
-                                s.extend_from_slice(&o.seq[pts - sh.umi_len..pts]);
-                                let mut q =
-                                    o.qual[r1s..(r1s + sh.cb_len).min(o.qual.len())].to_vec();
-                                q.resize(sh.cb_len, b'I');
-                                q.extend_from_slice(&o.qual[pts - sh.umi_len..pts]);
-                                corrected_r1 = Some((s, q));
-                                barcode_route = 2;
-                                stats.realigned += 1;
-                            }
-                        }
-                    }
-                }
-                // CB reframe rescue: a homopolymer indel shifted the 16 bp CB grab;
-                // try nearby frames (+1 first) for a unique within-1 whitelist hit,
-                // re-registering the UMI off the dT anchor (so R1 stays 28 bp).
-                // Gated on confident location to keep precision.
-                if corrected_r1.is_none() && sh.cb_reframe && located_confident {
-                    if let Some(pts) = o.polyt_start {
-                        if pts >= sh.umi_len {
-                            if let Some((cb, off)) = w.reframe_cb(&o.seq, r1s, sh.reframe_window) {
-                                let cb_s = (r1s as i64 + off).max(0) as usize;
-                                let mut s = cb.to_vec();
-                                s.extend_from_slice(&o.seq[pts - sh.umi_len..pts]);
-                                let mut q =
-                                    o.qual[cb_s..(cb_s + sh.cb_len).min(o.qual.len())].to_vec();
-                                q.resize(sh.cb_len, b'I');
-                                q.extend_from_slice(&o.qual[pts - sh.umi_len..pts]);
-                                corrected_r1 = Some((s, q));
-                                barcode_route = 3;
-                                stats.reframed += 1;
-                            }
-                        }
-                    }
-                }
-                // Lenient within-2 substitution rescue: only when the CB is
-                // confidently located (so the 2 mismatches are real base errors),
-                // keeping the original (correctly-positioned) UMI.
-                if corrected_r1.is_none() && sh.lenient && located_confident {
-                    if let Some(cb2) = w.correct_within2(&o.seq[r1s..r1s + sh.cb_len]) {
-                        let mut s = cb2.to_vec();
-                        s.extend_from_slice(&o.seq[r1s + sh.cb_len..r1e]);
-                        corrected_r1 = Some((s, o.qual[r1s..r1e].to_vec()));
-                        barcode_route = 4;
-                        stats.corrected2 += 1;
-                    }
+        let rescue = rescue_barcode(sh, &o, &e, cb_status, located_confident, stats);
+        let (corrected_r1, barcode_route) = (rescue.r1, rescue.route);
+        // A re-locked read the early demux left unassigned: demux it again
+        // from the re-located CB start (see `reanchored_outcome`).
+        if let (Some(cb_s), Some(d)) = (rescue.relocked_at, sh.demuxer) {
+            if early_outcome.is_some_and(|o| o.sample.is_none()) {
+                let (len, win) = (sh.index_len, sh.index_window);
+                let re = reanchored_outcome(d, &o.seq, cb_s, e.adapter_pos, len, win);
+                if re.is_some() {
+                    early_outcome = re;
+                    stats.relock_reanchored += 1;
                 }
             }
         }
@@ -309,7 +255,8 @@ pub(crate) fn process_one(
         // Route to a target index: sample, Undetermined (= n_samples), or combined.
         // Reuses `early_outcome` (computed right after `extract()`, above) --
         // same inputs (`r1s`/`e.adapter_pos`/`o.seq` are unchanged since
-        // then), so this is the identical result, not a fresh decision.
+        // then), so this is the identical result, not a fresh decision --
+        // except a re-locked read it left unassigned, re-anchored above.
         let mut index_route = 5; // XI=5: demultiplexing was not requested.
         let mut sample_assigned = false;
         let target_idx = if sh.demuxer.is_some() {

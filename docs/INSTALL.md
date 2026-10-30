@@ -192,8 +192,8 @@ molecule-representative alignment lies outside the retained interval.
 Clone a tagged release from GitHub, or transfer a checkout from your workstation:
 
 ```bash
-# A) clone the v0.7.0 release (recommended)
-git clone --branch v0.7.0 https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle.git
+# A) clone the v0.8.0 release (recommended)
+git clone --branch v0.8.0 https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle.git
 # NOTE: clone does NOT include the whitelist
 
 # B) rsync a working tree (includes a locally staged whitelist)
@@ -267,9 +267,13 @@ orientations; orientation is auto-detected and enforced per file). Useful flags:
 |---|---|---|
 | `--threads` | 0 (all cores) | worker pool size |
 | `--orientation` | auto | force `p5-led` / `p7-led` if auto-detect is wrong |
-| `--cb-reframe` | on | rescue homopolymer-indel frame-shifted barcodes |
+| `--cb-reframe` | off | rescue homopolymer-indel frame-shifted barcodes (about half right on CAT02; off by default) |
+| `--r1-tail-relock` | on | rescue barcodes mislocated by an indel in the R1-primer tail |
 | `--index-window` | 3 | offset-tolerant i5/i7 matching |
+| `--index-indels` | on | also match an i5/i7 with one insertion or deletion (sheet-checked for safety) |
+| `--demux-index` | auto | auto = per read: one index when it names exactly one sample, otherwise both must agree |
 | `--realign` | on | single-indel CB rescue (recovers ~+1% of reads at high precision); disable with `--realign false` |
+| `--cb-insertion` | on | rescue barcodes carrying one extra base (insertion) |
 | `--lenient` | off | within-2 CB rescue — **leave off** (only ~51% precise on the dense ARC whitelist) |
 | `--cb-gate` | on | drop pairs whose CB isn't on/near the whitelist |
 | `--cellranger` | off | 10x reference compatibility preset — applies the settings it requires (currently `--max-r2-len 649`; explicit flags override). **Use this for 10x reference input.** |

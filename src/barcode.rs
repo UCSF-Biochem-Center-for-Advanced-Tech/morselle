@@ -301,125 +301,53 @@ impl Whitelist {
             _ => None,
         }
     }
+
+    /// Cost-1 insertion rescue (`--cb-insertion`, `XB:i:8`): the read gained
+    /// one base inside the CB. `region` starts at the CB lock (≥ 17 bp).
+    /// Returns the corrected CB and the dropped position (1..=15) iff exactly
+    /// one whitelist barcode drops one inner base of the first 17, and no
+    /// one-deletion reading (a base restored at 1..=15 of the first 15) names a
+    /// different whitelist barcode -- the cost-1 uniqueness that was measured.
+    ///
+    /// Insertions only: on the CAT02 slices (private recovery-pools note,
+    /// 2026-10-29) unique cost-1 insertion hits among CB-fails land on
+    /// cell-like barcodes at 50.0% / 20.8% (barcode-first / barcode-last;
+    /// Hamming-1 47.4% / 24.3%, reframe 38.1% / 19.5%), deletion hits at only
+    /// 25.8% / 7.0%: a deletion reading has 4x the candidates (60 vs 15), and
+    /// SBX makes about twice as many insertions as deletions.
+    pub fn insertion_cb(&self, region: &[u8]) -> Option<([u8; 16], usize)> {
+        if region.len() < 17 {
+            return None;
+        }
+        let mut found: Option<(u32, usize)> = None;
+        let mut cb = [0u8; 16];
+        for skip in 1..16 {
+            cb[..skip].copy_from_slice(&region[..skip]);
+            cb[skip..].copy_from_slice(&region[skip + 1..17]);
+            let Some(code) = encode16(&cb) else { continue };
+            if self.contains_code(code) {
+                match found {
+                    None => found = Some((code, skip)),
+                    Some((c, _)) if c != code => return None,
+                    _ => {}
+                }
+            }
+        }
+        let (code, skip) = found?;
+        for pos in 1..16 {
+            cb[..pos].copy_from_slice(&region[..pos]);
+            cb[pos + 1..].copy_from_slice(&region[pos..15]);
+            for &b in b"ACGT" {
+                cb[pos] = b;
+                if encode16(&cb).is_some_and(|c| c != code && self.contains_code(c)) {
+                    return None;
+                }
+            }
+        }
+        Some((decode16(code), skip))
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn encode_roundtrip_and_reject() {
-        assert_eq!(encode16(b"AAAAAAAAAAAAAAAA"), Some(0));
-        assert_eq!(encode16(b"TTTTTTTTTTTTTTTT"), Some(u32::MAX));
-        // distinct barcodes give distinct codes
-        assert_ne!(encode16(b"ACGTACGTACGTACGT"), encode16(b"TGCATGCATGCATGCA"));
-        assert_eq!(encode16(b"AAAAAAAAAAAAAAAN"), None); // N
-        assert_eq!(encode16(b"AAAA"), None); // wrong length
-    }
-
-    fn wl(barcodes: &[&[u8]]) -> Whitelist {
-        let codes: FxHashSet<u32> = barcodes.iter().map(|b| encode16(b).unwrap()).collect();
-        Whitelist { codes }
-    }
-
-    #[test]
-    fn classify_exact_within1_fail() {
-        let w = wl(&[b"AAACCCAAGAAACACT", b"TTTTTTTTTTTTTTTT"]);
-        assert_eq!(w.classify(b"AAACCCAAGAAACACT"), CbStatus::OnWhitelist);
-        // one substitution from the first member
-        assert_eq!(w.classify(b"AAACCCAAGAAACACA"), CbStatus::Within1);
-        // two substitutions -> fail
-        assert_eq!(w.classify(b"AAACCCAAGAAACAGG"), CbStatus::Fail);
-        // N -> fail
-        assert_eq!(w.classify(b"NAACCCAAGAAACACT"), CbStatus::Fail);
-    }
-
-    #[test]
-    fn decode_roundtrip() {
-        for bc in [
-            b"AAACCCAAGAAACACT",
-            b"ACGTACGTACGTACGT",
-            b"TTTTTTTTTTTTTTTT",
-        ] {
-            assert_eq!(&decode16(encode16(bc).unwrap()), bc);
-        }
-    }
-
-    #[test]
-    fn realign_insertion() {
-        let truth = b"AAACCCAAGAAACACT";
-        let w = wl(&[truth]);
-        // region = CB with one inserted base ('G' after position 4) + UMI tail
-        // truth: AAACC|CAAGAAACACT -> insert G -> AAACCGCAAGAAACACT (17) + UMI...
-        let region = b"AAACCGCAAGAAACACTNNNNNNNNNNNN";
-        assert_eq!(w.realign_cb(region, 1), Some(*truth));
-    }
-
-    #[test]
-    fn realign_deletion() {
-        let truth = b"AAACCCAAGAAACACT";
-        let w = wl(&[truth]);
-        // region = CB missing its 6th base (the 2nd 'C' group) -> 15 bases + UMI
-        // truth AAACC C AAGAAACACT -> delete one C -> AAACCAAGAAACACT (15)
-        let region = b"AAACCAAGAAACACTNNNNNNNNNNNN";
-        assert_eq!(w.realign_cb(region, -1), Some(*truth));
-    }
-
-    #[test]
-    fn within2_unique_and_ambiguous() {
-        let truth = b"AAACCCAAGAAACACT";
-        let w = wl(&[truth, b"TTTTTTTTTTTTTTTT"]);
-        // exact
-        assert_eq!(w.correct_within2(truth), Some(*truth));
-        // two substitutions from truth -> unique
-        assert_eq!(w.correct_within2(b"AAACCCAAGAAACAGG"), Some(*truth));
-        // far from everything
-        assert_eq!(w.correct_within2(b"GGGGGGGGGGGGGGGG"), None);
-        // ambiguous: equidistant (1 mm) from two whitelist members
-        let a = b"AAAAAAAAAAAAAAAA";
-        let b = b"AAAAAAAAAAAAAAAC";
-        let w2 = wl(&[a, b]);
-        // "AAAAAAAAAAAAAAAG" is 1mm from both a and b -> ambiguous
-        assert_eq!(w2.correct_within2(b"AAAAAAAAAAAAAAAG"), None);
-    }
-
-    #[test]
-    fn within1_unique_and_ambiguous() {
-        let truth = b"AAACCCAAGAAACACT";
-        let w = wl(&[truth, b"TTTTTTTTTTTTTTTT"]);
-        assert_eq!(w.correct_within1(truth), Some(*truth)); // exact
-        assert_eq!(w.correct_within1(b"AAACCCAAGAAACACA"), Some(*truth)); // 1 mm
-        assert_eq!(w.correct_within1(b"AAACCCAAGAAACAGG"), None); // 2 mm -> none
-                                                                  // ambiguous: 1 mm from two whitelist members
-        let w2 = wl(&[b"AAAAAAAAAAAAAAAA", b"AAAAAAAAAAAAAAAC"]);
-        assert_eq!(w2.correct_within1(b"AAAAAAAAAAAAAAAG"), None);
-        assert_eq!(w2.classify(b"AAAAAAAAAAAAAAAG"), CbStatus::Fail);
-    }
-
-    #[test]
-    fn reframe_recovers_shifted_cb() {
-        let truth = b"AAACCCAAGAAACACT";
-        let w = wl(&[truth, b"TTTTTTTTTTTTTTTT"]);
-        // Rigid cb_start grabs one base too early (a deletion put the CB one base
-        // 3'): prepend a junk base so truth sits at offset +1. Within-1 noise on
-        // the CB ('T' at the last pos) must still resolve uniquely.
-        let mut seq = vec![b'G']; // [0] junk, rigid frame would grab seq[0..16]
-        seq.extend_from_slice(b"AAACCCAAGAAACACT"); // truth at [1..17]
-        seq.extend_from_slice(b"NNNNNNNNNNNN");
-        let (cb, off) = w.reframe_cb(&seq, 0, 2).expect("unique +1 hit");
-        assert_eq!(&cb, truth);
-        assert_eq!(off, 1);
-        // no nearby unique hit -> None
-        let junk: Vec<u8> = b"GGGGGGGGGGGGGGGGGGGG".to_vec();
-        assert_eq!(w.reframe_cb(&junk, 1, 2), None);
-    }
-
-    #[test]
-    fn realign_ambiguous_or_none() {
-        let w = wl(&[b"AAACCCAAGAAACACT", b"TTTTTTTTTTTTTTTT"]);
-        // garbage region -> no whitelist hit
-        assert_eq!(w.realign_cb(b"GGGGGGGGGGGGGGGGGGGGGGGGGGGG", 1), None);
-        // delta 0 not handled
-        assert_eq!(w.realign_cb(b"AAACCCAAGAAACACTNNNNNNNNNNNN", 0), None);
-    }
-}
+#[path = "barcode_tests.rs"]
+mod tests;

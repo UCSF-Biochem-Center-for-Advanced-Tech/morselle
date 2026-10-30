@@ -169,11 +169,15 @@ fn auto_picks_dual_when_both_indices_are_standalone_safe() {
     assert_eq!(d.resolved_mode(), DemuxMode::Dual);
 }
 
+/// Replaces `auto_picks_both_when_neither_index_is_standalone_safe`: auto
+/// now always resolves to the per-read rule (`Dual`), because a key several
+/// samples claim never assigns on its own (see `rule_tests`).
 #[test]
-fn auto_picks_both_when_neither_index_is_standalone_safe() {
+fn auto_resolves_to_per_read_rule_when_neither_index_is_standalone_safe() {
     // Same real fixture, but index_max_mm=2 (required=5): neither i5
-    // (4) nor i7 (3) clears that margin alone, so auto must fall back
-    // to Both -- the only mode still safe by construction.
+    // (4) nor i7 (3) clears that margin alone. Auto still picks Dual: the
+    // one-mismatch-or-two neighbourhoods that overlap become shared
+    // candidate sets, decided per read by the other index.
     let sh = sheet();
     let d = Demuxer::new(
         &sh,
@@ -183,7 +187,7 @@ fn auto_picks_both_when_neither_index_is_standalone_safe() {
         },
     )
     .unwrap();
-    assert_eq!(d.resolved_mode(), DemuxMode::Both);
+    assert_eq!(d.resolved_mode(), DemuxMode::Dual);
 }
 
 #[test]

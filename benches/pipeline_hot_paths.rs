@@ -13,11 +13,13 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 
 use morselle::anchors::{revcomp, P5, P7, R1_PRIMER};
 use morselle::barcode::Whitelist;
+use morselle::demux::{DemuxCfg, Demuxer};
 use morselle::extract::{extract, ExtractCfg};
 use morselle::hamming_index::HammingIndex;
 use morselle::orient::{orient, FallbackMode, OrientCfg};
 use morselle::probe_barcode::ProbeWhitelist;
 use morselle::probe_set::{Probe, ProbeMatcher};
+use morselle::sample_sheet::SampleSheet;
 
 fn orient_cfg() -> OrientCfg {
     OrientCfg {
@@ -322,10 +324,86 @@ fn bench_molecules_dedup(c: &mut Criterion) {
     });
 }
 
+/// Demux on a canonical read stretch: `P5 + CTACAC + i5 + R1_PRIMER + ...
+/// + rc(R2 primer) + i7 + rc(P7)`, for the real 14-sample CE15204 sheet and a
+/// generated 384-sample sheet (upper end of a real pool).
+fn bench_demux(c: &mut Criterion) {
+    let ce = SampleSheet::load(std::path::Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/CE15204_bclconvert_input.csv"
+    )))
+    .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let big_path = dir.path().join("big.csv");
+    let mut text = String::from("sample,i7,i5\n");
+    let mut rng_state = 0x9e37_79b9_u32;
+    let mut next10 = || -> String {
+        (0..10)
+            .map(|_| {
+                rng_state = rng_state.wrapping_mul(1_103_515_245).wrapping_add(12345);
+                b"ACGT"[((rng_state >> 16) & 3) as usize] as char
+            })
+            .collect()
+    };
+    for i in 0..384 {
+        text.push_str(&format!("S{i},{},{}\n", next10(), next10()));
+    }
+    std::fs::write(&big_path, text).unwrap();
+    let big = SampleSheet::load(&big_path).unwrap();
+    let r2rc = revcomp(morselle::anchors::R2_PRIMER);
+    let p7rc = revcomp(P7);
+    let read = |i5: &[u8], i7: &[u8]| -> (Vec<u8>, usize, usize) {
+        let mut s = [P5, b"CTACAC"].concat();
+        let i5s = s.len();
+        s.extend_from_slice(i5);
+        s.extend_from_slice(R1_PRIMER);
+        s.extend_from_slice(&[b'G'; 120]);
+        s.extend_from_slice(&r2rc);
+        let i7s = s.len();
+        s.extend_from_slice(i7);
+        s.extend_from_slice(&p7rc);
+        (s, i5s, i7s)
+    };
+    for (name, sheet) in [("ce15204_14", &ce), ("random_384", &big)] {
+        let cfg = DemuxCfg {
+            index_max_mm: 1,
+            mode: None,
+        };
+        let plain = Demuxer::new(sheet, cfg).unwrap();
+        let mut indels = Demuxer::new(sheet, cfg).unwrap();
+        indels.enable_indels(3);
+        let s0 = &sheet.samples[0];
+        let i5 = revcomp(&s0.i5);
+        let mut i5_del = i5.clone();
+        i5_del.remove(4);
+        let cases = [
+            ("exact_dual", read(&i5, &s0.i7)),
+            ("i5_deletion", read(&i5_del, &s0.i7[..])),
+            ("no_match", read(b"NNNNNNNNNN", b"NNNNNNNNNN")),
+            ("no_match_acgt", read(b"GGGGGGGGGG", b"GGGGGGGGGG")),
+        ];
+        for (case, (seq, i5s, i7s)) in &cases {
+            for (mode, d) in [("mismatch_only", &plain), ("with_indels", &indels)] {
+                c.bench_function(&format!("demux/{name}/{mode}/{case}"), |b| {
+                    b.iter(|| {
+                        black_box(d.assign_windowed_detail(
+                            black_box(seq),
+                            Some(*i5s),
+                            Some(*i7s),
+                            3,
+                        ))
+                    })
+                });
+            }
+        }
+    }
+}
+
 criterion_group!(
     benches,
     bench_orient_extract,
     bench_hamming_index,
+    bench_demux,
     bench_probe_barcode_locate,
     bench_cb_whitelist_classify,
     bench_probeset_align_matcher,
