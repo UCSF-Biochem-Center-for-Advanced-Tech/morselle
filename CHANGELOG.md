@@ -6,6 +6,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-10-30
+
+Headline, default settings against 0.7.0 on the same reads, barcodes
+scored against Illumina Cell Ranger molecules from the same libraries:
+
+| Data | Assigned reads | Reads on a right barcode | Reads on a wrong barcode |
+|---|---|---|---|
+| CAT02 Multiome, barcode-first 4M | 56.14% → 57.98% | +4.7% (M2_GEX) | −26% |
+| CAT02 Multiome, barcode-last 2M | 45.35% → 45.69% | +2.1% (M2_GEX) | −30% |
+| CAT06 Flex v2, one 43.9M shard | 68.46% → 70.84% | re-lock 91%, insertion 93% right (Hamming-1 91%) | |
+
+Throughput is unchanged.
+
 ### Added
 - `extract --flex`: Flex v2 reads have no dT run after the UMI, so almost
   no barcode was "confidently located" (both flanks found) and the rescues
@@ -24,7 +37,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unchanged. Each index is enabled only when the sample sheet is safe for it:
   minimum pairwise edit distance ≥ 3, and no one-edit variant of any index,
   placed in its real adapter flanks, is sent to another sample by the indel
-  pass. Off by default. On the CAT02 Multiome slices: assigned reads +0.74%
+  pass. On by default since 0.8.0 (see Changed). On the CAT02 Multiome slices: assigned reads +0.74%
   (barcode-first) / +0.20% (barcode-last) of all reads, dual-index
   assignments +2.2 / +1.9 points, no read moved between samples (reads whose
   two indexes now name different samples become conflicts, 0.04% / 0.03%),
@@ -35,7 +48,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   realign and reframe), re-find the tail's last 15 bp with up to two edits
   (bit-parallel Myers search over the first 120 bp) and read the barcode and
   UMI right after it; accepted only when exactly one tied candidate start
-  gives a whitelist or unique within-1 barcode. Off by default. CAT02
+  gives a whitelist or unique within-1 barcode. On by default since 0.8.0 (see Changed). CAT02
   Multiome slices: 14,412 / 2,473 reads rescued, assigned reads +0.54% /
   +0.23% of all reads, rescued barcodes on cell-like barcodes at 58.2% /
   29.6% (exact matches 60.3% / 30.1%, reframe 38.4% / 19.6%), no
@@ -56,7 +69,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   deletion readings land on cell-like barcodes at 25.8% / 7.0% (near
   chance) against 50.0% / 20.8% for insertions. Gated on confident location
   like reframe (ungated: +1.22% / +0.80% assigned but 45.8% / 17.6%
-  cell-like). Off by default. CAT02 slices: assigned +0.89% / +0.53% of all
+  cell-like). On by default since 0.8.0 (see Changed). CAT02 slices: assigned +0.89% / +0.53% of all
   reads, cell-like 48.6% / 19.0% (Hamming-1 47.2% / 24.2%, reframe 37.8% /
   19.5%), no previously emitted read changed. `whitelist.cb_insertion`
   counts them.
@@ -1042,7 +1055,8 @@ R1/R2 FASTQs for 10x reference ARC.
 - End-of-run RUN SUMMARY report: timing, throughput, and lost breakdown.
 - Ubuntu install script (`install.sh`) and installation manual (`INSTALL.md`).
 
-[Unreleased]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/compare/v0.6.4...v0.7.0
 [0.6.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/compare/v0.5.9...v0.6.0
 [0.3.3]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/compare/v0.3.2...v0.3.3

@@ -21,9 +21,12 @@ For every read, `morselle`:
    poly(dT) primer and the 3′ read-through adapter).
 3. **Trims** the 3′ Illumina read-through adapter from the cDNA — including the
    homopolymer-indel variants SBX produces (`AAGAGC`→`AAAGAGC`) and 3′-end partials.
-4. **Gates / rescues** the cell barcode against the 10x whitelist (exact, Hamming-1,
-   and optional homopolymer-reframe / indel-realign rescues).
-5. **Demultiplexes** by i5/i7 against the sample sheet (offset-tolerant matching).
+4. **Gates / rescues** the cell barcode against the 10x whitelist: exact, Hamming-1,
+   indel realign, R1-tail re-lock and one-extra-base rescues by default, and
+   opt-in reframe / Hamming-2. The UMI is the 12 bp right after the corrected
+   barcode as it sits in the read.
+5. **Demultiplexes** by i5/i7 against the sample sheet (offset-tolerant matching,
+   one insertion or deletion allowed per index when the sheet is safe for it).
 6. **Emits** per-sample R1/R2 pairs in 10x reference naming, plus a full metrics report.
 
 R2 is written **reverse-complemented** (with reversed quality) so it follows the

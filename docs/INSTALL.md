@@ -192,8 +192,8 @@ molecule-representative alignment lies outside the retained interval.
 Clone a tagged release from GitHub, or transfer a checkout from your workstation:
 
 ```bash
-# A) clone the v0.7.0 release (recommended)
-git clone --branch v0.7.0 https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle.git
+# A) clone the v0.8.0 release (recommended)
+git clone --branch v0.8.0 https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle.git
 # NOTE: clone does NOT include the whitelist
 
 # B) rsync a working tree (includes a locally staged whitelist)
