@@ -71,11 +71,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `benches/pipeline_hot_paths.rs`: `demux/*` benchmarks (CE15204 and a
   generated 384-sample sheet; exact, indel, and no-match reads).
 
-### Known issues
-- With the default `--index-window 3`, one sample-sheet pair in CE15204
-  (V4_GEX and M2_GEX i5s are one-base shifts of each other) lets one of the
-  1,176 one-edit i5 variants land on the wrong sample through the existing
-  mismatch-only frame float. Unchanged here; `--index-indels` logs it.
+### Fixed
+- The `--index-window` float no longer takes a one-mismatch hit in a
+  shifted frame when another sample competes -- another frame naming a
+  different sample, or the read being one insertion or deletion from
+  another sample's index. Such a hit is two edits from the nominal index,
+  so the index now abstains instead (`demux.index_evidence.i5_float_tie` /
+  `_i7_float_tie`). In CE15204, V4_GEX and M2_GEX i5s are one-base shifts of
+  each other, and a V4 i5 with one insertion used to land on M2: of the
+  1,176 one-edit i5 variants, 0 now reach the wrong sample (was 1), and 2
+  abstain. The one-indel tables are now always built for this check
+  (`--index-indels` still decides whether they assign reads). CAT02 slices:
+  66 / 6 index abstentions per 2M / 1M reads, no read changed sample, 26 /
+  0 reads became undetermined, and 3 / 1 reads whose indexes used to
+  conflict are now assigned on the other index. Demux bench unchanged.
 
 ## [0.7.0] — 2026-10-21
 

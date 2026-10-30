@@ -35,6 +35,9 @@ pub struct IndexMatch {
     /// its candidate-group id in that index's table (`IndexLut::members`),
     /// for the other index to choose among.
     pub shared: Option<u16>,
+    /// No match because a shifted-frame mismatch hit had a competing sample
+    /// (`IndexLut::search`).
+    pub float_tie: bool,
 }
 
 impl IndexMatch {
@@ -77,10 +80,11 @@ pub struct IndelSafety {
     /// One-edit variants (in flank context) that resolved to another sample
     /// (or to a shared candidate set without their own).
     pub wrong: usize,
-    /// The same, with the indel pass off (mismatch-only matching as it was):
-    /// a shifted frame can already turn one sample's indel into another
-    /// sample's one-mismatch hit when two indexes are near-shifts of each
-    /// other (CE15204: V4_GEX vs M2_GEX i5, 1 of 1,176 variants at window ≥1).
+    /// The same, with the indel pass off (mismatch-only matching): a shifted
+    /// frame can turn one sample's indel into another sample's one-mismatch
+    /// hit when two indexes are near-shifts of each other (CE15204: V4_GEX vs
+    /// M2_GEX i5, 1 of 1,176 variants at window ≥1, before the float learned
+    /// to abstain on such ties -- now 0).
     pub wrong_mismatch_only: usize,
     /// One-edit variants that resolved to their own sample.
     pub recovered: usize,

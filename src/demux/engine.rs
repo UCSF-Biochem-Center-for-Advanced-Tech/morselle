@@ -126,8 +126,8 @@ impl Demuxer {
     /// can support safely at this `window` (see [`indel_safety`]); an unsafe
     /// index stays mismatch-only, with a warning. Returns `(i5, i7)` safety.
     pub fn enable_indels(&mut self, window: isize) -> (IndelSafety, IndelSafety) {
-        self.i5_lut.add_indels(&self.i5_keys);
-        self.i7_lut.add_indels(&self.i7_keys);
+        self.i5_lut.add_indels();
+        self.i7_lut.add_indels();
         let i5_left = [P5, P5_INDEX_TAIL].concat();
         let i7_left = revcomp(R2_PRIMER);
         let i7_right = revcomp(P7);

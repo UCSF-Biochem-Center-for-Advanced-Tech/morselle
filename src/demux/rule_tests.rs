@@ -159,3 +159,59 @@ fn an_indel_in_a_shared_i7_still_gives_its_candidate_set() {
     assert_eq!((o.sample, o.via), (Some(idx(&sh, "C")), DemuxVia::Dual));
     assert!(ev.i7.via_indel && ev.i7.shared.is_some());
 }
+
+fn ce15204() -> SampleSheet {
+    let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/CE15204_bclconvert_input.csv");
+    SampleSheet::load(&p).unwrap()
+}
+
+/// i5 region in its real flanks: P5 + CTACAC + `i5_read` + R1 primer.
+fn i5_read_in_context(i5_read: &[u8]) -> (Vec<u8>, usize) {
+    let mut seq = [P5, b"CTACAC"].concat();
+    let start = seq.len();
+    seq.extend_from_slice(i5_read);
+    seq.extend_from_slice(R1_PRIMER);
+    (seq, start)
+}
+
+/// The CE15204 V4/M2 tie: V4_GEX's read-oriented i5 with one inserted base
+/// is M2_GEX's i5 one mismatch off at frame +1. That shifted mismatch hit
+/// used to win; with V4 one insertion away it now abstains, with or without
+/// `--index-indels`.
+#[test]
+fn a_shifted_mismatch_hit_with_a_competing_sample_abstains() {
+    let sh = ce15204();
+    let mut v4 = revcomp(b"TTCGACAAGC");
+    assert_eq!(v4, b"GCTTGTCGAA");
+    v4.insert(5, b'A'); // GCTTGATCGAA
+    let (seq, start) = i5_read_in_context(&v4);
+    for indels in [false, true] {
+        let mut d = demuxer(&sh, None);
+        if indels {
+            d.enable_indels(3);
+        }
+        let (o, ev) = d.assign_windowed_detail(&seq, Some(start), None, 3);
+        assert_eq!(o.sample, None, "indels={indels}");
+        assert!(ev.i5.float_tie && !ev.i5.matched(), "indels={indels}");
+        // A rigid frame never floats, so never ties.
+        let (o, ev) = d.assign_windowed_detail(&seq, Some(start), None, 0);
+        assert!(!ev.i5.float_tie);
+        assert_eq!(o.sample.is_some(), indels, "rigid, indels={indels}");
+    }
+}
+
+#[test]
+fn a_shifted_mismatch_hit_without_a_competitor_is_still_assigned() {
+    let sh = ce15204();
+    let d = demuxer(&sh, None);
+    let m3 = idx(&sh, "M3_GEX");
+    let mut i5 = revcomp(b"AGGTAACACT");
+    i5[6] = if i5[6] == b'A' { b'C' } else { b'A' };
+    // One extra base upstream: the index sits one frame late, 1 mismatch.
+    let (mut seq, start) = i5_read_in_context(&i5);
+    seq.insert(start, b'G');
+    let (o, ev) = d.assign_windowed_detail(&seq, Some(start), None, 3);
+    assert_eq!((o.sample, o.via), (Some(m3), DemuxVia::I5Only));
+    assert!(!ev.i5.float_tie);
+}

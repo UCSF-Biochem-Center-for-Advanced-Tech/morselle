@@ -81,6 +81,10 @@ pub struct IndexEvidenceCounts {
     /// sample): assigned only if the other index narrows it to one.
     pub identified_i5_shared: u64,
     pub identified_i7_shared: u64,
+    /// Not identified because a shifted-frame mismatch hit had a competing
+    /// sample (another frame, or one indel from another sample's index).
+    pub i5_float_tie: u64,
+    pub i7_float_tie: u64,
 }
 
 impl IndexEvidenceCounts {
@@ -108,6 +112,8 @@ impl IndexEvidenceCounts {
         self.identified_i7_via_indel += u64::from(ev.i7.via_indel);
         self.identified_i5_shared += u64::from(ev.i5.shared.is_some());
         self.identified_i7_shared += u64::from(ev.i7.shared.is_some());
+        self.i5_float_tie += u64::from(ev.i5.float_tie);
+        self.i7_float_tie += u64::from(ev.i7.float_tie);
     }
 
     pub fn add(&mut self, o: &Self) {
@@ -126,6 +132,8 @@ impl IndexEvidenceCounts {
         self.identified_i7_via_indel += o.identified_i7_via_indel;
         self.identified_i5_shared += o.identified_i5_shared;
         self.identified_i7_shared += o.identified_i7_shared;
+        self.i5_float_tie += o.i5_float_tie;
+        self.i7_float_tie += o.i7_float_tie;
     }
 }
 

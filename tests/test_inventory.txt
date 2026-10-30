@@ -108,6 +108,8 @@ src/lib.rs demux::lut::tests::matches_hamming_index_exactly
 src/lib.rs demux::lut::tests::non_acgt_frames_never_match
 src/lib.rs demux::rule_tests::a_full_grid_of_shared_indexes_needs_both_for_every_sample
 src/lib.rs demux::rule_tests::a_shared_i7_alone_never_assigns_but_i5_picks_among_its_samples
+src/lib.rs demux::rule_tests::a_shifted_mismatch_hit_with_a_competing_sample_abstains
+src/lib.rs demux::rule_tests::a_shifted_mismatch_hit_without_a_competitor_is_still_assigned
 src/lib.rs demux::rule_tests::an_indel_in_a_shared_i7_still_gives_its_candidate_set
 src/lib.rs demux::rule_tests::both_mode_and_single_index_modes_keep_their_meaning
 src/lib.rs demux::rule_tests::overlapping_mismatch_neighbourhoods_are_resolved_by_the_other_index

@@ -89,18 +89,21 @@ fn indel_variants(key: &[u8]) -> Vec<Vec<u8>> {
 /// this must be re-verified, not silently pass with other numbers. Counting
 /// shifts, the i5 set's minimum edit distance is 3 (Hamming says 4): V4_GEX
 /// and M2_GEX read-oriented i5s are one-base shifts of each other, so one
-/// V4 insertion already lands on M2 as a one-mismatch hit in a shifted
-/// frame with indels off. The indel pass adds no such call.
+/// V4 insertion lands on M2 as a one-mismatch hit in a shifted frame. That
+/// hit used to be taken (wrong 1, with or without indels); the float now
+/// abstains when such a hit has a competitor (here: V4 one insertion away),
+/// so wrong is 0 and 2 of the 1,176 i5 variants abstain (one of them was
+/// recovered before). The indel pass adds no wrong call.
 #[test]
 fn real_sheet_is_safe_for_indel_matching_on_both_indexes() {
     let sh = sheet();
     let mut d = Demuxer::new(&sh, cfg()).unwrap();
     let (s5, s7) = d.enable_indels(3);
     assert_eq!((s5.min_edit, s7.min_edit), (3, 3));
-    assert_eq!((s5.wrong, s5.wrong_mismatch_only), (1, 1));
+    assert_eq!((s5.wrong, s5.wrong_mismatch_only), (0, 0));
     assert_eq!((s7.wrong, s7.wrong_mismatch_only), (0, 0));
     assert_eq!(s5.variants, 14 * (30 + 10 + 44));
-    assert_eq!((s5.recovered, s7.recovered), (1171, 1175));
+    assert_eq!((s5.recovered, s7.recovered), (1170, 1175));
     assert!(s5.safe() && s7.safe());
     // With a rigid frame nothing collides and every variant is recovered.
     let mut rigid = Demuxer::new(&sh, cfg()).unwrap();

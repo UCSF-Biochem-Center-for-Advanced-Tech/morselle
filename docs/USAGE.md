@@ -403,8 +403,10 @@ In `--out-dir`:
   `seen_none`); which matched a sample (`identified_both` / `_i5_only` /
   `_i7_only` / `_none`; `both` includes conflicts; a match to an index shared
   by several samples counts as identified); how many matched only through
-  `--index-indels`; and how many matched a shared index
-  (`identified_i5_shared` / `_i7_shared`).
+  `--index-indels`; how many matched a shared index
+  (`identified_i5_shared` / `_i7_shared`); and how many abstained because a
+  shifted-frame mismatch hit had a competing sample (`i5_float_tie` /
+  `i7_float_tie`).
 - `sample_sheet.csv` — the normalized flat sample sheet.
 
 Every run also prints a **RUN SUMMARY** to stderr (elapsed, threads, reads/sec,
