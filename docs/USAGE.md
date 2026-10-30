@@ -273,6 +273,7 @@ orientations; orientation is auto-detected and enforced per file).
 | `--index-window` | 3 | Offset-tolerant i5/i7 matching (absorbs indels shifting the index). |
 | `--index-indels` | off | Also match an i5/i7 with one insertion or deletion inside the index, over the same `--index-window` frames, only when mismatch-only matching finds nothing. Enabled per index only if the sample sheet is safe for it (logged). On CAT02 Multiome: +0.2–0.7% of reads assigned and +2 points of dual-index assignment, no read moved between samples. |
 | `--index-max-mm` | 1 | Max mismatches when matching sample-sheet indices. |
+| `--demux-index` | auto | `dual`, `both`, `i5` or `i7`. Auto = `dual` with the per-read rule: an index alone assigns only when it names exactly one sample; an index shared by several samples (combinatorial sheets, or overlapping mismatch neighbourhoods) is narrowed to one by the other index, or the read stays undetermined. |
 | `--realign` | on | Single-indel CB rescue — recovers ~+1% of reads at high precision (`--realign false` to disable). |
 | `--lenient` | off | Within-2 CB rescue — leave off (~51% precise on the dense ARC whitelist). |
 | `--min-cdna-len` | 50 | Shortest cDNA emitted as R2. |
@@ -400,8 +401,10 @@ In `--out-dir`:
   seen and identified to the same sample) versus `partial`; which index
   regions are in the read (`seen_both` / `seen_i5_only` / `seen_i7_only` /
   `seen_none`); which matched a sample (`identified_both` / `_i5_only` /
-  `_i7_only` / `_none`; `both` includes conflicts); and how many matched only
-  through `--index-indels`.
+  `_i7_only` / `_none`; `both` includes conflicts; a match to an index shared
+  by several samples counts as identified); how many matched only through
+  `--index-indels`; and how many matched a shared index
+  (`identified_i5_shared` / `_i7_shared`).
 - `sample_sheet.csv` — the normalized flat sample sheet.
 
 Every run also prints a **RUN SUMMARY** to stderr (elapsed, threads, reads/sec,

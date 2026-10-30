@@ -12,19 +12,19 @@
 //! CE15204 bench vs the byte-slice hash maps: exact dual 36 → ~20 ns, no
 //! match with `--index-indels` 395 → ~80 ns per read.
 //!
-//! Semantics match `HammingIndex` exactly: a variant claimed by two different
-//! samples becomes ambiguous and never matches, and a frame holding any base
-//! other than `A`/`C`/`G`/`T` matches nothing.
+//! Semantics match `HammingIndex` for the single-sample answer: a frame
+//! holding any base other than `A`/`C`/`G`/`T` matches nothing, and a key
+//! claimed by several samples never names one of them on its own. Such a key
+//! now keeps its candidate set (`super::groups`) so the other index can pick
+//! among them (`Demuxer`'s per-read rule).
 
 use rustc_hash::FxHashMap;
 
+pub use super::groups::MAX_SAMPLES;
+use super::groups::{Groups, EMPTY, OVERFLOW};
 use super::indel::IndexMatch;
 use crate::hamming_index::offset_order;
 
-const EMPTY: u16 = 0;
-const AMBIGUOUS: u16 = u16::MAX;
-/// Largest sample count a slot can hold (`sample + 1`, below `AMBIGUOUS`).
-pub const MAX_SAMPLES: usize = u16::MAX as usize - 1;
 /// Keys up to this length use a dense array (4^11 slots × 2 B = 8 MB).
 const DENSE_MAX_LEN: usize = 11;
 
@@ -58,7 +58,7 @@ enum Slots {
     Sparse(FxHashMap<u32, u16>),
 }
 
-/// Fixed-length packed-key table: sample per key, or ambiguous.
+/// Fixed-length packed-key table: candidate group per key ([`Groups`]).
 struct Table {
     len: usize,
     slots: Slots,
@@ -75,43 +75,35 @@ impl Table {
         Table { len, slots }
     }
 
-    /// Claim `key` for `sample`; a key already held by another sample
-    /// becomes ambiguous (and stays so).
-    fn claim(&mut self, key: &[u8], sample: usize) {
+    /// Add `sample` to `key`'s candidate group.
+    fn claim(&mut self, groups: &mut Groups, key: &[u8], sample: usize) {
         let Some(code) = pack(key) else { return };
-        let v = sample as u16 + 1;
         let slot = match &mut self.slots {
             Slots::Dense(d) => &mut d[code as usize],
             Slots::Sparse(m) => m.entry(code).or_insert(EMPTY),
         };
-        *slot = match *slot {
-            EMPTY => v,
-            s if s == v => v,
-            _ => AMBIGUOUS,
-        };
+        *slot = groups.claim(*slot, sample);
     }
 
+    /// Raw slot of a packed key (`EMPTY` when unclaimed).
     #[inline]
-    fn get(&self, key: &[u8]) -> Option<usize> {
-        self.get_code(pack(key)?)
-    }
-
-    #[inline]
-    fn get_code(&self, code: u32) -> Option<usize> {
-        let slot = match &self.slots {
+    fn slot(&self, code: u32) -> u16 {
+        match &self.slots {
             Slots::Dense(d) => d[code as usize],
-            Slots::Sparse(m) => *m.get(&code)?,
-        };
-        (slot != EMPTY && slot != AMBIGUOUS).then(|| slot as usize - 1)
+            Slots::Sparse(m) => m.get(&code).copied().unwrap_or(EMPTY),
+        }
     }
 
-    /// Look up the `len`-bp frame at `pos` in `seq`, if it fits.
+    /// Slot of the `len`-bp frame at `pos` in `seq` (`EMPTY` if it does not
+    /// fit or holds a non-ACGT base).
     #[inline]
-    fn at(&self, seq: &[u8], pos: isize) -> Option<usize> {
+    fn slot_at(&self, seq: &[u8], pos: isize) -> u16 {
         if pos < 0 {
-            return None;
+            return EMPTY;
         }
-        self.get(seq.get(pos as usize..pos as usize + self.len)?)
+        seq.get(pos as usize..pos as usize + self.len)
+            .and_then(pack)
+            .map_or(EMPTY, |c| self.slot(c))
     }
 }
 
@@ -166,6 +158,7 @@ pub struct IndexLut {
     /// One-deletion (`len-1` bp) and one-insertion (`len+1` bp) variants,
     /// present only while `--index-indels` is active for this index.
     indel: Option<(Table, Table)>,
+    groups: Groups,
 }
 
 impl IndexLut {
@@ -173,14 +166,16 @@ impl IndexLut {
     pub fn new(keys: &[Vec<u8>], max_mm: u32) -> Self {
         let len = keys.first().map_or(10, Vec::len);
         let mut ham = Table::new(len);
+        let mut groups = Groups::new(keys.len());
         for (sample, key) in keys.iter().enumerate() {
             let mut buf = key.clone();
-            neighbours(&mut ham, &mut buf, 0, max_mm, sample);
+            neighbours(&mut ham, &mut groups, &mut buf, 0, max_mm, sample);
         }
         IndexLut {
             len,
             ham,
             indel: None,
+            groups,
         }
     }
 
@@ -192,13 +187,13 @@ impl IndexLut {
             for i in 0..key.len() {
                 let mut v = key.clone();
                 v.remove(i);
-                del.claim(&v, sample);
+                del.claim(&mut self.groups, &v, sample);
             }
             for i in 0..=key.len() {
                 for &b in b"ACGT" {
                     let mut v = key.clone();
                     v.insert(i, b);
-                    ins.claim(&v, sample);
+                    ins.claim(&mut self.groups, &v, sample);
                 }
             }
         }
@@ -213,16 +208,34 @@ impl IndexLut {
         self.indel.is_some()
     }
 
-    /// Exact-frame Hamming lookup (`key` already the index region).
-    pub fn get(&self, key: &[u8]) -> Option<usize> {
-        self.ham.get(key)
+    /// Exact-frame lookup (`key` already the index region).
+    pub fn get(&self, key: &[u8]) -> IndexMatch {
+        let slot = pack(key).map_or(EMPTY, |c| self.ham.slot(c));
+        self.to_match(slot, false)
+    }
+
+    /// Sorted candidate samples of a shared match ([`IndexMatch::shared`]).
+    pub fn members(&self, group: u16) -> &[u16] {
+        self.groups.members(group)
+    }
+
+    fn to_match(&self, slot: u16, via_indel: bool) -> IndexMatch {
+        let sample = self.groups.single(slot);
+        let shared = self.groups.is_shared(slot).then_some(slot);
+        IndexMatch {
+            sample,
+            via_indel: via_indel && (sample.is_some() || shared.is_some()),
+            shared,
+        }
     }
 
     /// The full per-index search: mismatch-only over frames (0, ±1, …,
-    /// ±`window`), first unique hit wins (unchanged behaviour); only if
-    /// that finds nothing, the one-indel pass over the same frames, which
-    /// must agree on a single sample across every frame and both lengths.
-    /// `use_indels = false` skips the indel pass even when it is built.
+    /// ±`window`), first single-sample hit wins (unchanged behaviour); with
+    /// none, the first frame whose key is shared by several samples gives
+    /// that candidate set. Only if neither, the one-indel pass over the same
+    /// frames, which must agree on one candidate set (usually one sample)
+    /// across every frame and both lengths. `use_indels = false` skips the
+    /// indel pass even when it is built.
     pub fn find(
         &self,
         seq: &[u8],
@@ -235,61 +248,46 @@ impl IndexLut {
         };
         let start = start as isize;
         // Most reads hit at the nominal frame: one pack, one read, done.
-        if let Some(s) = self.ham.at(seq, start) {
-            return IndexMatch {
-                sample: Some(s),
-                via_indel: false,
-            };
+        let nominal = self.ham.slot_at(seq, start);
+        if self.groups.single(nominal).is_some() {
+            return self.to_match(nominal, false);
         }
         let w = window.max(0);
-        let Some(region) = Region::new(seq, start - w, start + w + self.len as isize + 1) else {
-            return self.find_slow(seq, start, window, use_indels);
-        };
-        for k in offset_order(window) {
-            let hit = region
-                .key(start + k, self.len)
-                .and_then(|c| self.ham.get_code(c));
-            if let Some(s) = hit {
-                return IndexMatch {
-                    sample: Some(s),
-                    via_indel: false,
-                };
-            }
-        }
-        let Some((del, ins)) = self.indel.as_ref().filter(|_| use_indels) else {
-            return IndexMatch::default();
-        };
-        let mut found = None;
-        for k in offset_order(window) {
-            for table in [del, ins] {
-                let hit = region
-                    .key(start + k, table.len)
-                    .and_then(|c| table.get_code(c));
-                if let Some(v) = hit {
-                    match found {
-                        None => found = Some(v),
-                        Some(f) if f == v => {}
-                        Some(_) => return IndexMatch::default(),
-                    }
-                }
-            }
-        }
-        IndexMatch {
-            sample: found,
-            via_indel: found.is_some(),
+        match Region::new(seq, start - w, start + w + self.len as isize + 1) {
+            Some(region) => self.search(start, window, use_indels, |pos, t| {
+                region.key(pos, t.len).map_or(EMPTY, |c| t.slot(c))
+            }),
+            None => self.find_slow(seq, start, window, use_indels),
         }
     }
 
     /// [`find`](Self::find) packing each frame separately, for windows too
     /// wide to pack the whole region into one word.
     fn find_slow(&self, seq: &[u8], start: isize, window: isize, use_indels: bool) -> IndexMatch {
+        self.search(start, window, use_indels, |pos, t| t.slot_at(seq, pos))
+    }
+
+    /// The frame scan behind [`find`](Self::find); `slot(pos, table)` reads
+    /// one frame.
+    fn search(
+        &self,
+        start: isize,
+        window: isize,
+        use_indels: bool,
+        slot: impl Fn(isize, &Table) -> u16,
+    ) -> IndexMatch {
+        let mut shared = None;
         for k in offset_order(window) {
-            if let Some(s) = self.ham.at(seq, start + k) {
-                return IndexMatch {
-                    sample: Some(s),
-                    via_indel: false,
-                };
+            let s = slot(start + k, &self.ham);
+            if self.groups.single(s).is_some() {
+                return self.to_match(s, false);
             }
+            if shared.is_none() && self.groups.is_shared(s) {
+                shared = Some(s);
+            }
+        }
+        if let Some(s) = shared {
+            return self.to_match(s, false);
         }
         let Some((del, ins)) = self.indel.as_ref().filter(|_| use_indels) else {
             return IndexMatch::default();
@@ -297,26 +295,32 @@ impl IndexLut {
         let mut found = None;
         for k in offset_order(window) {
             for table in [del, ins] {
-                if let Some(v) = table.at(seq, start + k) {
-                    match found {
-                        None => found = Some(v),
-                        Some(f) if f == v => {}
-                        Some(_) => return IndexMatch::default(),
-                    }
+                let v = slot(start + k, table);
+                if v == EMPTY || v == OVERFLOW {
+                    continue;
+                }
+                match found {
+                    None => found = Some(v),
+                    Some(f) if f == v => {}
+                    Some(_) => return IndexMatch::default(),
                 }
             }
         }
-        IndexMatch {
-            sample: found,
-            via_indel: found.is_some(),
-        }
+        found.map_or_else(IndexMatch::default, |v| self.to_match(v, true))
     }
 }
 
 /// Claim every ≤`budget`-substitution neighbour of `buf` (from `pos` on),
 /// in the same order as `HammingIndex::insert`.
-fn neighbours(table: &mut Table, buf: &mut [u8], pos: usize, budget: u32, sample: usize) {
-    table.claim(buf, sample);
+fn neighbours(
+    table: &mut Table,
+    groups: &mut Groups,
+    buf: &mut [u8],
+    pos: usize,
+    budget: u32,
+    sample: usize,
+) {
+    table.claim(groups, buf, sample);
     if budget == 0 {
         return;
     }
@@ -325,7 +329,7 @@ fn neighbours(table: &mut Table, buf: &mut [u8], pos: usize, budget: u32, sample
         for &b in b"ACGT" {
             if b != orig {
                 buf[i] = b;
-                neighbours(table, buf, i + 1, budget - 1, sample);
+                neighbours(table, groups, buf, i + 1, budget - 1, sample);
             }
         }
         buf[i] = orig;
@@ -385,9 +389,9 @@ mod tests {
     fn non_acgt_frames_never_match() {
         let ks = vec![b"ACGTACGTAC".to_vec()];
         let lut = IndexLut::new(&ks, 1);
-        assert_eq!(lut.get(b"ACGTACGTAC"), Some(0));
-        assert_eq!(lut.get(b"ACGTNCGTAC"), None);
-        assert_eq!(lut.get(b"acgtacgtac"), None);
+        assert_eq!(lut.get(b"ACGTACGTAC").sample, Some(0));
+        assert_eq!(lut.get(b"ACGTNCGTAC").sample, None);
+        assert_eq!(lut.get(b"acgtacgtac").sample, None);
     }
 }
 

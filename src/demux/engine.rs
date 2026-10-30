@@ -59,9 +59,14 @@ impl Demuxer {
     /// with enough real Hamming margin for `cfg.index_max_mm`; `Some(Dual)`/
     /// `Some(Both)` are taken as given (`Both`'s safety only needs the
     /// declared (i5,i7) *pairs* to be distinct, true of any valid sheet, not
-    /// either index alone). `None` (auto) resolves to `Dual` if both indices
-    /// are standalone-safe, else whichever single index is safe, else `Both`
-    /// -- always logged, so the choice is never silent.
+    /// either index alone). `None` (auto) resolves to `Dual`, which decides
+    /// per read: both indexes are looked up, one alone assigns only when it
+    /// names exactly one sample, and otherwise the sample must be the single
+    /// one both indexes agree on (see `combine`). Before this per-read rule,
+    /// auto fell back to a single index or `Both` when an index was not
+    /// standalone-safe across the whole sheet; a key shared by several
+    /// samples now never assigns on its own, so `Dual` is safe on any sheet.
+    /// The resolution is always logged, so the choice is never silent.
     pub fn new(sheet: &SampleSheet, cfg: DemuxCfg) -> Result<Self> {
         let i5_dist = min_pairwise_hamming(sheet, IndexSource::I5);
         let i7_dist = min_pairwise_hamming(sheet, IndexSource::I7);
@@ -84,16 +89,15 @@ impl Demuxer {
                 required
             )),
             Some(explicit) => explicit,
-            None if i5_safe && i7_safe => DemuxMode::Dual,
-            None if i5_safe => DemuxMode::I5,
-            None if i7_safe => DemuxMode::I7,
-            None => DemuxMode::Both,
+            None => DemuxMode::Dual,
         };
         tracing::info!(
             mode = ?resolved_mode,
             auto,
             i5_min_hamming = i5_dist,
             i7_min_hamming = i7_dist,
+            i5_standalone_safe = i5_safe,
+            i7_standalone_safe = i7_safe,
             index_max_mm = cfg.index_max_mm,
             "demux mode resolved"
         );
@@ -179,29 +183,51 @@ impl Demuxer {
         (self.i5_lut.has_indels(), self.i7_lut.has_indels())
     }
 
-    /// Combine per-index sample matches into an outcome (`Dual`/`Both` modes only).
-    fn combine(&self, a5: Option<usize>, a7: Option<usize>) -> Outcome {
-        match (a5, a7) {
-            (Some(x), Some(y)) if x == y => Outcome {
-                sample: Some(x),
-                via: DemuxVia::Dual,
+    /// Combine the two per-index matches (`Dual`/`Both` modes): the per-read
+    /// rule. Each index gives no match, one sample, or a shared candidate
+    /// set (a key several samples claim). With both matched, the read goes
+    /// to the one sample in both sets (`Dual`); no common sample is a
+    /// `Conflict`, several stay undetermined. With one matched (`Dual` mode
+    /// only), it assigns only when it names exactly one sample.
+    fn combine(&self, i5: &IndexMatch, i7: &IndexMatch) -> Outcome {
+        let none = |via| Outcome { sample: None, via };
+        match (i5.matched(), i7.matched()) {
+            (true, true) => {
+                let a = self.candidates(&self.i5_lut, i5);
+                let b = self.candidates(&self.i7_lut, i7);
+                match common(&a, &b) {
+                    Common::None => none(DemuxVia::Conflict),
+                    Common::One(x) => Outcome {
+                        sample: Some(x),
+                        via: DemuxVia::Dual,
+                    },
+                    Common::Several => none(DemuxVia::None),
+                }
+            }
+            (true, false) if self.resolved_mode == DemuxMode::Dual => match i5.sample {
+                Some(x) => Outcome {
+                    sample: Some(x),
+                    via: DemuxVia::I5Only,
+                },
+                None => none(DemuxVia::None),
             },
-            (Some(_), Some(_)) => Outcome {
-                sample: None,
-                via: DemuxVia::Conflict,
+            (false, true) if self.resolved_mode == DemuxMode::Dual => match i7.sample {
+                Some(y) => Outcome {
+                    sample: Some(y),
+                    via: DemuxVia::I7Only,
+                },
+                None => none(DemuxVia::None),
             },
-            (Some(x), None) if self.resolved_mode == DemuxMode::Dual => Outcome {
-                sample: Some(x),
-                via: DemuxVia::I5Only,
-            },
-            (None, Some(y)) if self.resolved_mode == DemuxMode::Dual => Outcome {
-                sample: Some(y),
-                via: DemuxVia::I7Only,
-            },
-            _ => Outcome {
-                sample: None,
-                via: DemuxVia::None,
-            },
+            _ => none(DemuxVia::None),
+        }
+    }
+
+    /// One matched index's candidate samples, sorted.
+    fn candidates<'a>(&self, lut: &'a IndexLut, m: &IndexMatch) -> CandSet<'a> {
+        match (m.sample, m.shared) {
+            (Some(x), _) => CandSet::One(x as u16),
+            (None, Some(g)) => CandSet::Many(lut.members(g)),
+            (None, None) => CandSet::Many(&[]),
         }
     }
 
@@ -225,16 +251,18 @@ impl Demuxer {
     /// Assign a read from its (optional) i5/i7 read-region slices (fixed frame).
     pub fn assign(&self, i5_region: Option<&[u8]>, i7_region: Option<&[u8]>) -> Outcome {
         match self.resolved_mode {
-            DemuxMode::I5 => {
-                Self::solo(i5_region.and_then(|r| self.i5_lut.get(r)), DemuxVia::I5Only)
-            }
-            DemuxMode::I7 => {
-                Self::solo(i7_region.and_then(|r| self.i7_lut.get(r)), DemuxVia::I7Only)
-            }
+            DemuxMode::I5 => Self::solo(
+                i5_region.and_then(|r| self.i5_lut.get(r).sample),
+                DemuxVia::I5Only,
+            ),
+            DemuxMode::I7 => Self::solo(
+                i7_region.and_then(|r| self.i7_lut.get(r).sample),
+                DemuxVia::I7Only,
+            ),
             DemuxMode::Dual | DemuxMode::Both => {
-                let a5 = i5_region.and_then(|r| self.i5_lut.get(r));
-                let a7 = i7_region.and_then(|r| self.i7_lut.get(r));
-                self.combine(a5, a7)
+                let a5 = i5_region.map(|r| self.i5_lut.get(r)).unwrap_or_default();
+                let a7 = i7_region.map(|r| self.i7_lut.get(r)).unwrap_or_default();
+                self.combine(&a5, &a7)
             }
         }
     }
@@ -280,18 +308,60 @@ impl Demuxer {
         let outcome = match self.resolved_mode {
             DemuxMode::I5 => Self::solo(i5.sample, DemuxVia::I5Only),
             DemuxMode::I7 => Self::solo(i7.sample, DemuxVia::I7Only),
-            DemuxMode::Dual | DemuxMode::Both => self.combine(i5.sample, i7.sample),
+            DemuxMode::Dual | DemuxMode::Both => self.combine(&i5, &i7),
         };
         // A match found in a floated frame counts as seen even when the
         // nominal frame runs off the read end, so identified ⊆ seen.
         let evidence = IndexEvidence {
-            i5_seen: seen(i5_start) || i5.sample.is_some(),
-            i7_seen: seen(i7_start) || i7.sample.is_some(),
+            i5_seen: seen(i5_start) || i5.matched(),
+            i7_seen: seen(i7_start) || i7.matched(),
             i5,
             i7,
         };
         (outcome, evidence)
     }
+}
+
+/// One index's candidate samples (sorted).
+enum CandSet<'a> {
+    One(u16),
+    Many(&'a [u16]),
+}
+
+impl CandSet<'_> {
+    fn as_slice(&self) -> &[u16] {
+        match self {
+            CandSet::One(x) => std::slice::from_ref(x),
+            CandSet::Many(m) => m,
+        }
+    }
+}
+
+enum Common {
+    None,
+    One(usize),
+    Several,
+}
+
+/// How many samples two sorted candidate sets share (`One` names it).
+fn common(a: &CandSet, b: &CandSet) -> Common {
+    let (a, b) = (a.as_slice(), b.as_slice());
+    let (mut i, mut j, mut hit) = (0, 0, None);
+    while i < a.len() && j < b.len() {
+        match a[i].cmp(&b[j]) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                if hit.is_some() {
+                    return Common::Several;
+                }
+                hit = Some(a[i] as usize);
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    hit.map_or(Common::None, Common::One)
 }
 
 fn unsafe_single_index_msg(mode: DemuxMode, dist: u32, mm: u32, required: u32) -> String {

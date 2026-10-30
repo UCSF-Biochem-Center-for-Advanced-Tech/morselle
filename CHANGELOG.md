@@ -41,6 +41,24 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `molecules`/`matrix`.
 
 ### Changed
+- Demultiplexing decides per read which indexes it needs: both i5 and i7
+  are looked up, one alone assigns when it names exactly one sample, and
+  otherwise the read goes to the single sample both indexes agree on (no
+  common sample = conflict, several = undetermined). An index key several
+  samples share -- a combinatorial sheet reusing an i7, or two indexes whose
+  mismatch neighbourhoods overlap -- used to match nothing; it now keeps its
+  candidate samples for the other index to choose among. Auto
+  `--demux-index` therefore always resolves to `dual`; before, it fell back
+  to a single index or `both` when an index was not standalone-safe across
+  the whole sheet (a shared-i7 sheet could never assign those samples under
+  `both`). Explicit `both`/`i5`/`i7` keep their meaning. Unchanged on
+  CE15204 at the default `--index-max-mm 1` (no shared keys; both CAT02
+  slices identical). At `--index-max-mm 2`, where auto used to pick `both`:
+  assigned reads +24.5% (barcode-first) / +7.7% (barcode-last) of all
+  reads, no previously assigned read changed sample, and against the
+  default `--index-max-mm 1` run 23 / 20 reads (≤ 0.004%) differ.
+  `demux.index_evidence.identified_i5_shared` / `_i7_shared` count shared
+  matches.
 - Sample-index matching uses one table per index, built from the sample
   sheet at startup, holding every allowed variant (≤`--index-max-mm`
   mismatches, plus one-indel variants with `--index-indels`). Keys are

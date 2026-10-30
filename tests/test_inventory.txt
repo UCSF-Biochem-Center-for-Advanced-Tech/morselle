@@ -93,6 +93,7 @@ src/lib.rs cr_bam_to_mtx::tests::without_a_probe_barcode_allowlist_a_shared_gem_
 src/lib.rs cr_bam_to_mtx::tests::writes_compatibility_barcode_major_order
 src/lib.rs cr_bam_to_mtx::tests::writes_compatibility_csc_h5
 src/lib.rs cr_bam_to_mtx::tests::writes_one_based_sparse_matrix
+src/lib.rs demux::groups::tests::claims_build_interned_sorted_sets
 src/lib.rs demux::indel_tests::a_mismatch_hit_is_never_overridden_by_the_indel_pass
 src/lib.rs demux::indel_tests::edit_distance_counts_substitutions_and_indels
 src/lib.rs demux::indel_tests::evidence_reports_regions_outside_the_read_as_not_seen
@@ -105,8 +106,13 @@ src/lib.rs demux::indel_tests::the_indel_pass_never_makes_a_wrong_call_of_its_ow
 src/lib.rs demux::lut::region_tests::region_path_matches_per_frame_path
 src/lib.rs demux::lut::tests::matches_hamming_index_exactly
 src/lib.rs demux::lut::tests::non_acgt_frames_never_match
-src/lib.rs demux::tests::auto_picks_both_when_neither_index_is_standalone_safe
+src/lib.rs demux::rule_tests::a_full_grid_of_shared_indexes_needs_both_for_every_sample
+src/lib.rs demux::rule_tests::a_shared_i7_alone_never_assigns_but_i5_picks_among_its_samples
+src/lib.rs demux::rule_tests::an_indel_in_a_shared_i7_still_gives_its_candidate_set
+src/lib.rs demux::rule_tests::both_mode_and_single_index_modes_keep_their_meaning
+src/lib.rs demux::rule_tests::overlapping_mismatch_neighbourhoods_are_resolved_by_the_other_index
 src/lib.rs demux::tests::auto_picks_dual_when_both_indices_are_standalone_safe
+src/lib.rs demux::tests::auto_resolves_to_per_read_rule_when_neither_index_is_standalone_safe
 src/lib.rs demux::tests::both_mode_assigns_on_real_agreement
 src/lib.rs demux::tests::both_mode_requires_agreement_rejects_lone_i5
 src/lib.rs demux::tests::conflict_goes_undetermined

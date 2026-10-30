@@ -87,11 +87,12 @@ pub struct Params {
     /// (i5,i7) pairs to be distinct, not either index alone), `i5`/`i7`
     /// (one index only, skipping the other entirely -- `i5` needs only
     /// `r1s`, no adapter dependency, reaching the widest read population).
-    /// Unset (default): auto -- picks `dual` if both indices are
-    /// standalone-safe (Hamming margin `> 2 * --index-max-mm`), else
-    /// whichever single index is safe, else `both`. `i5`/`i7` are refused at
-    /// startup if the real sample sheet doesn't support them safely, whether
-    /// picked explicitly or by auto.
+    /// Unset (default): auto -- `dual`, decided per read: both indexes are
+    /// looked up; one alone assigns only when it names exactly one sample,
+    /// and an index several samples share (a combinatorial sheet, or
+    /// overlapping mismatch neighbourhoods) needs the other index to narrow
+    /// it to one. `i5`/`i7` are refused at startup if the real sample sheet
+    /// doesn't support them safely.
     #[arg(long, value_enum)]
     pub demux_index: Option<crate::demux::DemuxMode>,
 

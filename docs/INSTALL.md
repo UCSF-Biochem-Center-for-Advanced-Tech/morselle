@@ -271,6 +271,7 @@ orientations; orientation is auto-detected and enforced per file). Useful flags:
 | `--r1-tail-relock` | off | rescue barcodes mislocated by an indel in the R1-primer tail |
 | `--index-window` | 3 | offset-tolerant i5/i7 matching |
 | `--index-indels` | off | also match an i5/i7 with one insertion or deletion (sheet-checked for safety) |
+| `--demux-index` | auto | auto = per read: one index when it names exactly one sample, otherwise both must agree |
 | `--realign` | on | single-indel CB rescue (recovers ~+1% of reads at high precision); disable with `--realign false` |
 | `--lenient` | off | within-2 CB rescue — **leave off** (only ~51% precise on the dense ARC whitelist) |
 | `--cb-gate` | on | drop pairs whose CB isn't on/near the whitelist |

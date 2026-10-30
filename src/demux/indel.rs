@@ -31,6 +31,17 @@ pub struct IndexMatch {
     pub sample: Option<usize>,
     /// Matched only through the one-indel pass.
     pub via_indel: bool,
+    /// The matched key is shared by several samples (`sample` is `None`):
+    /// its candidate-group id in that index's table (`IndexLut::members`),
+    /// for the other index to choose among.
+    pub shared: Option<u16>,
+}
+
+impl IndexMatch {
+    /// Matched one sample or a shared candidate set.
+    pub fn matched(&self) -> bool {
+        self.sample.is_some() || self.shared.is_some()
+    }
 }
 
 /// Plain Levenshtein distance (short keys only).
@@ -63,7 +74,8 @@ pub fn min_pairwise_edit(keys: &[Vec<u8>]) -> usize {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IndelSafety {
     pub min_edit: usize,
-    /// One-edit variants (in flank context) that resolved to another sample.
+    /// One-edit variants (in flank context) that resolved to another sample
+    /// (or to a shared candidate set without their own).
     pub wrong: usize,
     /// The same, with the indel pass off (mismatch-only matching as it was):
     /// a shifted frame can already turn one sample's indel into another
@@ -95,8 +107,13 @@ pub fn indel_safety(
     right: &[u8],
     window: isize,
 ) -> IndelSafety {
+    // Samples sharing one index (combinatorial sheets) are told apart by
+    // the other index; only distinct indexes must be ≥ 3 edits apart.
+    let mut distinct = keys.to_vec();
+    distinct.sort();
+    distinct.dedup();
     let mut out = IndelSafety {
-        min_edit: min_pairwise_edit(keys),
+        min_edit: min_pairwise_edit(&distinct),
         wrong: 0,
         wrong_mismatch_only: 0,
         recovered: 0,
@@ -116,6 +133,13 @@ pub fn indel_safety(
             match m.sample {
                 Some(s) if s == sample => out.recovered += 1,
                 Some(_) => out.wrong += 1,
+                // A shared candidate set must at least contain the sample.
+                None if m
+                    .shared
+                    .is_some_and(|g| !lut.members(g).contains(&(sample as u16))) =>
+                {
+                    out.wrong += 1
+                }
                 None => {}
             }
         }

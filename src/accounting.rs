@@ -58,7 +58,7 @@ pub struct DemuxMetrics {
 ///
 /// "Seen" = the index region lies inside the read (i5: R1 located far enough
 /// in; i7: 3' adapter located and the read runs past it). "Identified" = it
-/// matched a sample. `full` = both seen and both identified to the same
+/// matched a sample, or a candidate set of samples sharing that key. `full` = both seen and both identified to the same
 /// sample (= `via_dual` early); every other R1-located read is `partial`.
 /// `identified_both` includes conflicts (both matched, different samples).
 #[derive(Serialize, Default, Clone, Debug, PartialEq, Eq)]
@@ -77,6 +77,10 @@ pub struct IndexEvidenceCounts {
     /// Identified only through the one-indel pass (`--index-indels`).
     pub identified_i5_via_indel: u64,
     pub identified_i7_via_indel: u64,
+    /// Matched a key several samples share (a candidate set, not one
+    /// sample): assigned only if the other index narrows it to one.
+    pub identified_i5_shared: u64,
+    pub identified_i7_shared: u64,
 }
 
 impl IndexEvidenceCounts {
@@ -94,7 +98,7 @@ impl IndexEvidenceCounts {
             (false, true) => self.seen_i7_only += 1,
             (false, false) => self.seen_none += 1,
         }
-        match (ev.i5.sample.is_some(), ev.i7.sample.is_some()) {
+        match (ev.i5.matched(), ev.i7.matched()) {
             (true, true) => self.identified_both += 1,
             (true, false) => self.identified_i5_only += 1,
             (false, true) => self.identified_i7_only += 1,
@@ -102,6 +106,8 @@ impl IndexEvidenceCounts {
         }
         self.identified_i5_via_indel += u64::from(ev.i5.via_indel);
         self.identified_i7_via_indel += u64::from(ev.i7.via_indel);
+        self.identified_i5_shared += u64::from(ev.i5.shared.is_some());
+        self.identified_i7_shared += u64::from(ev.i7.shared.is_some());
     }
 
     pub fn add(&mut self, o: &Self) {
@@ -118,6 +124,8 @@ impl IndexEvidenceCounts {
         self.identified_none += o.identified_none;
         self.identified_i5_via_indel += o.identified_i5_via_indel;
         self.identified_i7_via_indel += o.identified_i7_via_indel;
+        self.identified_i5_shared += o.identified_i5_shared;
+        self.identified_i7_shared += o.identified_i7_shared;
     }
 }
 
