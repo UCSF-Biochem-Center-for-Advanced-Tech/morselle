@@ -78,6 +78,7 @@ pub(crate) fn build_metrics(
                 realigned: stats.realigned,
                 reframed: stats.reframed,
                 relocked: stats.relocked,
+                relock_reanchored: stats.relock_reanchored,
                 corrected_hamming2: stats.corrected2,
             }
         }),

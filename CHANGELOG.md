@@ -30,7 +30,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   +0.23% of all reads, rescued barcodes on cell-like barcodes at 58.2% /
   29.6% (exact matches 60.3% / 30.1%, reframe 38.4% / 19.6%), no
   previously emitted read changed, throughput unchanged.
-  `whitelist.relocked` counts them.
+  `whitelist.relocked` counts them. The index demux ran on the original
+  lock, so its i5 anchor was off by the same base or two: 15.8% of re-locked
+  reads were undetermined on the barcode-first slice (exact: 3.4%). A
+  re-locked read the early demux left unassigned is now demultiplexed again
+  from the re-located barcode start (`whitelist.relock_reanchored`):
+  undetermined re-locked reads 15.8% → 5.3% / 4.1% → 2.6%, +1,346 / +35
+  reads assigned, no previously assigned read changed sample.
+- `tests/extract_relock_e2e.rs`: `extract --whitelist` end to end on
+  generated reads with a generated whitelist (10x whitelists are not
+  committed, so the extract golden runs without one). Every one-base
+  insertion and deletion in the R1 primer's last 15 bp is planted; every
+  emitted barcode and UMI must equal the planted one, the exact, realign,
+  reframe and re-lock routes must all occur, and turning `--r1-tail-relock`
+  on must not change any read emitted without it.
 - `metrics_summary.json` `demux.index_evidence` and two new log lines: per
   R1-located read, `full` (both indexes seen and identified to one sample)
   versus `partial`, which index regions were seen, which were identified,

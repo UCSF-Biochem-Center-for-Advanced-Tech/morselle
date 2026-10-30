@@ -216,6 +216,9 @@ pub struct WhitelistMetrics {
     pub reframed: u64,
     /// Rescued by `--r1-tail-relock` (XB:i:7).
     pub relocked: u64,
+    /// Re-locked reads the early demux left unassigned, assigned by
+    /// demultiplexing again from the re-located CB start.
+    pub relock_reanchored: u64,
     pub corrected_hamming2: u64,
 }
 

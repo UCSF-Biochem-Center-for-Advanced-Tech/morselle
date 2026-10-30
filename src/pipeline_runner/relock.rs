@@ -16,6 +16,7 @@
 
 use crate::anchors::R1_PRIMER;
 use crate::barcode::Whitelist;
+use crate::demux::{index_anchor_starts, Demuxer, Outcome};
 
 /// The R1-primer tail searched with indels allowed (its last 15 bp).
 const TAIL_LEN: usize = 15;
@@ -79,8 +80,8 @@ pub(crate) fn relocked_cb_starts(seq: &[u8], cb_start: usize) -> Vec<usize> {
         .collect()
 }
 
-/// The rescue: a corrected 28 bp R1 (CB + UMI) and its qualities, read right
-/// after the re-located tail. Of the candidate starts other than `cb_start`,
+/// The rescue: a corrected 28 bp R1 (CB + UMI), its qualities, and the
+/// re-located CB start, read right after the re-located tail. Of the candidate starts other than `cb_start`,
 /// exactly one may give a CB on (or uniquely within 1 of) the whitelist;
 /// none or several → no rescue.
 pub(crate) fn relock_r1(
@@ -90,7 +91,7 @@ pub(crate) fn relock_r1(
     cb_start: usize,
     cb_len: usize,
     umi_len: usize,
-) -> Option<(Vec<u8>, Vec<u8>)> {
+) -> Option<(Vec<u8>, Vec<u8>, usize)> {
     let mut hit: Option<(usize, [u8; 16])> = None;
     for s in relocked_cb_starts(seq, cb_start) {
         let end = s + cb_len + umi_len;
@@ -108,7 +109,25 @@ pub(crate) fn relock_r1(
     let end = s + cb_len + umi_len;
     let mut r1 = cb.to_vec();
     r1.extend_from_slice(&seq[s + cb_len..end]);
-    Some((r1, qual[s..end].to_vec()))
+    Some((r1, qual[s..end].to_vec(), s))
+}
+
+/// Demux again for a re-locked read that the early demux left unassigned:
+/// that ran on the original lock, so its i5 anchor (counted back from the CB
+/// start) is off by the same base or two as the CB was. CAT02 barcode-first
+/// slice before this: 15.8% of re-locked reads undetermined vs 3.4% of exact
+/// ones. A read the early demux already assigned keeps its sample.
+pub(crate) fn reanchored_outcome(
+    d: &Demuxer,
+    seq: &[u8],
+    cb_start: usize,
+    adapter_pos: Option<usize>,
+    index_len: usize,
+    window: isize,
+) -> Option<Outcome> {
+    let (i5s, i7s) = index_anchor_starts(cb_start, adapter_pos, index_len);
+    let o = d.assign_windowed(seq, i5s, i7s, window);
+    o.sample.is_some().then_some(o)
 }
 
 #[cfg(test)]
@@ -239,7 +258,8 @@ mod rescue_tests {
         let qual = vec![b'I'; seq.len()];
         let w = whitelist(&[cb]);
         // Today's lock one base late: the grab starts inside the CB.
-        let (r1, q) = relock_r1(&w, &seq, &qual, true_start + 1, 16, 12).unwrap();
+        let (r1, q, s) = relock_r1(&w, &seq, &qual, true_start + 1, 16, 12).unwrap();
+        assert_eq!(s, true_start);
         assert_eq!(&r1[..16], cb);
         assert_eq!(&r1[16..], umi);
         assert_eq!(q.len(), 28);

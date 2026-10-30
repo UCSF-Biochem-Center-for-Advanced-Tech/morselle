@@ -269,7 +269,7 @@ orientations; orientation is auto-detected and enforced per file).
 | `--orientation` | auto | Force `p5-led` / `p7-led` if auto-detect is wrong. |
 | `--cb-gate` | on | Drop pairs whose CB is neither on-whitelist nor within Hamming-1. |
 | `--cb-reframe` | on | Rescue homopolymer-indel frame-shifted barcodes. |
-| `--r1-tail-relock` | off | For barcode failures, re-find the R1-primer tail allowing up to two insertions/deletions/mismatches and read the barcode + UMI after it; accepted only on a whitelist (or unique within-1) barcode (`XB:i:7`). On CAT02 Multiome: +0.54% / +0.23% of reads assigned; rescued barcodes land on cell-like barcodes at the exact-match rate. |
+| `--r1-tail-relock` | off | For barcode failures, re-find the R1-primer tail allowing up to two insertions/deletions/mismatches and read the barcode + UMI after it; accepted only on a whitelist (or unique within-1) barcode (`XB:i:7`). On CAT02 Multiome: +0.54% / +0.23% of reads assigned; rescued barcodes land on cell-like barcodes at the exact-match rate. A re-locked read the index demux left unassigned is demultiplexed again from the re-located barcode (`whitelist.relock_reanchored`). |
 | `--index-window` | 3 | Offset-tolerant i5/i7 matching (absorbs indels shifting the index). |
 | `--index-indels` | off | Also match an i5/i7 with one insertion or deletion inside the index, over the same `--index-window` frames, only when mismatch-only matching finds nothing. Enabled per index only if the sample sheet is safe for it (logged). On CAT02 Multiome: +0.2–0.7% of reads assigned and +2 points of dual-index assignment, no read moved between samples. |
 | `--index-max-mm` | 1 | Max mismatches when matching sample-sheet indices. |

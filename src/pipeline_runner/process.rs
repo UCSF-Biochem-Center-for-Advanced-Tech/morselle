@@ -10,7 +10,7 @@ use super::formatting::{
     append_probe_tags, append_processing_tags, flush_failed_buf, minimap2_header, push_fastq,
     push_fastq_r2_rc, FLUSH_BYTES, MIN_POLYT_FLANK,
 };
-use super::relock::relock_r1;
+use super::relock::{reanchored_outcome, relock_r1};
 use super::types::{ProcessingTags, Stats};
 use super::worker::Shared;
 
@@ -84,7 +84,7 @@ pub(crate) fn process_one(
                 .index_evidence
                 .observe(ev, outcome.via == DemuxVia::Dual);
         }
-        let early_outcome: Option<Outcome> = early_detail.map(|(o, _)| o);
+        let mut early_outcome: Option<Outcome> = early_detail.map(|(o, _)| o);
         if sh.demuxer.is_some() {
             match e.r1 {
                 None => stats.index_unreachable += 1,
@@ -213,10 +213,21 @@ pub(crate) fn process_one(
                 // mismatch-only lock a base or two off; re-find the tail with
                 // indels allowed and read the CB + UMI after it.
                 if corrected_r1.is_none() && sh.r1_tail_relock {
-                    if let Some(r1) = relock_r1(w, &o.seq, &o.qual, r1s, sh.cb_len, sh.umi_len) {
-                        corrected_r1 = Some(r1);
+                    if let Some((s, q, cb_s)) =
+                        relock_r1(w, &o.seq, &o.qual, r1s, sh.cb_len, sh.umi_len)
+                    {
+                        corrected_r1 = Some((s, q));
                         barcode_route = 7;
                         stats.relocked += 1;
+                        let unassigned = early_outcome.is_some_and(|o| o.sample.is_none());
+                        if let (Some(d), true) = (sh.demuxer, unassigned) {
+                            let (len, win) = (sh.index_len, sh.index_window);
+                            let re = reanchored_outcome(d, &o.seq, cb_s, e.adapter_pos, len, win);
+                            if re.is_some() {
+                                early_outcome = re;
+                                stats.relock_reanchored += 1;
+                            }
+                        }
                     }
                 }
                 // Lenient within-2 substitution rescue: only when the CB is
@@ -327,7 +338,8 @@ pub(crate) fn process_one(
         // Route to a target index: sample, Undetermined (= n_samples), or combined.
         // Reuses `early_outcome` (computed right after `extract()`, above) --
         // same inputs (`r1s`/`e.adapter_pos`/`o.seq` are unchanged since
-        // then), so this is the identical result, not a fresh decision.
+        // then), so this is the identical result, not a fresh decision --
+        // except a re-locked read it left unassigned, re-anchored above.
         let mut index_route = 5; // XI=5: demultiplexing was not requested.
         let mut sample_assigned = false;
         let target_idx = if sh.demuxer.is_some() {
