@@ -211,6 +211,8 @@ src/lib.rs illumina::tso::tests::tso_later_in_the_read_is_not_a_prefix
 src/lib.rs io::tests::gzip_level_writes_valid_gzip_with_gz_extension
 src/lib.rs io::tests::no_gzip_writes_plain_readable_fastq_with_plain_extension
 src/lib.rs io::tests::shard_writer_no_gzip_round_trips
+src/lib.rs io::tests::shard_writer_gzip_keeps_every_batch_from_many_threads
+src/lib.rs io::tests::shard_writer_gzip_with_no_records_is_valid_empty_gzip
 src/lib.rs molecules::collision_tests::equal_cross_gene_support_is_not_counted
 src/lib.rs molecules::collision_tests::fractional_without_tagseq_corrects_first_and_splits_ties
 src/lib.rs molecules::collision_tests::tagseq_fractional_skips_correction_and_splits_one_molecule
