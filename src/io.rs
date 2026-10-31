@@ -179,24 +179,26 @@ impl PairWriter {
     }
 }
 
-/// A thread-safe, append-only paired writer used by the parallel pipeline.
-///
-/// Each output file is a SINGLE gzip member: callers pre-format a batch of FASTQ
-/// records into raw bytes and `append` writes them straight into a per-file
-/// `GzEncoder` under one lock per target. Both R1 and R2 are written under the
-/// same lock so the Nth record in R1 stays the mate of the Nth in R2 (10x reference
-/// rejects desynced pairs), and one member per file avoids the multi-member
-/// boundary mis-framing some readers (10x reference) exhibit. Compression happens
-/// under the lock; with a fast zlib backend it keeps up with the per-target data
-/// rate, so the lock is rarely contended.
 /// A thread-safe append-only gzip FASTQ writer for a single stream.
 ///
 /// Used for the `--failed-output` side channel, where every worker appends into
-/// one file. Failures are a minority of reads and each worker appends a whole
-/// buffered batch under one lock, so the contention is negligible and the output
-/// stays a single valid gzip member.
+/// one file. Each worker compresses its own buffered batch into a complete gzip
+/// member before taking the lock; only the write of the compressed bytes is
+/// serialised. The file is a multi-member gzip, which gzip/zcat, Python's
+/// `gzip` and `MultiGzDecoder` all read as one stream.
+///
+/// Compressing under the lock instead (one member, as `PairShardWriter` does)
+/// made the whole extract single-threaded once failures were common: real
+/// CAT02 3p full run, 53% of reads failed at ~630 bytes each, 4 of 64 threads
+/// busy, ~65k reads/s against 1.3M reads/s without `--failed-output`.
 pub struct ShardWriter {
-    inner: Mutex<ShardSink>,
+    level: Option<u32>,
+    inner: Mutex<FailedSink>,
+}
+
+struct FailedSink {
+    out: BufWriter<File>,
+    wrote: bool,
 }
 
 impl ShardWriter {
@@ -207,8 +209,14 @@ impl ShardWriter {
                     .with_context(|| format!("cannot create dir {}", dir.display()))?;
             }
         }
+        let file = File::create(path)
+            .with_context(|| format!("cannot create output {}", path.display()))?;
         Ok(ShardWriter {
-            inner: Mutex::new(ShardSink::create(path, level)?),
+            level,
+            inner: Mutex::new(FailedSink {
+                out: BufWriter::new(file),
+                wrote: false,
+            }),
         })
     }
 
@@ -217,18 +225,50 @@ impl ShardWriter {
         if raw.is_empty() {
             return Ok(());
         }
+        let member;
+        let bytes = match self.level {
+            Some(level) => {
+                member = gzip_member(raw, level)?;
+                &member[..]
+            }
+            None => raw,
+        };
         let mut w = self.inner.lock().expect("shard writer lock poisoned");
-        w.write_all(raw)?;
+        w.out.write_all(bytes)?;
+        w.wrote = true;
         Ok(())
     }
 
-    /// Finish the stream (gzip trailer, if any) and flush.
+    /// Flush. A gzip stream that got no records still gets one empty member,
+    /// so the file is valid gzip rather than zero bytes.
     pub fn finish(&self) -> Result<()> {
         let mut w = self.inner.lock().expect("shard writer lock poisoned");
-        w.finish()
+        if let (Some(level), false) = (self.level, w.wrote) {
+            let empty = gzip_member(&[], level)?;
+            w.out.write_all(&empty)?;
+            w.wrote = true;
+        }
+        w.out.flush().context("flush")
     }
 }
 
+/// One complete gzip member holding `raw`.
+fn gzip_member(raw: &[u8], level: u32) -> Result<Vec<u8>> {
+    let mut enc = GzEncoder::new(Vec::with_capacity(raw.len() / 3), Compression::new(level));
+    enc.write_all(raw)?;
+    enc.finish().context("gzip finish")
+}
+
+/// A thread-safe, append-only paired writer used by the parallel pipeline.
+///
+/// Each output file is a SINGLE gzip member: callers pre-format a batch of FASTQ
+/// records into raw bytes and `append` writes them straight into a per-file
+/// `GzEncoder` under one lock per target. Both R1 and R2 are written under the
+/// same lock so the Nth record in R1 stays the mate of the Nth in R2 (10x reference
+/// rejects desynced pairs), and one member per file avoids the multi-member
+/// boundary mis-framing some readers (10x reference) exhibit. Compression happens
+/// under the lock; with a fast zlib backend it keeps up with the per-target data
+/// rate, so the lock is rarely contended.
 pub struct PairShardWriter {
     inner: Mutex<Pair>,
 }
@@ -346,5 +386,50 @@ mod tests {
         w.append(b"@r\nACGT\n+\nIIII\n").unwrap();
         w.finish().unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"@r\nACGT\n+\nIIII\n");
+    }
+
+    #[test]
+    fn shard_writer_gzip_keeps_every_batch_from_many_threads() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("failed.fastq.gz");
+        let w = ShardWriter::create(&path, Some(6)).unwrap();
+        std::thread::scope(|s| {
+            for t in 0..8 {
+                let w = &w;
+                s.spawn(move || {
+                    for i in 0..50 {
+                        w.append(format!("@t{t}_{i}\nACGT\n+\nIIII\n").as_bytes())
+                            .unwrap();
+                    }
+                });
+            }
+        });
+        w.finish().unwrap();
+        let mut decoded = String::new();
+        MultiGzDecoder::new(File::open(&path).unwrap())
+            .read_to_string(&mut decoded)
+            .unwrap();
+        let mut ids: Vec<&str> = decoded.lines().step_by(4).collect();
+        ids.sort_unstable();
+        let mut want: Vec<String> = (0..8)
+            .flat_map(|t| (0..50).map(move |i| format!("@t{t}_{i}")))
+            .collect();
+        want.sort_unstable();
+        assert_eq!(ids, want);
+        assert_eq!(decoded.lines().count(), 8 * 50 * 4);
+    }
+
+    #[test]
+    fn shard_writer_gzip_with_no_records_is_valid_empty_gzip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("failed.fastq.gz");
+        let w = ShardWriter::create(&path, Some(6)).unwrap();
+        w.finish().unwrap();
+        let mut decoded = String::new();
+        MultiGzDecoder::new(File::open(&path).unwrap())
+            .read_to_string(&mut decoded)
+            .unwrap();
+        assert!(decoded.is_empty());
+        assert!(fs::metadata(&path).unwrap().len() > 0);
     }
 }

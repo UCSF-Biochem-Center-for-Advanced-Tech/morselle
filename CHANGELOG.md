@@ -6,6 +6,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- `extract --failed-output` no longer serialises the run. Every worker
+  gzipped its failed reads into the one shared stream while holding its
+  lock, so when failures were common the whole extract ran on about one
+  core: on the full CAT02 3p run (53% failed), 4 of 64 threads were busy,
+  at ~65k reads/s against 1.3M reads/s without the option. Each worker now
+  compresses its batch into its own gzip member before taking the lock, so
+  only the file write is serialised. The file is now multi-member gzip, which
+  gzip/zcat, Python `gzip` and other standard readers decode as one stream.
+  The failed reads are unchanged; only their order varies, as before. On one
+  CAT06 shard with 14 threads: 38.9 s before, 29.1 s after, 27.0 s without
+  `--failed-output`.
+
 ## [0.8.1] — 2026-10-30
 
 ### Changed
