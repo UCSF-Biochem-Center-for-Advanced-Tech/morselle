@@ -236,7 +236,7 @@ morselle extract \
   --bclconvert-samplesheet /data/samples.csv \
   --whitelist /references/737K-arc-v1.txt.gz \
   --out-dir /analysis/sbx_fastqs \
-  --threads 128 --split 16 --lenient \
+  --threads 128 --split 16 \
   --cellranger
 ```
 
@@ -353,7 +353,7 @@ morselle extract --fastqs /data/device_*/out \
   --bclconvert-samplesheet /data/samples.csv \
   --whitelist "$REF/737K-flex-v2.txt.gz" \
   --probe-barcode-whitelist "$REF/flex-v2-384.txt" --flex \
-  --minimap2 --lenient --out-dir "$OUT/extract" --threads 128 --split 16
+  --minimap2 --out-dir "$OUT/extract" --threads 128 --split 16
 
 # 2. Probe-set alignment per extracted chunk, then one sorted BAM
 mkdir -p "$OUT/aligned"

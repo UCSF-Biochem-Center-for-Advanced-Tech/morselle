@@ -6,6 +6,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- `scripts/morselle-pipeline.sh` and `scripts/morselle-gex-pipeline.sh` no
+  longer pass `extract --lenient` (Hamming-2 barcode rescue), and the MANUAL
+  examples drop it. Scored against Illumina Cell Ranger molecules from the
+  same library (CAT02), only about half of Hamming-2 barcodes were right
+  (Hamming-1 78-83%); USAGE already said to leave it off. In 0.8.0 the
+  re-lock and one-extra-base rescues run first and recover many of the same
+  reads at Hamming-1 precision. Pass `--lenient` to `extract` directly to
+  get the old behaviour.
+
 ## [0.8.0] — 2026-10-30
 
 Headline, default settings against 0.7.0 on the same reads, barcodes
