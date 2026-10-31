@@ -6,6 +6,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-10-30
+
 ### Changed
 - `scripts/morselle-pipeline.sh` and `scripts/morselle-gex-pipeline.sh` no
   longer pass `extract --lenient` (Hamming-2 barcode rescue), and the MANUAL
@@ -1065,7 +1067,8 @@ R1/R2 FASTQs for 10x reference ARC.
 - End-of-run RUN SUMMARY report: timing, throughput, and lost breakdown.
 - Ubuntu install script (`install.sh`) and installation manual (`INSTALL.md`).
 
-[Unreleased]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/compare/v0.6.4...v0.7.0
 [0.6.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/compare/v0.5.9...v0.6.0
