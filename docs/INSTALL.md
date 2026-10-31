@@ -314,7 +314,9 @@ index_undetermined). Capture it with `2> run1.log` (or `|& tee run1.log`).
 These feed directly into the 10x reference count command (use the ARC reference). Each FASTQ
 is written as a **single gzip member** (compressed once, during processing, via the
 zlib backend). This matters: 10x reference mis-frames records at multi-member gzip
-boundaries, so single-member output is required — it is always produced.
+boundaries, so single-member output is required — it is always produced. (The
+`--failed-output` file is the exception: it is multi-member gzip, which `zcat` and
+other standard readers decode as one stream, and is not a 10x input.)
 
 **Minimap2 workflow:** `--minimap2` is a distinct output mode, so it cannot be used
 with `--cellranger`. It preserves the corrected cell barcode as `CB:Z:<barcode>-1`,

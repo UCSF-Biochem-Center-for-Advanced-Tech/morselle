@@ -213,9 +213,9 @@ pub struct Params {
     #[arg(long, default_value_t = false)]
     pub trim_tso: bool,
 
-    /// gzip compression level (0–9) for output FASTQs. Each file is written as a
-    /// single gzip member (10x reference mis-frames records at multi-member gzip
-    /// boundaries). Lower is faster but larger; the default (4) favors throughput,
+    /// gzip compression level (0–9) for output FASTQs. Each paired output file is
+    /// written as a single gzip member (10x reference mis-frames records at
+    /// multi-member gzip boundaries); the `--failed-output` file is multi-member. Lower is faster but larger; the default (4) favors throughput,
     /// since output compression is the run's wall-clock floor at scale.
     #[arg(long, default_value_t = 4)]
     pub gzip_level: u32,
