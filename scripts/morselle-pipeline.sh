@@ -282,7 +282,7 @@ if [[ $INPUT_MODE == sbx ]]; then
         echo "[1/5] extracting and demultiplexing raw SBX data"
         EXTRACT_ARGS=(--fastqs "${FASTQS[@]}" --bclconvert-samplesheet "$SAMPLE_SHEET"
             --whitelist "$WHITELIST" --out-dir "$EXTRACT_DIR" --threads "$EXTRACT_THREADS"
-            --split "$SPLIT" --lenient --minimap2 ${BARCODE_METRICS[@]+"${BARCODE_METRICS[@]}"})
+            --split "$SPLIT" --minimap2 ${BARCODE_METRICS[@]+"${BARCODE_METRICS[@]}"})
         [[ $ANALYSIS_MODE != flex ]] || EXTRACT_ARGS+=(--flex --probe-barcode-whitelist "$PROBE_BARCODE_WL")
         (( EXTRACT_NO_GZIP == 0 )) || EXTRACT_ARGS+=(--no-gzip)
         run "$LOG_DIR/extract.log" morselle extract "${EXTRACT_ARGS[@]}"

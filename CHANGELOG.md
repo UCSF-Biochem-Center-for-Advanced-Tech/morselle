@@ -6,6 +6,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-10-30
+
+### Changed
+- `scripts/morselle-pipeline.sh` and `scripts/morselle-gex-pipeline.sh` no
+  longer pass `extract --lenient` (Hamming-2 barcode rescue), and the MANUAL
+  examples drop it. Scored against Illumina Cell Ranger molecules from the
+  same library (CAT02), only about half of Hamming-2 barcodes were right
+  (Hamming-1 78-83%); USAGE already said to leave it off. In 0.8.0 the
+  re-lock and one-extra-base rescues run first and recover many of the same
+  reads at Hamming-1 precision. Pass `--lenient` to `extract` directly to
+  get the old behaviour.
+
 ## [0.8.0] — 2026-10-30
 
 Headline, default settings against 0.7.0 on the same reads, barcodes
@@ -1055,7 +1067,8 @@ R1/R2 FASTQs for 10x reference ARC.
 - End-of-run RUN SUMMARY report: timing, throughput, and lost breakdown.
 - Ubuntu install script (`install.sh`) and installation manual (`INSTALL.md`).
 
-[Unreleased]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/compare/v0.6.4...v0.7.0
 [0.6.0]: https://github.com/UCSF-Biochem-Center-for-Advanced-Tech/morselle/compare/v0.5.9...v0.6.0

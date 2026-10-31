@@ -184,7 +184,6 @@ if [[ ! -s "$EXTRACT_DIR/metrics_summary.json" ]]; then
         --out-dir "$EXTRACT_DIR" \
         --threads "$EXTRACT_THREADS" \
         --split "$SPLIT" \
-        --lenient \
         --minimap2 \
         ${BARCODE_METRICS[@]+"${BARCODE_METRICS[@]}"} \
         2> "$LOG_DIR/extract.log"
