@@ -194,9 +194,11 @@ pub struct Params {
     #[arg(long, default_value_t = 2)]
     pub adapter_max_mm: u32,
 
-    /// Emit every read that fails to produce a pair to this gzipped FASTQ, as
-    /// the original (pre-orientation) read with an `XF:Z:<reason>` tag appended.
+    /// Emit every read that fails to produce a pair to this FASTQ, as the
+    /// original (pre-orientation) read with an `XF:Z:<reason>` tag appended.
     /// With this set, every input read is accounted for in exactly one place.
+    /// Written as multi-member gzip (one member per worker batch; `zcat` reads
+    /// it as one stream), or plain FASTQ with `--no-gzip`.
     #[arg(long)]
     pub failed_output: Option<PathBuf>,
 
@@ -213,10 +215,11 @@ pub struct Params {
     #[arg(long, default_value_t = false)]
     pub trim_tso: bool,
 
-    /// gzip compression level (0–9) for output FASTQs. Each file is written as a
-    /// single gzip member (10x reference mis-frames records at multi-member gzip
-    /// boundaries). Lower is faster but larger; the default (4) favors throughput,
-    /// since output compression is the run's wall-clock floor at scale.
+    /// gzip compression level (0–9) for output FASTQs. Each paired output file is
+    /// written as a single gzip member (10x reference mis-frames records at
+    /// multi-member gzip boundaries); a gzipped `--failed-output` file is
+    /// multi-member. Lower is faster but larger; the default (4) favors
+    /// throughput, since output compression is the run's wall-clock floor at scale.
     #[arg(long, default_value_t = 4)]
     pub gzip_level: u32,
 

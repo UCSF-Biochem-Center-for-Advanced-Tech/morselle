@@ -27,8 +27,7 @@ enum ShardSink {
 
 impl ShardSink {
     fn create(path: &Path, level: Option<u32>) -> Result<Self> {
-        let file = File::create(path)
-            .with_context(|| format!("cannot create output {}", path.display()))?;
+        let file = create_output(path)?;
         Ok(match level {
             Some(level) => ShardSink::Gz(GzEncoder::new(
                 BufWriter::new(file),
@@ -56,6 +55,11 @@ impl ShardSink {
         }
         Ok(())
     }
+}
+
+/// Create (or truncate) an output file. The parent directory must exist.
+fn create_output(path: &Path) -> Result<File> {
+    File::create(path).with_context(|| format!("cannot create output {}", path.display()))
 }
 
 /// FASTQ filename extension for a given compression level (`.fastq.gz` vs
@@ -118,8 +122,7 @@ impl FastqGzWriter {
             fs::create_dir_all(parent)
                 .with_context(|| format!("cannot create dir {}", parent.display()))?;
         }
-        let file = File::create(path)
-            .with_context(|| format!("cannot create output {}", path.display()))?;
+        let file = create_output(path)?;
         let inner = GzEncoder::new(BufWriter::new(file), Compression::default());
         Ok(Self { inner, records: 0 })
     }
@@ -209,8 +212,7 @@ impl ShardWriter {
                     .with_context(|| format!("cannot create dir {}", dir.display()))?;
             }
         }
-        let file = File::create(path)
-            .with_context(|| format!("cannot create output {}", path.display()))?;
+        let file = create_output(path)?;
         Ok(ShardWriter {
             level,
             inner: Mutex::new(FailedSink {

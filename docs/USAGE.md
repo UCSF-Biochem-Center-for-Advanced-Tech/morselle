@@ -309,8 +309,10 @@ Two quirks of 10x reference are handled for you:
   write time, after the full-length fragment has been adapter-trimmed and
   reverse-complemented, so the retained bases are the ones the R2 primer would read.
 - **Single-member gzip.** 10x reference mis-frames records at multi-member gzip
-  boundaries, so each FASTQ is written as a single gzip member (compressed once,
-  during processing).
+  boundaries, so each paired FASTQ is written as a single gzip member
+  (compressed once, during processing). A gzipped `--failed-output` file is the
+  exception: workers compress their batches independently, so it is
+  multi-member gzip, read as one stream by `zcat` and other standard readers.
 
 ### Minimap2-ready output
 
@@ -434,7 +436,7 @@ Every run also prints a **RUN SUMMARY** to stderr (elapsed, threads, reads/sec,
 | `demux/` | i5/i7 extraction + offset-tolerant sample-sheet matching. |
 | `sample_sheet.rs` | Sample-sheet parsing (BCL Convert v2 / flat CSV). |
 | `anchors.rs` | Adapter / primer / leader constants — single source of truth. |
-| `io.rs` | FASTQ input discovery and single-member gzip output writers. |
+| `io.rs` | FASTQ input discovery and gzip output writers (single-member pairs, multi-member failed reads). |
 | `accounting.rs` | Metrics aggregation → `metrics_summary.json`. |
 | `pipeline.rs` | Core per-read types and state. |
 | `config.rs` | CLI definition and runtime parameters. |
@@ -464,7 +466,7 @@ ceiling out, but the gain depends entirely on how the input was framed — BGZF 
 before relying on it; on a small node, or when files ≥ workers (where the per-file
 path already decodes many files at once), it changes little.
 
-The feature is decode-only — output writers are untouched, and every emitted FASTQ
+The feature is decode-only — output writers are untouched, and every paired FASTQ
 remains a single gzip member. Enabling it does not change which records are
 emitted, and on the per-file path output stays byte-identical; on the pipelined
 path record order varies between runs with either decoder (see below).
