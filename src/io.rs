@@ -57,6 +57,7 @@ impl ShardSink {
     }
 }
 
+/// Create (or truncate) an output file. The parent directory must exist.
 fn create_output(path: &Path) -> Result<File> {
     File::create(path).with_context(|| format!("cannot create output {}", path.display()))
 }
@@ -121,8 +122,7 @@ impl FastqGzWriter {
             fs::create_dir_all(parent)
                 .with_context(|| format!("cannot create dir {}", parent.display()))?;
         }
-        let file = File::create(path)
-            .with_context(|| format!("cannot create output {}", path.display()))?;
+        let file = create_output(path)?;
         let inner = GzEncoder::new(BufWriter::new(file), Compression::default());
         Ok(Self { inner, records: 0 })
     }

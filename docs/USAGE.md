@@ -310,7 +310,7 @@ Two quirks of 10x reference are handled for you:
   reverse-complemented, so the retained bases are the ones the R2 primer would read.
 - **Single-member gzip.** 10x reference mis-frames records at multi-member gzip
   boundaries, so each paired FASTQ is written as a single gzip member
-  (compressed once, during processing). The `--failed-output` file is the
+  (compressed once, during processing). A gzipped `--failed-output` file is the
   exception: workers compress their batches independently, so it is
   multi-member gzip, read as one stream by `zcat` and other standard readers.
 
